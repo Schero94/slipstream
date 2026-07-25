@@ -1,6 +1,6 @@
 [package]
 name = "peregrine-control"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Native control panel for the Peregrine (llama.cpp fork) SSD-streaming server"
 default-run = "peregrine-control"
