@@ -4,42 +4,44 @@
 
 # Slipstream
 
-![Slipstream — expert cache streaming live from SSD](docs/hero.gif)
+![Slipstream: the expert cache streaming live from SSD](docs/hero.gif)
 
-**Run coding models that are bigger than your Mac's RAM — locally, privately, at usable speed.**
+**Run coding models that are bigger than your Mac's RAM, locally and at usable speed.**
 
-Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that **streams Mixture-of-Experts (MoE) expert weights from your SSD** instead of forcing the whole model into memory. A 16–36 GB Apple-Silicon Mac can run 35B–480B MoE coding models while the machine stays usable — no cloud, no API keys, no data leaving your laptop.
+Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that streams Mixture-of-Experts (MoE) expert weights off your SSD instead of loading the whole model into memory. A 16-36 GB Apple-Silicon Mac can run 35B-480B MoE coding models and stay usable while it does it. Nothing goes to a cloud, there are no API keys, and no data leaves the laptop.
 
-It ships as a native macOS app with the **engine bundled inside** — download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code / Cline / Cursor / OpenCode / anything OpenAI-compatible) at `http://127.0.0.1:8080/v1`, and go.
+It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
-> Not affiliated with Ollama. Slipstream is a llama.cpp/Metal fork with a custom SSD expert-streaming layer (PGRN) and a self-contained control app.
+> Not affiliated with Ollama. Slipstream is a llama.cpp/Metal fork with its own SSD expert-streaming layer (PGRN) and a self-contained control app.
 
 ---
 
 ## Why this exists
 
-MoE models are huge on disk but only activate a few "experts" per token. A 118B model with 8B active parameters means most of the weights sit idle at any moment. Slipstream keeps the always-needed weights resident and **streams the routed experts from SSD on demand**, with a bounded, RAM-sized cache (a per-layer CLOCK-LRU-K arena) that keeps your Mac responsive — it refuses loads that would starve the system rather than swapping you to death.
+A MoE model is enormous on disk but only fires a few experts per token. In a 118B model with 8B active parameters, the overwhelming majority of the weights are idle at any given moment. So Slipstream keeps the always-needed weights resident and streams the routed experts off the SSD as they come up, into a bounded cache sized against your RAM (a per-layer CLOCK-LRU-K arena).
 
-The result: models that simply won't fit in your RAM become runnable.
+If a requested cache size would starve the system, admission refuses it outright. That check exists because I mmapped a 73 GB file on 36 GB of RAM early on and kernel-panicked the machine. The OS does not save you here.
+
+Models that won't fit in your RAM become runnable. That's the entire pitch.
 
 ---
 
-## Get started (60 seconds)
+## Get started
 
-1. **Download** the latest `Slipstream_x.y.z_aarch64.dmg` from [Releases](../../releases).
-2. **Drag** `Slipstream.app` into **Applications**. *(First launch: right-click → Open, once — the app is not yet notarized.)*
-3. **Open it.** Slipstream auto-detects your Mac and shows the **best settings for your machine** — cache size, context, and I/O threads are derived from your RAM and CPU cores. Click **Apply best**.
-4. **Pick a model** from the dropdown → **Download** (with progress). Generate its PGRN sidecar (see *Models* below).
-5. Click **Start**. When the pill turns green, you're serving an OpenAI-compatible API on `127.0.0.1:8080`.
-6. In your coding assistant, add an **OpenAI Compatible** provider — or hit **one-click patch** for Kilo/OpenCode and just restart VS Code.
+1. Download the latest `Slipstream_x.y.z_aarch64.dmg` from [Releases](../../releases).
+2. Drag `Slipstream.app` into Applications. The first launch needs right-click → Open, once, because the app isn't notarized yet.
+3. Open it. Slipstream detects your Mac and proposes settings for it: cache size, context and I/O threads derived from your RAM and core count. Click "Apply best".
+4. Pick a model from the dropdown and download it (with progress), then generate its PGRN sidecar. See *Compatible models* below.
+5. Click Start. Once the pill turns green you're serving an OpenAI-compatible API on `127.0.0.1:8080`.
+6. In your coding assistant, add an OpenAI Compatible provider. For Kilo and OpenCode there's a one-click patch instead; restart VS Code afterwards.
 
-Everything runs on-device. The app shows live SSD throughput, cache hit-rate, tokens/sec, token usage, and RAM headroom while you work. UI in **English, German, Chinese, Spanish**.
+Everything runs on-device. While you work, the app shows live SSD throughput, cache hit-rate, tokens/sec, token usage and RAM headroom. The UI is available in English, German, Chinese and Spanish.
 
 ---
 
 ## Measured results
 
-Real numbers on a 36 GB Apple-Silicon Mac, recorded in [`bench/RESULTS.md`](bench/RESULTS.md). This is an evidence-first project — we publish the honest numbers, including the negative ones. Full write-up: [`BENCHMARKS.md`](BENCHMARKS.md).
+Numbers from a 36 GB Apple-Silicon Mac, raw logs in [`bench/RESULTS.md`](bench/RESULTS.md). The experiments that failed are recorded in the same place as the ones that worked. Full write-up: [`BENCHMARKS.md`](BENCHMARKS.md).
 
 ### Qwen3.6-35B-A3B (Q4), streamed from the internal NVMe
 
@@ -49,26 +51,26 @@ Real numbers on a 36 GB Apple-Silicon Mac, recorded in [`bench/RESULTS.md`](benc
 | 10 GiB | ~13 tok/s | ~78% |
 | 14 GiB | ~19 tok/s | ~86% |
 
-Prefill of a large (~30k-token) coding-agent prompt: **75 → 208 tok/s (2.7×)** with `ubatch 2048` + parallel I/O threads.
+Prefill of a large (~30k-token) coding-agent prompt goes from 75 to 208 tok/s, a 2.7x gain, with `ubatch 2048` and parallel I/O threads.
 
-### Laguna S 2.1 (118B-A8B, Q4) — a model that does *not* fit in 36 GB
+### Laguna S 2.1 (118B-A8B, Q4), a model that does not fit in 36 GB
 
 | Configuration | Decode | vs. baseline |
 |---|---:|---:|
-| PGRN on external USB SSD, no draft | 0.72 tok/s | 1.0× |
-| **PGRN on internal NVMe** (storage split) | 1.95 tok/s | **2.7×** |
-| + DFlash speculative draft | 2.36 tok/s | 3.3× |
-| + larger cache | **2.83 tok/s** | **3.9×** |
+| PGRN on external USB SSD, no draft | 0.72 tok/s | 1.0x |
+| PGRN on internal NVMe (storage split) | 1.95 tok/s | 2.7x |
+| + DFlash speculative draft | 2.36 tok/s | 3.3x |
+| + larger cache | 2.83 tok/s | 3.9x |
 
-**Key finding:** the streamed file (PGRN) belongs on your *fastest* disk; the model file (GGUF) is read once at load and can live anywhere. This "storage split" was the single biggest lever — 2.7× on its own.
+The streamed file (PGRN) belongs on your fastest disk. The GGUF gets read once at load and can live anywhere. That storage split was the biggest single lever in the whole project, worth 2.7x on its own, and it involved no code at all.
 
 ---
 
 ## Compatible models
 
-Slipstream streams **experts**, so it needs a **MoE** architecture with **Q4_K / Q5_K / Q6_K** expert tensors that mainline llama.cpp understands. Not: dense models (no experts to stream), or IQ/Q2/Q3/Q8_0/MXFP4 expert quants.
+Slipstream streams experts, so it needs a MoE architecture with Q4_K, Q5_K or Q6_K expert tensors that mainline llama.cpp can read. Dense models have no experts to stream. IQ, Q2, Q3, Q8_0 and MXFP4 expert quants don't work.
 
-**Interactive tier** (small active params — the daily drivers):
+Interactive tier, small active parameter counts, the daily drivers:
 
 | Model | Total / Active | Note |
 |---|---|---|
@@ -78,64 +80,69 @@ Slipstream streams **experts**, so it needs a **MoE** architecture with **Q4_K /
 | GLM-4.5-Air | 106B / 12B | strong quality |
 | Laguna S 2.1 | 118B / 8B | DFlash speculative decoding |
 
-**XL streaming tier** (verified against mainline llama.cpp; 240–466 GB Q4 — needs a big fast SSD):
+XL streaming tier, verified against mainline llama.cpp. These are 240-466 GB at Q4 and need a big fast SSD:
 
 | Model | Total / Active | Note |
 |---|---|---|
 | Qwen3-Coder-480B | 480B / 35B | coding-focused |
 | Llama 4 Maverick | 400B / 17B | fastest decode of the giants |
 | DeepSeek V3 | 671B / 37B | general |
-| DeepSeek R1 | 671B / 37B | reasoning (thinking tokens slow agent use) |
-| GLM-5.2 | 744B / 40B | top-tier; large — big SSD or lower quant |
+| DeepSeek R1 | 671B / 37B | reasoning; thinking tokens slow agent use |
+| GLM-5.2 | 744B / 40B | top-tier, and large enough to need a big SSD or a lower quant |
 
-*Coming once merged into mainline llama.cpp:* MiniMax M3 (23B active), DeepSeek V4-Flash (13B active).
+Waiting on mainline llama.cpp support: MiniMax M3 (23B active) and DeepSeek V4-Flash (13B active).
 
-The app's dropdown is seeded with these; you can point it at any compatible GGUF. **Model weights are not included** — you download them from Hugging Face. Slipstream is the engine and the tooling.
+The app's dropdown is seeded with these, but you can point it at any compatible GGUF. Model weights aren't included; you download those from Hugging Face. Slipstream is the engine and the tooling around it.
 
 ---
 
 ## How it works
 
-- **PGRN sidecar** — a converter extracts the stacked expert tensors into a streamable binary next to the GGUF. Reads use `pread` + `F_NOCACHE` so the OS page cache never balloons and fights the RAM budget.
-- **Layer-partitioned arena** — one bounded CLOCK-LRU-K cache tier per layer; cross-layer eviction is impossible by design, so streaming stays predictable.
-- **Memory-health gate** — admission refuses a cache that would push the Mac into swap; "the Mac stays usable" is a hard invariant.
-- **Speculative decoding** — MTP (Qwen) or DFlash (Laguna) drafts multiple tokens per target pass.
-- **Async prefetch (opt-in, experimental)** — a background thread warms the next layer's experts while the current layer computes, driven by a predictor table (`PGCT1`) or expert-coupling table (`PGCC1`). The async machinery is wired end-to-end; making the *prediction* reliably beat the SSD-fetch wall is ongoing research (see `bench/`).
-- **Parity gate** — a test asserts streamed output is bit-identical to fully-resident output (NMSE = 0). Optimizations that only reorder eviction are parity-neutral by construction.
+A converter pulls the stacked expert tensors out of the GGUF into a streamable binary that sits next to it, the PGRN sidecar. Reads go through `pread` with `F_NOCACHE`, which keeps the OS page cache from ballooning and fighting the RAM budget.
 
-Architecture notes: [`docs/ARCH.md`](docs/ARCH.md).
+The cache is partitioned by layer, one bounded CLOCK-LRU-K tier each. Cross-layer eviction is impossible by construction, so streaming behaviour stays predictable. Above that sits the memory-health gate, which rejects any cache size that would push the Mac into swap. "The Mac stays usable" is a hard invariant here, not an aspiration.
+
+Speculative decoding uses MTP on Qwen models and DFlash on Laguna, drafting several tokens per target pass.
+
+Async prefetch is opt-in and still experimental. A background thread warms the next layer's experts while the current layer computes, driven either by a predictor table (`PGCT1`) or an expert-coupling table (`PGCC1`). The machinery works end to end. Getting the *prediction* accurate enough to beat the SSD-fetch wall is unsolved, and `bench/` documents how badly it currently loses.
+
+A parity test asserts that streamed output is bit-identical to fully-resident output, NMSE = 0. Optimizations that only reorder eviction are parity-neutral by construction, which is what makes them safe to ship.
+
+Architecture notes live in [`docs/ARCH.md`](docs/ARCH.md).
 
 ---
 
-## Honest limitations
+## Limitations
 
-- **Speed scales with your SSD and RAM.** More resident cache = higher hit-rate = faster. External USB SSDs are a real bottleneck (put the streamed PGRN on internal NVMe). Decode is ~78–92% SSD-fetch-bound.
-- **Big agentic prompts are prefill-heavy.** A 30k-token first request on a streamed model takes minutes; enable codebase indexing so your assistant sends small, relevant prompts. Subsequent turns reuse the KV cache and are fast.
-- **118B on 36 GB is "usable for batch," not "snappy for chat."** ~2.8 tok/s. The 35B is the interactive workhorse (~14 tok/s).
-- **The GGUF→PGRN converter currently needs the Python tooling** in this repo (`bench/`); bundling it into the app is on the roadmap. The engine itself is fully bundled.
-- **The app is not yet notarized** — first launch needs a one-time right-click → Open (or `xattr -dr com.apple.quarantine Slipstream.app`).
+Speed scales with your SSD and your RAM. More resident cache means a higher hit-rate means faster decode. External USB SSDs are a genuine bottleneck, so keep the streamed PGRN on internal NVMe. Decode is roughly 78-92% bound on SSD fetch.
 
-We'd rather tell you the ceiling than oversell a 5× miracle.
+Big agentic prompts are prefill-heavy. A 30k-token first request against a streamed model takes minutes. Turn on codebase indexing so your assistant sends small, relevant prompts; later turns reuse the KV cache and come back quickly.
+
+118B on 36 GB runs at about 2.8 tok/s. That's batch work. It is not chat, and I'd rather say so here than have you find out after the download. The 35B at ~14 tok/s is the interactive one.
+
+The GGUF to PGRN converter still needs the Python tooling in `bench/`. Bundling it into the app is on the list; the engine itself is already fully bundled.
+
+The app isn't notarized, so the first launch needs right-click → Open, or `xattr -dr com.apple.quarantine Slipstream.app`.
 
 ---
 
 ## Repository layout
 
 ```
-engine/    our new source files (PGRN streaming, prefetch, admission, arena, …) — path-preserving, browsable
-patches/   slipstream-seams.patch — our changes to upstream llama.cpp files
+engine/    new source files (PGRN streaming, prefetch, admission, arena, …), path-preserving and browsable
+patches/   slipstream-seams.patch, the changes to upstream llama.cpp files
 apply.sh   clones ggml-org/llama.cpp @ pinned commit, drops in engine/, applies the patch
 app/       the Tauri 2 control app (dist/ frontend + src-tauri/ Rust backend)
-bench/     benchmark methodology + recorded results (RESULTS.md)
+bench/     benchmark methodology and recorded results (RESULTS.md)
 docs/      architecture notes
 ```
 
 ## Building from source
 
-Requires Xcode command-line tools, CMake, and Rust + the Tauri CLI.
+Requires Xcode command-line tools, CMake, and Rust with the Tauri CLI.
 
 ```bash
-# 1. Reconstruct the engine (upstream llama.cpp @ pin + our changes)
+# 1. Reconstruct the engine (upstream llama.cpp @ pin + the Slipstream changes)
 ./apply.sh                    # -> ./llama.cpp-slipstream
 
 # 2. Build a self-contained, Metal-embedded server binary (no external deps)
@@ -151,22 +158,22 @@ cp llama.cpp-slipstream/build-static/bin/llama-server app/src-tauri/resources/ll
 cd app/src-tauri && cargo tauri build   # -> the self-contained .dmg
 ```
 
-`otool -L build-static/bin/llama-server` should list **only** system frameworks — no `@rpath`, no Homebrew, no OpenSSL. That's what makes the app copy-and-run on any Apple-Silicon Mac.
+`otool -L build-static/bin/llama-server` should list only system frameworks. No `@rpath`, no Homebrew, no OpenSSL. That's what makes the app copy-and-run on any Apple-Silicon Mac.
 
 ---
 
 ## Acknowledgements
 
-Slipstream was **inspired by [Colibrì](https://github.com/JustVugg/colibri)** by JustVugg — the project that showed a 700B-scale MoE model streaming from disk on consumer hardware. Colibrì is pure-C on CPU/CUDA; Slipstream adapts the idea for **Apple Silicon** (Metal + unified memory) with a native app and its own PGRN engine. Several reference ideas — the disk-benchmarking methodology, route-trace / expert-coupling analysis, and RAM admission — came from studying Colibrì. Thank you. 🐦
+Slipstream was inspired by [Colibrì](https://github.com/JustVugg/colibri) by JustVugg, the project that showed a 700B-scale MoE model streaming from disk on consumer hardware. Colibrì is pure C on CPU and CUDA; Slipstream takes the idea to Apple Silicon (Metal, unified memory) with a native app and its own PGRN engine. The disk-benchmarking methodology, the route-trace and expert-coupling analysis, and the RAM admission idea all came from reading it. Thank you. 🐦
 
 ---
 
 ## License & attribution
 
-The **Slipstream additions** — the PGRN expert-streaming layer (`engine/`), the seams patch, and the control app (`app/`) — are released under the **MIT License** (see [`LICENSE`](LICENSE)).
+The Slipstream additions, meaning the PGRN expert-streaming layer (`engine/`), the seams patch and the control app (`app/`), are released under the MIT License. See [`LICENSE`](LICENSE).
 
-Slipstream is built on **llama.cpp** (MIT, © the ggml authors). The upstream sources are **not** vendored here; `apply.sh` fetches them from the pinned commit and retains their original license. Model weights are the property of their respective creators and are not distributed here.
+Slipstream is built on llama.cpp (MIT, © the ggml authors). The upstream sources are not vendored here: `apply.sh` fetches them from the pinned commit and retains their original license. Model weights belong to their respective creators and are not distributed here.
 
 ---
 
-*Slipstream is an evidence-first project: expected performance figures are hypotheses until recorded in `bench/RESULTS.md`.*
+*Performance figures are hypotheses until they're recorded in `bench/RESULTS.md`.*

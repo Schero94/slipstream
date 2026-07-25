@@ -1,7 +1,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Slipstream — Run coding models bigger than your Mac's RAM</title>
-<meta name="description" content="A llama.cpp fork that streams MoE expert weights from SSD — run 35B–480B coding models on a 16–36 GB Apple-Silicon Mac. Free, self-contained app." />
+<meta name="description" content="A llama.cpp fork that streams MoE expert weights from SSD, so 35B–480B coding models run on a 16–36 GB Apple-Silicon Mac. Free, self-contained app." />
 <link rel="canonical" href="https://schero94.github.io/slipstream/" />
 <meta name="keywords" content="local LLM, MoE, mixture of experts, llama.cpp, Apple Silicon, macOS, SSD streaming, expert offloading, on-device AI, coding assistant, DeepSeek, Qwen, GLM, Llama 4" />
 <meta name="author" content="Slipstream" />
@@ -48,8 +48,8 @@
   "mainEntity": [
     { "@type": "Question", "name": "What is Slipstream?", "acceptedAnswer": { "@type": "Answer", "text": "Slipstream is an open-source fork of llama.cpp that streams a Mixture-of-Experts model's expert weights from your SSD on demand, instead of loading the whole model into RAM. This lets a 16–36 GB Apple-Silicon Mac run 35B–480B MoE coding models locally." } },
     { "@type": "Question", "name": "What hardware do I need?", "acceptedAnswer": { "@type": "Answer", "text": "An Apple-Silicon Mac (M-series) with 16 GB of RAM or more, and a fast SSD. Larger XL models (240–466 GB on disk) need a big, fast external SSD; the interactive 35B model needs about 20 GB of disk." } },
-    { "@type": "Question", "name": "How fast is it?", "acceptedAnswer": { "@type": "Answer", "text": "A 35B MoE coder runs at ~13–19 tokens/sec on a 36 GB Mac. A 118B model that does not fit in RAM runs at ~2.8 tokens/sec — usable for batch coding. Speed scales with SSD bandwidth and available RAM cache." } },
-    { "@type": "Question", "name": "Is it free and private?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Slipstream is MIT-licensed and runs entirely on-device. No cloud, no API keys, no data leaves your Mac. The engine is bundled inside the app — nothing to compile." } }
+    { "@type": "Question", "name": "How fast is it?", "acceptedAnswer": { "@type": "Answer", "text": "A 35B MoE coder runs at ~13–19 tokens/sec on a 36 GB Mac. A 118B model that does not fit in RAM runs at ~2.8 tokens/sec, which is usable for batch coding. Speed scales with SSD bandwidth and available RAM cache." } },
+    { "@type": "Question", "name": "Is it free and private?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Slipstream is MIT-licensed and runs entirely on-device. No cloud, no API keys, no data leaves your Mac. The engine is bundled inside the app, so there is nothing to compile." } }
   ]
 }
 </script>
@@ -213,12 +213,12 @@
   <div class="rv in">
     <div class="eyebrow">Local · Private · Apple Silicon</div>
     <h1>Run coding models <span class="g">bigger than your Mac's RAM</span></h1>
-    <p class="sub">Slipstream is a llama.cpp fork that <b>streams Mixture-of-Experts weights from your SSD</b> — so a 16–36 GB Mac runs 35B–480B MoE coders, locally, while the machine stays usable.</p>
+    <p class="sub">Slipstream is a llama.cpp fork that <b>streams Mixture-of-Experts weights from your SSD</b>. A 16–36 GB Mac runs 35B–480B MoE coders locally, and stays usable while it does it.</p>
     <div class="cta-row">
       <a class="btn btn-primary" href="#download">↓ Download for macOS</a>
       <a class="btn btn-ghost" href="https://github.com/Schero94/slipstream" target="_blank" rel="noopener">View on GitHub</a>
     </div>
-    <div class="hero-note">Free · MIT · engine bundled — nothing to compile</div>
+    <div class="hero-note">Free · MIT · engine bundled, nothing to compile</div>
   </div>
 
   <div class="arena-shell rv">
@@ -228,7 +228,7 @@
     </div>
     <canvas id="arena" width="900" height="210"></canvas>
   </div>
-  <div class="arena-cap rv">Illustrative of the app's live view — green cells are experts resident in the RAM cache, amber cells are streaming from SSD. The app draws this from your real cache hit-rate.</div>
+  <div class="arena-cap rv">Illustrative of the app's live view. Green cells are experts resident in the RAM cache, amber cells are streaming from SSD. In the app it's drawn from your actual hit-rate.</div>
 
   <div class="stats rv">
     <div class="stat"><b>480B</b><span>largest MoE that runs</span></div>
@@ -241,8 +241,8 @@
 <section class="insight">
   <div class="wrap rv">
     <div class="eyebrow">01 — The core finding</div>
-    <p class="big">We moved <em>one file</em> — the streamed experts — onto the fastest disk. That single change was <em>2.7×</em>. Not a clever kernel. Storage placement.</p>
-    <p class="muted" style="margin-top:20px;max-width:60ch">A MoE model activates only a few experts per token, so most weights sit idle. Slipstream keeps the always-needed weights resident and streams the routed experts from SSD on demand — with a bounded, RAM-sized cache that refuses to load anything that would swap your Mac.</p>
+    <p class="big">I moved <em>one file</em>, the streamed experts, onto the fastest disk. That single change was <em>2.7×</em>. Not a clever kernel. Storage placement.</p>
+    <p class="muted" style="margin-top:20px;max-width:60ch">A MoE model activates only a few experts per token, so most weights sit idle. Slipstream keeps the always-needed weights resident and streams the routed experts off the SSD as they come up, into a bounded cache sized against your RAM. It refuses to load anything that would swap your Mac.</p>
   </div>
 </section>
 
@@ -255,9 +255,9 @@
     </div>
     <div class="grid g3">
       <div class="card rv"><span class="k">pread + F_NOCACHE</span><h3>SSD expert streaming</h3><p>A binary sidecar (PGRN) holds the stacked experts. Reads bypass the OS page cache, so it never balloons and fights the RAM budget.</p></div>
-      <div class="card rv"><span class="k">CLOCK-LRU-K</span><h3>Layer-partitioned arena</h3><p>One bounded cache tier per layer. Cross-layer eviction is impossible by design — streaming stays predictable.</p></div>
+      <div class="card rv"><span class="k">CLOCK-LRU-K</span><h3>Layer-partitioned arena</h3><p>One bounded cache tier per layer. Cross-layer eviction is impossible by construction, so streaming behaviour stays predictable.</p></div>
       <div class="card rv"><span class="k">admission gate</span><h3>Memory-health guard</h3><p>The engine refuses a cache that would push the Mac into swap. "The Mac stays usable" is a hard invariant, not a hope.</p></div>
-      <div class="card rv"><span class="k">MTP · DFlash</span><h3>Speculative decoding</h3><p>Drafts several tokens per target pass — MTP for Qwen, a DFlash draft model for Laguna — amortizing expert fetches.</p></div>
+      <div class="card rv"><span class="k">MTP · DFlash</span><h3>Speculative decoding</h3><p>Drafts several tokens per target pass: MTP for Qwen, a DFlash draft model for Laguna. Each draft amortizes the expert fetches behind it.</p></div>
       <div class="card rv"><span class="k">PGCT1 · PGCC1</span><h3>Async prefetch</h3><p>A background thread warms the next layer's experts while the current one computes. Wired end-to-end; the predictor is active research.</p></div>
       <div class="card rv"><span class="k">NMSE = 0</span><h3>Parity gate</h3><p>A test asserts streamed output is bit-identical to fully-resident output. Optimizations that only reorder eviction can't change results.</p></div>
     </div>
@@ -268,12 +268,12 @@
   <div class="wrap">
     <div class="head rv">
       <div class="eyebrow">03 — Measured, on a 36 GB Mac</div>
-      <h2>Evidence-first. We publish the numbers — including the ones we lost.</h2>
-      <p>Real runs, recorded methodology. No hand-waved 5× miracle.</p>
+      <h2>Measured on my own machine, losses included.</h2>
+      <p>Real runs, with the methodology written down. No hand-waved 5× miracle.</p>
     </div>
 
     <div class="rv">
-      <h3 style="margin-top:44px;font-size:19px">Qwen3.6-35B-A3B (Q4) — the interactive workhorse</h3>
+      <h3 style="margin-top:44px;font-size:19px">Qwen3.6-35B-A3B (Q4), the interactive workhorse</h3>
       <div class="tbl-wrap"><table>
         <thead><tr><th>RAM cache</th><th class="num">Decode</th><th class="num">Cache hit-rate</th><th>Fits</th></tr></thead>
         <tbody>
@@ -286,7 +286,7 @@
     </div>
 
     <div class="rv">
-      <h3 style="margin-top:52px;font-size:19px">Laguna S 2.1 (118B-A8B, Q4) — larger than 36 GB RAM</h3>
+      <h3 style="margin-top:52px;font-size:19px">Laguna S 2.1 (118B-A8B, Q4), larger than 36 GB of RAM</h3>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Configuration (each row adds one lever)</th><th class="num">Decode</th><th class="num">vs. baseline</th></tr></thead>
         <tbody>
@@ -296,7 +296,7 @@
           <tr><td>+ larger cache</td><td class="num win">2.83 tok/s</td><td class="num win">3.9×</td></tr>
         </tbody>
       </table></div>
-      <div class="tbl-cap">A model that does not fit in RAM, made runnable. Usable for batch coding at ~2.8 tok/s.</div>
+      <div class="tbl-cap">A model that doesn't fit in RAM, made runnable. At ~2.8 tok/s that's batch coding, not chat.</div>
     </div>
 
     <div class="rv" style="margin-top:52px">
@@ -307,10 +307,10 @@
           <tr><td>16 GB</td><td>Qwen3.6-35B-A3B · small cache</td><td>runnable, more SSD reads</td></tr>
           <tr><td>24–36 GB</td><td>35B · 10–14 GiB cache</td><td class="win">interactive · ~13–19 tok/s</td></tr>
           <tr><td>36 GB + fast SSD</td><td>118B (Laguna) for hard tasks</td><td>batch quality · ~2.8 tok/s</td></tr>
-          <tr><td>0.5–2 TB fast NVMe</td><td>XL tier — up to 480B</td><td>showcase / batch coding</td></tr>
+          <tr><td>0.5–2 TB fast NVMe</td><td>XL tier, up to 480B</td><td>demo / batch coding</td></tr>
         </tbody>
       </table></div>
-      <div class="tbl-cap">Guidance, not a promise — the app computes the best settings and an expected speed for your exact machine. Got real numbers? <a href="https://github.com/Schero94/slipstream/issues" target="_blank" rel="noopener" style="color:var(--cyan)">share them →</a></div>
+      <div class="tbl-cap">This is guidance. The app works out the real settings and an expected speed for your exact machine. Got real numbers? <a href="https://github.com/Schero94/slipstream/issues" target="_blank" rel="noopener" style="color:var(--cyan)">share them →</a></div>
     </div>
   </div>
 </section>
@@ -320,14 +320,14 @@
     <div class="head rv">
       <div class="eyebrow">04 — What did <em style="font-style:normal;color:var(--stream)">not</em> work</div>
       <h2>The negatives, recorded honestly.</h2>
-      <p>Credibility comes from the experiments we rejected — and from re-checking our own rejections at the operating point they actually target.</p>
+      <p>The rejected experiments say more about an engine than the wins do. So does going back and re-checking a rejection at the cache size it was meant for.</p>
     </div>
     <div class="rv" style="margin-top:30px;padding:20px 24px;border:1px solid var(--line2);border-radius:14px;background:linear-gradient(180deg,rgba(255,157,47,.07),transparent)">
-      <b class="amber">One verdict flipped.</b> The compact / zero-copy expert path was rejected at a 2 GiB cache — a size almost no Mac uses, where there is nothing to save. Re-measured across the cache the app actually recommends, it is <b>+13–24% faster</b> (peak +24% at 6 GiB), swap-safe, bit-exact output — <b>now on by default</b>. The lesson we kept: re-measure a rejection in the regime it targets before believing it.
+      <b class="amber">One verdict flipped.</b> I rejected the compact / zero-copy expert path at a 2 GiB cache, which is a size almost nobody runs and where there's nothing to save. Re-measured across the cache sizes the app actually recommends, it's <b>+13–24% faster</b> (peak +24% at 6 GiB), swap-safe, and bit-exact. It's <b>on by default</b> now. The lesson I kept: re-measure a rejection at the size it was meant for before believing it.
     </div>
     <ul class="fail rv">
       <li>
-        <h4>OS page-cache instead of our bounded arena <span class="verdict">unsafe</span></h4>
+        <h4>OS page-cache instead of the bounded arena <span class="verdict">unsafe</span></h4>
         ~75% faster, but 1000+ swapouts. It breaks “the Mac stays usable.” Rejected.
       </li>
       <li>
@@ -340,11 +340,11 @@
       </li>
       <li>
         <h4>Dual-SSD striping <span class="verdict">slower</span></h4>
-        tok/s-negative on internal NVMe + slow USB (shared bus). A real capacity feature for two fast disks — opt-in, not a speed default.
+        tok/s-negative on internal NVMe + slow USB (shared bus). It's a genuine capacity feature for two fast disks, so it stays opt-in.
       </li>
       <li>
         <h4>ANE / MLX compute paths <span class="verdict">wrong regime</span></h4>
-        Real 1.2–1.4× gains, but only for models that fit in RAM. They don’t help the &gt;RAM streaming regime — which is the whole point of Slipstream.
+        Real 1.2–1.4× gains, but only for models that fit in RAM. They don’t help the &gt;RAM streaming case, which is the whole point of Slipstream.
       </li>
     </ul>
   </div>
@@ -354,18 +354,18 @@
   <div class="wrap">
     <div class="head rv">
       <div class="eyebrow">05 — Standing on the shoulders of</div>
-      <h2>The research we read.</h2>
-      <p>Slipstream's design is grounded in published work on MoE offloading, flash-memory inference, and speculative decoding.</p>
+      <h2>The research I read.</h2>
+      <p>The design leans on published work in MoE offloading, flash-memory inference and speculative decoding.</p>
     </div>
     <div class="grid g2" style="margin-top:36px">
-      <a class="paper rv" href="https://arxiv.org/abs/2312.11514" target="_blank" rel="noopener"><span class="id">2312.11514</span><div><h4>LLM in a flash (Apple)</h4><p>Efficient LLM inference with limited memory by streaming weights from flash — the foundational idea Slipstream builds on for Apple Silicon.</p></div></a>
-      <a class="paper rv" href="https://arxiv.org/abs/2510.10302" target="_blank" rel="noopener"><span class="id">2510.10302</span><div><h4>SP-MoE</h4><p>Speculative decoding <em>and</em> prefetching to accelerate MoE inference — validates coupling our draft tokens to expert prefetch.</p></div></a>
-      <a class="paper rv" href="https://arxiv.org/abs/2508.21706" target="_blank" rel="noopener"><span class="id">2508.21706</span><div><h4>Hiding Offloading Latency with Speculative Decoding</h4><p>Uses the draft pass to hide expert-fetch latency — the exact lever behind our async prefetch trigger.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2312.11514" target="_blank" rel="noopener"><span class="id">2312.11514</span><div><h4>LLM in a flash (Apple)</h4><p>Efficient LLM inference with limited memory by streaming weights from flash. This is the idea Slipstream builds on for Apple Silicon.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2510.10302" target="_blank" rel="noopener"><span class="id">2510.10302</span><div><h4>SP-MoE</h4><p>Speculative decoding <em>and</em> prefetching to accelerate MoE inference. Validates coupling draft tokens to expert prefetch.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2508.21706" target="_blank" rel="noopener"><span class="id">2508.21706</span><div><h4>Hiding Offloading Latency with Speculative Decoding</h4><p>Uses the draft pass to hide expert-fetch latency, which is the lever behind the async prefetch trigger here.</p></div></a>
       <a class="paper rv" href="https://arxiv.org/abs/2602.06036" target="_blank" rel="noopener"><span class="id">2602.06036</span><div><h4>DFlash: Block Diffusion for Flash Speculative Decoding</h4><p>The DFlash speculative approach used for Laguna's draft model.</p></div></a>
-      <a class="paper rv" href="https://arxiv.org/abs/2401.15077" target="_blank" rel="noopener"><span class="id">2401.15077</span><div><h4>EAGLE</h4><p>Feature-level speculative sampling — reference for lossless draft-and-verify decoding.</p></div></a>
-      <a class="paper rv" href="https://arxiv.org/abs/2503.06823" target="_blank" rel="noopener"><span class="id">2503.06823</span><div><h4>eMoE</h4><p>Task-aware, memory-efficient MoE inference — the memory-constrained expert-loading landscape.</p></div></a>
-      <a class="paper rv" href="https://arxiv.org/abs/2505.05950" target="_blank" rel="noopener"><span class="id">2505.05950</span><div><h4>FloE</h4><p>On-the-fly MoE inference on memory-constrained hardware — comparable offloading strategy.</p></div></a>
-      <a class="paper rv" href="https://arxiv.org/abs/2401.10774" target="_blank" rel="noopener"><span class="id">2401.10774</span><div><h4>Medusa</h4><p>Multiple decoding heads for parallel token prediction — the multi-token-prediction lineage behind MTP.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2401.15077" target="_blank" rel="noopener"><span class="id">2401.15077</span><div><h4>EAGLE</h4><p>Feature-level speculative sampling. Reference for lossless draft-and-verify decoding.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2503.06823" target="_blank" rel="noopener"><span class="id">2503.06823</span><div><h4>eMoE</h4><p>Task-aware, memory-efficient MoE inference under a tight memory budget.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2505.05950" target="_blank" rel="noopener"><span class="id">2505.05950</span><div><h4>FloE</h4><p>On-the-fly MoE inference on memory-constrained hardware. A comparable offloading strategy.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2401.10774" target="_blank" rel="noopener"><span class="id">2401.10774</span><div><h4>Medusa</h4><p>Multiple decoding heads for parallel token prediction. The lineage behind MTP.</p></div></a>
     </div>
   </div>
 </section>
@@ -382,8 +382,8 @@
       </div>
       <div class="steps">
         <div class="step"><b>01</b><p>Drag <b>Slipstream.app</b> to Applications. First launch: right-click → Open (not yet notarized).</p></div>
-        <div class="step"><b>02</b><p>Open it — it auto-detects your Mac and shows the best settings. Pick a model, click Start.</p></div>
-        <div class="step"><b>03</b><p>Point Kilo / Cline / Cursor / OpenCode at <span style="font-family:var(--mono);color:var(--cyan)">127.0.0.1:8080</span> — or one-click patch.</p></div>
+        <div class="step"><b>02</b><p>Open it. It detects your Mac and proposes settings for it. Pick a model, click Start.</p></div>
+        <div class="step"><b>03</b><p>Point Kilo / Cline / Cursor / OpenCode at <span style="font-family:var(--mono);color:var(--cyan)">127.0.0.1:8080</span>, or use the one-click patch.</p></div>
       </div>
       <div class="hero-note" style="margin-top:24px">Requires an Apple-Silicon Mac, 16 GB+ RAM. macOS 11+.</div>
     </div>
