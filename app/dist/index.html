@@ -9,7 +9,7 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <img class="logo" src="logo.svg" alt="Slipstream" />
+      <img class="logo" src="logo.png" alt="Slipstream" />
       <div>
         <h1>Slipstream</h1>
         <p class="sub" data-i18n="header.sub">Große Coding-Modelle lokal auf dem Mac — von SSD gestreamt</p>
@@ -141,6 +141,7 @@
           <div class="ctrl">
             <div class="ctrl-head"><label class="chk"><input type="checkbox" id="specMtp" checked /> <span data-i18n="lbl.mtp">MTP-Speed</span> <span class="info" data-i18n-tip="tip.mtp">ⓘ</span></label></div>
             <div class="ctrl-head" style="margin-top:10px"><label class="chk"><input type="checkbox" id="thinking" /> <span data-i18n="lbl.thinking">Thinking</span> <span class="info" data-i18n-tip="tip.thinking">ⓘ</span></label></div>
+            <div class="ctrl-head" style="margin-top:10px"><label class="chk"><input type="checkbox" id="compactSlots" checked /> <span data-i18n="lbl.compact">Compact (schneller)</span> <span class="info" data-i18n-tip="tip.compact">ⓘ</span></label></div>
           </div>
         </div>
       </div>
@@ -185,6 +186,7 @@
           <input type="text" id="pMirror" spellcheck="false" data-i18n-ph="adv.mirrorPh" />
           <div class="adv-warn" data-i18n="adv.mirrorWarn">⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.</div>
           <label class="chk adv-chk"><input type="checkbox" id="bufferedReads" /> <span data-i18n="adv.buffered">Advanced: gepufferte Reads (Nicht-NVMe-Laufwerke)</span></label>
+          <label class="chk adv-chk"><input type="checkbox" id="onlinePredict" /> <span data-i18n="adv.predict">Advanced: Predictive Prefetch (experimentell)</span> <span class="info" data-i18n-tip="tip.predict">ⓘ</span></label>
         </details>
       </div>
       <div class="card">

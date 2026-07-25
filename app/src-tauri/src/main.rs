@@ -107,7 +107,13 @@ struct ServerConfig {
     pgrn_mirror: String, // advanced: byte-identical PGRN copy on a 2nd SSD -> dual-SSD striping
     #[serde(default)]
     pgrn_buffered: bool, // advanced: buffered reads (skip F_NOCACHE) for non-NVMe drives
+    #[serde(default)]
+    pgrn_online: bool,   // advanced: online co-activation predictor -> speculative prefetch
+    #[serde(default = "default_true")]
+    pgrn_compact: bool,  // default-on: zero-copy compact slots -> +13-24% decode at moderate cache, swap-safe (measured)
 }
+
+fn default_true() -> bool { true }
 
 #[tauri::command]
 fn start_server(cfg: ServerConfig, state: State<AppState>) -> Result<String, String> {
@@ -137,6 +143,14 @@ fn start_server(cfg: ServerConfig, state: State<AppState>) -> Result<String, Str
     }
     if cfg.pgrn_buffered {
         cmd.env("PGRN_BUFFERED", "1");
+    }
+    if cfg.pgrn_online {
+        cmd.env("PGRN_ONLINE_PREDICT", "1");
+    }
+    // Compact slots (zero-copy): GPU reads experts directly from arena slots — no re-upload
+    // copy. Measured +13-24% decode across cache 4-8 GiB, neutral higher, swap-safe. Default-on.
+    if cfg.pgrn_compact {
+        cmd.arg("--pgrn-compact-slots");
     }
     cmd.args([
         "--model", &cfg.model,

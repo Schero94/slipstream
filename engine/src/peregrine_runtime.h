@@ -83,6 +83,11 @@ void pgr_runtime_prefetch_kick(pgr_runtime * runtime, uint16_t layer);
 void pgr_runtime_prefetch_kick_coupled(pgr_runtime * runtime, uint16_t src_layer,
                                        const int32_t * fired, int n_fired);
 int pgr_runtime_has_coupling(const pgr_runtime * runtime);
+/* Online co-activation predictor (opt-in via PGRN_ONLINE_PREDICT): learns L->L+1 expert
+ * coupling live and prefetches the predicted next-layer set. Parity-neutral (warms only). */
+int pgr_runtime_has_online(const pgr_runtime * runtime);
+void pgr_runtime_prefetch_kick_online(pgr_runtime * runtime, uint16_t src_layer,
+                                      const int32_t * fired, int n_fired);
 void pgr_runtime_prefetch_settle(pgr_runtime * runtime, uint16_t layer);
 size_t pgr_runtime_cache_capacity(const pgr_runtime * runtime);
 size_t pgr_runtime_cache_bytes(const pgr_runtime * runtime);

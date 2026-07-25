@@ -292,13 +292,17 @@
     <div class="head rv">
       <div class="eyebrow">04 — What did <em style="font-style:normal;color:var(--stream)">not</em> work</div>
       <h2>The negatives, recorded honestly.</h2>
-      <p>Credibility comes from the experiments we rejected. All of these are in the repo's benchmark logs.</p>
+      <p>Credibility comes from the experiments we rejected — and from re-checking our own rejections at the operating point they actually target.</p>
     </div>
-    <ul class="fail rv" style="list-style:none;padding:0;margin-top:34px">
+    <div class="rv" style="margin-top:30px;padding:20px 24px;border:1px solid var(--line2);border-radius:14px;background:linear-gradient(180deg,rgba(255,157,47,.07),transparent)">
+      <b class="amber">One verdict flipped.</b> The compact / zero-copy expert path was rejected at a 2 GiB cache — a size almost no Mac uses, where there is nothing to save. Re-measured across the cache the app actually recommends, it is <b>+13–24% faster</b> (peak +24% at 6 GiB), swap-safe, bit-exact output — <b>now on by default</b>. The lesson we kept: re-measure a rejection in the regime it targets before believing it.
+    </div>
+    <ul class="fail rv" style="list-style:none;padding:0;margin-top:24px">
       <li><b>OS page-cache instead of our bounded arena</b> — ~75% faster, but 1000+ swapouts. It breaks "the Mac stays usable." Rejected.</li>
-      <li><b>Naive coupled-layer prefetch</b> — 5–15% <em>slower</em> from cache thrash. The async machinery is there; the predictor that beats the fetch wall is still open research.</li>
+      <li><b>Speculative prefetch predictors</b> (static + online co-activation) — −8% at real cache. Prediction isn't accurate enough to beat the cost of the speculative reads on a fetch-bound path. The async machinery is wired; a predictor that wins is still open research.</li>
+      <li><b>HOT/WARM tier reservation</b> — −1 to −6%, even on top of compact. Pinning "hot" experts shrinks the general working set → lower hit-rate. Pure LRU-K stays best.</li>
+      <li><b>Dual-SSD striping</b> — tok/s-negative on internal NVMe + slow USB (shared bus). A real capacity feature for two fast disks — opt-in, not a speed default.</li>
       <li><b>ANE / MLX compute paths</b> — real 1.2–1.4× gains, but only for models that fit in RAM. They don't help the &gt;RAM streaming regime.</li>
-      <li><b>Lossless expert compression &amp; pinning</b> — low ROI once the storage split made fetch cheap. Not shipped.</li>
     </ul>
   </div>
 </section>

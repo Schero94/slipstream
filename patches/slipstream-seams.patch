@@ -3776,7 +3776,7 @@ index b5c40884f..1fed5c770 100644
      server-chat.h
      server-task.cpp
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 7564ad4e9..007ab01a1 100644
+index 7564ad4e9..75831c4d4 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -2,6 +2,7 @@
@@ -3877,15 +3877,7 @@ index 7564ad4e9..007ab01a1 100644
  
          if (n_draft_total > 0) {
              const float  draft_ratio  = (float) n_draft_accepted / n_draft_total;
-@@ -1086,6 +1138,7 @@ private:
-                 bool measure_model_bytes = has_draft;
- 
-                 common_params params_dft = common_base_params_to_speculative(params_base);
-+                params_dft.pgrn_path.clear(); // draft is resident: must not inherit main model PGRN
- 
-                 auto mparams_dft = common_model_params_to_llama(params_dft);
-                 auto cparams_dft = common_context_params_to_llama(params_dft);
-@@ -1154,6 +1207,20 @@ private:
+@@ -1154,6 +1206,20 @@ private:
  
          vocab = llama_model_get_vocab(model_tgt);
  
@@ -3906,15 +3898,7 @@ index 7564ad4e9..007ab01a1 100644
          n_ctx = llama_n_ctx(ctx_tgt);
  
          add_bos_token = llama_vocab_get_add_bos(vocab);
-@@ -1165,6 +1232,7 @@ private:
- 
-             {
-                 common_params params_dft = common_base_params_to_speculative(params_base);
-+                params_dft.pgrn_path.clear(); // draft is resident: must not inherit main model PGRN
- 
-                 // progress callback
-                 params_dft.load_progress_callback           = load_progress_callback;
-@@ -1276,6 +1344,10 @@ private:
+@@ -1276,6 +1342,10 @@ private:
                  spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
              } catch (const std::exception & e) {
                  SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
@@ -3925,7 +3909,7 @@ index 7564ad4e9..007ab01a1 100644
              }
          }
  
-@@ -1299,6 +1371,8 @@ private:
+@@ -1299,6 +1369,8 @@ private:
              slot.ctx_dft = ctx_dft;
              slot.spec    = spec.get();
              slot.n_ctx   = n_ctx_slot;
@@ -3934,7 +3918,7 @@ index 7564ad4e9..007ab01a1 100644
  
              slot.mctx                   = mctx;
              slot.prompt.tokens.has_mtmd = mctx != nullptr;
-@@ -2066,6 +2140,8 @@ private:
+@@ -2066,6 +2138,8 @@ private:
      void send_final_response(server_slot & slot) {
          auto res = std::make_unique<server_task_result_cmpl_final>();
  
@@ -3943,7 +3927,7 @@ index 7564ad4e9..007ab01a1 100644
          res->id      = slot.task->id;
          res->id_slot = slot.id;
  
-@@ -3582,8 +3658,45 @@ private:
+@@ -3582,8 +3656,45 @@ private:
              n_empty_consecutive = 0;
          }
  

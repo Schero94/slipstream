@@ -54,6 +54,31 @@ The DFlash draft adds ~21 % but touches more experts (hit-rate drops); a larger 
 
 ---
 
+## I/O levers, re-validated at real cache sizes
+
+Several levers were originally qualified at **cache 2 GiB** (22 % hit-rate — a regime almost no Mac uses). Re-measuring across the band the app actually recommends — {4, 6, 8, 10 GiB} — **flipped one verdict** and confirmed the rest. Method: interleaved A/B, `sysctl vm.swapusage` before/after each run, parity preserved.
+
+### Compact "zero-copy" slots — a win that was hiding (now default-on)
+
+The GPU reads streamed experts **directly** from the cache arena (strided views) — no second CPU→GPU upload copy. Rejected at cache 2 GiB (few hits → nothing to save). At the real band it's a clear, swap-safe win:
+
+| Cache | Hit-rate | Baseline | Compact | Δ |
+|---:|---:|---:|---:|---:|
+| 4 GiB | 69 % | 4.84 | 5.53 | **+14 %** |
+| 6 GiB | 78 % | 5.77 | 7.17 | **+24 %** |
+| 8 GiB | 83 % | 7.85 | 8.85 | **+13 %** |
+| 10 GiB | 87 % | 11.32 | 11.48 | +1 % (neutral) |
+
+Swap growth: **0 MB** at every point. Parity: exact logits on CPU + Metal. **The lesson: a lever rejected at one operating point can be a real win at another — always re-measure in the regime it targets.** (An early single run showed −7 % at cache 10; the clean interleaved sweep corrected it to neutral — hence ≥1 controlled rep, never one shot.)
+
+### Confirmed negatives (re-tested at the real band, verdict held)
+
+- **Online co-activation prefetch predictor** — −8 % at cache 6. Prediction isn't accurate enough to beat the cost of the speculative reads on a fetch-bound path.
+- **HOT/WARM tier reservation** (`--pgrn-hot-percent`) — −1 to −6 %, *even on top of compact*. Reserving slots for "hot" experts shrinks the general working set → lower hit-rate. Pure CLOX (hot = 0) stays best.
+- **Dual-SSD striping** — tok/s-negative on internal-NVMe + slow-USB (shared bus, not independent). It is a real **capacity / flexibility** feature (spread a model across two disks) for setups with two comparably-fast SSDs — shipped opt-in, not a speed default.
+
+---
+
 ## What did *not* work (recorded honestly)
 
 - **OS page-cache instead of our bounded arena** — ~75 % faster, but 1000+ swapouts: it breaks "the Mac stays usable." Rejected.

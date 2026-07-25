@@ -32,6 +32,13 @@ struct pgr_runtime {
     std::thread prefetch_thread;
     bool prefetch_pending = false;
     uint16_t prefetch_layer = 0;
+    // Online co-activation predictor (opt-in via PGRN_ONLINE_PREDICT): learns the
+    // L -> L+1 expert coupling live from observed routing, replacing a static table.
+    uint16_t * co_counts = nullptr;   // [layers * experts * experts] saturating counts
+    int co_layers = 0, co_experts = 0;
+    int co_prev_n = 0;
+    int co_prev_layer = -1;
+    uint16_t co_prev[256] = {};
     char error[192] = {};
 };
 
@@ -121,6 +128,16 @@ pgr_runtime *pgr_runtime_new(
     }
     if (params->coupling_path && params->coupling_path[0]) {
         runtime->coupling = pgr_coupling_load(params->coupling_path);
+    }
+    /* Online co-activation predictor: allocate the live L->L+1 count table when opted in
+     * and the table stays within a modest RAM budget (<=16 MB). Model-agnostic; parity-safe. */
+    if (getenv("PGRN_ONLINE_PREDICT")) {
+        const int L = (int) pgrn_layer_count(runtime->store);
+        const int E = (int) pgrn_experts_per_layer(runtime->store);
+        if (L > 1 && E > 0 && E <= 512 && (long) L * E * E <= 8L * 1024 * 1024) {
+            runtime->co_counts = (uint16_t *) calloc((size_t) L * E * E, sizeof(uint16_t));
+            if (runtime->co_counts) { runtime->co_layers = L; runtime->co_experts = E; }
+        }
     }
     if (pgr_admission_compute(&input, admitted_plan) != 0 ||
             admitted_plan->status != PGR_ADMISSION_OK ||
@@ -490,6 +507,72 @@ void pgr_runtime_prefetch_kick_coupled(pgr_runtime * runtime, uint16_t src_layer
     });
 }
 
+int pgr_runtime_has_online(const pgr_runtime * runtime) {
+    return runtime && runtime->co_counts ? 1 : 0;
+}
+
+/* Online co-activation predictor: learns which experts of layer L+1 co-fire with the
+ * experts that fired at layer L, live, then prefetches the predicted set for L+1. No
+ * table file, model-agnostic, parity-neutral (warms cache only, never changes output). */
+void pgr_runtime_prefetch_kick_online(pgr_runtime * runtime, uint16_t src_layer,
+                                      const int32_t * fired, int n_fired) {
+    if (!runtime || !runtime->co_counts || !fired || n_fired <= 0) return;
+    const int E = runtime->co_experts, L = runtime->co_layers;
+    /* dedup the current layer's fired experts */
+    uint16_t cur[256]; int cn = 0;
+    for (int i = 0; i < n_fired && cn < 256; ++i) {
+        const int32_t v = fired[i];
+        if (v < 0 || v >= E) continue;
+        bool dup = false;
+        for (int k = 0; k < cn; ++k) if (cur[k] == v) { dup = true; break; }
+        if (!dup) cur[cn++] = (uint16_t) v;
+    }
+    if (cn == 0) return;
+    /* observe: previous layer's fired -> this layer's fired (only across adjacent layers) */
+    if (runtime->co_prev_layer == (int) src_layer - 1 && runtime->co_prev_n > 0) {
+        const size_t lbase = (size_t) runtime->co_prev_layer * (size_t) E * (size_t) E;
+        for (int p = 0; p < runtime->co_prev_n; ++p) {
+            uint16_t * row = runtime->co_counts + lbase + (size_t) runtime->co_prev[p] * (size_t) E;
+            for (int c = 0; c < cn; ++c) if (row[cur[c]] < 0xFFFF) row[cur[c]]++;
+        }
+    }
+    /* predict layer src_layer+1 from counts[src_layer][cur][*], warm the top-`budget` */
+    const int target = (int) src_layer + 1;
+    if (target < L) {
+        pgr_runtime_prefetch_join(runtime);   /* one prefetch in flight */
+        int budget = (int) pgr_runtime_layer_capacity(runtime, (uint16_t) target) / 2;
+        if (budget > E) budget = E;
+        if (budget > 256) budget = 256;
+        if (budget > 0) {
+            std::vector<uint32_t> score((size_t) E, 0u);
+            const size_t lbase = (size_t) src_layer * (size_t) E * (size_t) E;
+            for (int c = 0; c < cn; ++c) {
+                const uint16_t * row = runtime->co_counts + lbase + (size_t) cur[c] * (size_t) E;
+                for (int e = 0; e < E; ++e) score[e] += row[e];
+            }
+            uint16_t hot[256]; int hn = 0;
+            for (int pick = 0; pick < budget; ++pick) {
+                int best = -1; uint32_t bestv = 0;
+                for (int e = 0; e < E; ++e) if (score[e] > bestv) { bestv = score[e]; best = e; }
+                if (best < 0) break;
+                hot[hn++] = (uint16_t) best; score[best] = 0;
+            }
+            if (hn > 0) {
+                std::vector<uint16_t> experts(hot, hot + hn);
+                runtime->prefetch_pending = true;
+                runtime->prefetch_layer = (uint16_t) target;
+                runtime->prefetch_thread = std::thread([runtime, target, experts]() {
+                    pgr_runtime_prefetch(runtime, (uint16_t) target, experts.data(), (int) experts.size());
+                });
+            }
+        }
+    }
+    /* remember current as previous for the next layer's observation */
+    for (int c = 0; c < cn; ++c) runtime->co_prev[c] = cur[c];
+    runtime->co_prev_n = cn;
+    runtime->co_prev_layer = (int) src_layer;
+}
+
 void pgr_runtime_prefetch_settle(pgr_runtime * runtime, uint16_t layer) {
     if (runtime && runtime->prefetch_pending && runtime->prefetch_layer == layer) {
         pgr_runtime_prefetch_join(runtime);
@@ -501,6 +584,7 @@ void pgr_runtime_free(pgr_runtime * runtime) {
     pgr_runtime_prefetch_join(runtime);   /* no background thread past this point */
     pgr_predict_free(runtime->predict);
     pgr_coupling_free(runtime->coupling);
+    free(runtime->co_counts);
     for (pgr_stream * stream : runtime->streams) pgr_stream_free(stream);
     pgr_arena_free(runtime->arena);
     pgrn_close(runtime->store);
