@@ -35,7 +35,11 @@ Models that won't fit in your RAM become runnable. That's the entire pitch.
 5. Click Start. Once the pill turns green you're serving an OpenAI-compatible API on `127.0.0.1:8080`.
 6. In your coding assistant, add an OpenAI Compatible provider. For Kilo and OpenCode there's a one-click patch instead; restart VS Code afterwards.
 
-Everything runs on-device. While you work, the app shows live SSD throughput, cache hit-rate, tokens/sec, token usage and RAM headroom. The UI is available in English, German, Chinese and Spanish.
+Everything runs on-device. While you work, the app shows live SSD throughput, cache hit-rate, tokens/sec, token usage and RAM headroom. Two engine features have switches in the settings panel: Compact, which is on by default and is the fastest setting I've measured, and Predictive Prefetch, which is off by default and experimental. The UI is available in English, German, Chinese and Spanish.
+
+### Codebase indexing (optional)
+
+Streamed models are slow at prefill, so the less your assistant sends per request, the better it feels. The app can run the retrieval half of that for you, on-device: it starts a local embedding server, and it can download and start Qdrant as the vector store. Neither ships inside the `.dmg`. The app fetches the Qdrant release binary when you ask it to, and you pick an embedding model the same way you pick a chat model. Once both are up, point your assistant's codebase indexing at them and it will send small, relevant prompts instead of half the repository.
 
 ---
 
@@ -102,6 +106,8 @@ A converter pulls the stacked expert tensors out of the GGUF into a streamable b
 
 The cache is partitioned by layer, one bounded CLOCK-LRU-K tier each. Cross-layer eviction is impossible by construction, so streaming behaviour stays predictable. Above that sits the memory-health gate, which rejects any cache size that would push the Mac into swap. "The Mac stays usable" is a hard invariant here, not an aspiration.
 
+Compact slots let single-token MoE layers execute straight out of the pinned arena, with no copy between cache and compute buffer. I measured this at a 2 GiB cache, saw nothing and shelved it. Re-measured at the cache sizes the app actually recommends it's worth +13-24%, peaking around +24% at 6 GiB, and the output stays bit-exact. The app enables it by default; on the command line it's `--pgrn-compact-slots`.
+
 Speculative decoding uses MTP on Qwen models and DFlash on Laguna, drafting several tokens per target pass.
 
 Async prefetch is opt-in and still experimental. A background thread warms the next layer's experts while the current layer computes, driven either by a predictor table (`PGCT1`) or an expert-coupling table (`PGCC1`). The machinery works end to end. Getting the *prediction* accurate enough to beat the SSD-fetch wall is unsolved, and `bench/` documents how badly it currently loses.
@@ -116,9 +122,9 @@ Architecture notes live in [`docs/ARCH.md`](docs/ARCH.md).
 
 Speed scales with your SSD and your RAM. More resident cache means a higher hit-rate means faster decode. External USB SSDs are a genuine bottleneck, so keep the streamed PGRN on internal NVMe. Decode is roughly 78-92% bound on SSD fetch.
 
-Big agentic prompts are prefill-heavy. A 30k-token first request against a streamed model takes minutes. Turn on codebase indexing so your assistant sends small, relevant prompts; later turns reuse the KV cache and come back quickly.
+Big agentic prompts are prefill-heavy. A 30k-token first request against a streamed model takes minutes. Raise `--pgrn-io-threads` and turn on codebase indexing (see above) so your assistant sends small, relevant prompts; later turns reuse the KV cache and come back quickly.
 
-118B on 36 GB runs at about 2.8 tok/s. That's batch work. It is not chat, and I'd rather say so here than have you find out after the download. The 35B at ~14 tok/s is the interactive one.
+118B on 36 GB runs at about 2.8 tok/s. That's batch work. It is not chat, and I'd rather say so here than have you find out after the download. The 35B at ~13-19 tok/s, depending on cache size, is the interactive one.
 
 The GGUF to PGRN converter still needs the Python tooling in `bench/`. Bundling it into the app is on the list; the engine itself is already fully bundled.
 
@@ -159,6 +165,44 @@ cd app/src-tauri && cargo tauri build   # -> the self-contained .dmg
 ```
 
 `otool -L build-static/bin/llama-server` should list only system frameworks. No `@rpath`, no Homebrew, no OpenSSL. That's what makes the app copy-and-run on any Apple-Silicon Mac.
+
+## Running the engine directly
+
+The app sets all of this for you. If you're running `llama-server` yourself, this is the part that isn't upstream llama.cpp:
+
+```bash
+./llama-server -m model.gguf \
+  --pgrn model.pgrn \
+  --pgrn-cache-gb 10 \
+  --pgrn-headroom-gb 6 \
+  --pgrn-io-threads 8 \
+  --pgrn-compact-slots
+```
+
+| Flag | What it does |
+|---|---|
+| `--pgrn FILE` | Stream experts from this PGRN sidecar. Disables mmap of the model. |
+| `--pgrn-cache-gb N` | Hard upper bound in GiB on the resident expert cache. Required with `--pgrn`. |
+| `--pgrn-headroom-gb N` | RAM in GiB kept free for macOS and whatever else you're running. Required with `--pgrn`. |
+| `--pgrn-io-threads N` | Parallel cold-read threads per layer stream, 1 to 64. This is the flag that moves prefill: 8 to 16 took a 30k-token prompt from 75 to 208 tok/s. |
+| `--pgrn-compact-slots` | Run single-token MoE layers straight from pinned arena slots. Worth +13-24%. |
+| `--pgrn-predict FILE` | PGCT1 hot-set table for speculative next-layer prefetch. Warms the cache only, never changes output. |
+| `--pgrn-coupling FILE` | PGCC1 table, conditioned on the experts the current layer fired. Takes precedence over `--pgrn-predict`. |
+| `--pgrn-hot-percent N` | Share of the cache reserved for HOT experts. 0 keeps pure CLOCK-LRU-K, which measured best. |
+| `--pgrn-ane-draft MANIFEST` | Fail-closed Core ML one-shot draft. Every candidate is verified against the target model. |
+| `--pgrn-ane-budget-mib N` | Memory ceiling in MiB for that Core ML draft. |
+
+There are further HOT/WARM tuning flags (`--pgrn-promote-hits`, `--pgrn-demote-idle`, `--pgrn-hot-cooldown`). The tier reservation measured between -1% and -6%, so the default of 0 is also the best setting I found. `llama-server --help` lists them all.
+
+Two environment variables cover the multi-disk case:
+
+| Variable | What it does |
+|---|---|
+| `PGRN_MIRROR=/path/to/copy.pgrn` | A byte-identical PGRN copy on a second SSD. Reads get striped across both, split in proportion to each disk's probed cold-read bandwidth. |
+| `PGRN_MIRROR_WEIGHT=N` | Override that split, as a percentage sent to the primary disk. |
+| `PGRN_BUFFERED=1` | Skip `F_NOCACHE` and let the OS page cache back the reads. Faster per read, but the cache is then unbounded. See BENCHMARKS.md before using it. |
+
+Striping is a capacity feature first. On an internal NVMe paired with a slow USB drive it comes out slower, because they share a bus.
 
 ---
 
