@@ -148,6 +148,16 @@ details.paths input { font-family: "SF Mono", monospace; font-size: 11.5px; }
 .badge.partial { color: var(--yellow); border-color: #4a4224; background: #241f0d; }
 .badge.missing { color: var(--muted); }
 .badge.soon { color: #39c0ff; border-color: #14425a; background: #0c2230; }
+
+/* Expert-cache arena — the signature live visualization */
+.arena { margin-bottom: 16px; }
+.arena-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.arena-legend { font-size: 11px; color: var(--muted); }
+.arena-legend .lg { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin: 0 5px 0 12px; vertical-align: middle; }
+.arena-legend .lg-hot { background: #3cc878; }
+.arena-legend .lg-stream { background: #ffaa3c; }
+.expert-grid { width: 100%; height: 136px; display: block; border-radius: 10px; border: 1px solid var(--line);
+  background: radial-gradient(130% 150% at 50% 0%, rgba(255,157,47,0.06), transparent 60%), #0a0e15; }
 .dl-row { display: flex; gap: 16px; align-items: flex-end; margin-top: 8px; }
 .dl-info { flex: 1; }
 .dl-status { font-size: 13px; font-weight: 600; margin-bottom: 7px; }

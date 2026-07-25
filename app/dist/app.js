@@ -129,6 +129,8 @@ const I18N = {
 const I18N_EXT = {
   en: {
     "chart.ssd": "SSD throughput", "chart.ssdNote": "experts streamed from SSD",
+    "chart.arena": "Expert cache — live", "arena.resident": "resident hit", "arena.stream": "streaming from SSD",
+    "tok.prompt": "prompt", "tok.answer": "answer", "tok.session": "tokens (session)",
     "chart.hit": "Cache hit-rate", "chart.hitNote": "served resident (no SSD read)",
     "chart.tokens": "Tokens", "chart.tokensNote": "prefill + decode",
     "reco.computing": "Computing…", "toast.noSys": "No system data yet", "toast.applied": "Best settings applied",
@@ -164,6 +166,8 @@ const I18N_EXT = {
   },
   de: {
     "chart.ssd": "SSD-Durchsatz", "chart.ssdNote": "Experten von SSD gestreamt",
+    "chart.arena": "Experten-Cache — live", "arena.resident": "resident (Treffer)", "arena.stream": "streamt von SSD",
+    "tok.prompt": "Prompt", "tok.answer": "Antwort", "tok.session": "Tokens (Session)",
     "chart.hit": "Cache-Hit-Rate", "chart.hitNote": "resident bedient (kein SSD-Read)",
     "chart.tokens": "Tokens", "chart.tokensNote": "Prefill + Decode",
     "reco.computing": "Ermittle Werte…", "toast.noSys": "Noch keine Systemdaten", "toast.applied": "Beste Einstellungen angewendet",
@@ -712,6 +716,42 @@ function drawSpark(id, buf, color, max) {
 }
 
 // ---- polling loop ----------------------------------------------------------
+// ---- signature viz: expert-cache arena -------------------------------------
+// Honest aggregate of live metrics: the green fraction tracks the REAL cache
+// hit-rate; amber flickers are experts streaming from SSD (rate ~ throughput).
+// No per-expert claim — it visualizes the bounded arena's hit-rate + activity.
+const ARENA = { cols: 30, rows: 8, hit: 0, ssd: 0, active: false, cells: null };
+function initArena() {
+  ARENA.cells = Array.from({ length: ARENA.cols * ARENA.rows }, () => ({ rank: Math.random(), flick: 0 }));
+  requestAnimationFrame(drawArena);
+}
+function drawArena() {
+  const cv = $("expertGrid");
+  if (cv && cv.clientWidth) {
+    const ctx = cv.getContext("2d");
+    const w = cv.clientWidth, h = cv.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const { cols, rows, cells } = ARENA, cw = w / cols, ch = h / rows, pad = 2;
+    const residentFrac = ARENA.hit / 100;
+    const streamProb = ARENA.active ? Math.min(0.05 + ARENA.ssd / 5000, 0.22) : 0.003;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i];
+      const x = (i % cols) * cw + pad, y = ((i / cols) | 0) * ch + pad, tw = cw - 2 * pad, th = ch - 2 * pad;
+      if (Math.random() < streamProb) c.flick = 1;
+      c.flick *= 0.86;
+      if (c.flick > 0.04) ctx.fillStyle = `rgba(255,168,58,${0.3 + 0.62 * c.flick})`;   // streaming from SSD
+      else if (c.rank < residentFrac) ctx.fillStyle = "rgba(60,200,120,0.5)";            // resident hit
+      else ctx.fillStyle = "rgba(120,132,155,0.10)";                                     // cold slot
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, tw, th, 2); else ctx.rect(x, y, tw, th);
+      ctx.fill();
+    }
+  }
+  requestAnimationFrame(drawArena);
+}
+
 async function poll() {
   let sstate = "down";
   try { sstate = await invoke("server_state"); } catch {}
@@ -736,7 +776,9 @@ async function poll() {
     try {
       const log = await invoke("read_log", { maxLines: 400 });
       const p = parseLog(log);
-      updateActivity(parseActivity(log));
+      const act = parseActivity(log);
+      updateActivity(act);
+      ARENA.active = act.phase === "decode" || act.phase === "prefill";
       const now = performance.now() / 1000;
       let ssd = 0;
       if (p.misses != null && state.lastMisses != null && state.lastT != null) {
@@ -747,13 +789,15 @@ async function poll() {
       push(state.ssd, Math.max(0, ssd));
       if (p.hitPct != null) push(state.hit, p.hitPct);
       if (p.tps != null) push(state.tps, p.tps);
+      ARENA.hit = p.hitPct != null ? p.hitPct : ARENA.hit;
+      ARENA.ssd = ssd;
 
       $("ssdNow").textContent = ssd.toFixed(0);
       $("hitNow").textContent = p.hitPct != null ? p.hitPct.toFixed(0) : "0";
       $("tpsNow").textContent = p.tps != null ? p.tps.toFixed(1) : "0";
       $("tokValue").textContent = p.tps != null ? p.tps.toFixed(1) : "-";
       if (p.lastComp != null) {
-        $("tokNote").textContent = `${p.lastPrompt != null ? p.lastPrompt + " Prompt + " : ""}${p.lastComp} Antwort · ${p.sumComp} Tokens (Session)`;
+        $("tokNote").textContent = `${p.lastPrompt != null ? p.lastPrompt + " " + t("tok.prompt") + " + " : ""}${p.lastComp} ${t("tok.answer")} · ${p.sumComp} ${t("tok.session")}`;
       }
       setPill(sstate === "ready" ? "on" : "loading");
       $("healthText").textContent = sstate === "ready" ? t("srv.ready") : t("srv.loading");
@@ -764,6 +808,7 @@ async function poll() {
     $("healthText").textContent = t("srv.stopped");
     $("activeModelNote").textContent = t("srv.noModel");
     state.lastMisses = null;
+    ARENA.active = false;
   }
 
   drawSpark("ssdChart", state.ssd, "#ff9d2f");
@@ -1008,6 +1053,7 @@ async function boot() {
   applyLang(LANG);
   renderSpeed();
   renderInstalled();
+  initArena();
 
   setInterval(poll, 1000);
   setInterval(refreshLogs, 1500);

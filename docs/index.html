@@ -1,0 +1,391 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Slipstream — Run coding models bigger than your Mac's RAM</title>
+<meta name="description" content="Slipstream is a llama.cpp fork that streams Mixture-of-Experts weights from your SSD, so 35B–480B coding models run locally on a 16–36 GB Apple-Silicon Mac. Self-contained macOS app, honest benchmarks." />
+<meta name="keywords" content="local LLM, MoE, mixture of experts, llama.cpp, Apple Silicon, macOS, SSD streaming, expert offloading, on-device AI, coding assistant, DeepSeek, Qwen, GLM, Llama 4" />
+<meta name="author" content="Slipstream" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Slipstream — Run coding models bigger than your Mac's RAM" />
+<meta property="og:description" content="A 480B coding model. On a MacBook. Streaming experts from SSD. Self-contained app, evidence-first benchmarks (including what didn't work)." />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Slipstream — Run coding models bigger than your Mac's RAM" />
+<meta name="twitter:description" content="Stream MoE experts from SSD. 35B–480B models on a 16–36 GB Mac. Self-contained macOS app. Honest benchmarks." />
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Slipstream",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS 11+ (Apple Silicon)",
+  "description": "A llama.cpp fork that streams Mixture-of-Experts weights from SSD, running 35B–480B MoE coding models on 16–36 GB Apple-Silicon Macs while the machine stays usable.",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "license": "https://opensource.org/licenses/MIT"
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    { "@type": "Question", "name": "What is Slipstream?", "acceptedAnswer": { "@type": "Answer", "text": "Slipstream is an open-source fork of llama.cpp that streams a Mixture-of-Experts model's expert weights from your SSD on demand, instead of loading the whole model into RAM. This lets a 16–36 GB Apple-Silicon Mac run 35B–480B MoE coding models locally." } },
+    { "@type": "Question", "name": "What hardware do I need?", "acceptedAnswer": { "@type": "Answer", "text": "An Apple-Silicon Mac (M-series) with 16 GB of RAM or more, and a fast SSD. Larger XL models (240–466 GB on disk) need a big, fast external SSD; the interactive 35B model needs about 20 GB of disk." } },
+    { "@type": "Question", "name": "How fast is it?", "acceptedAnswer": { "@type": "Answer", "text": "A 35B MoE coder runs at ~13–19 tokens/sec on a 36 GB Mac. A 118B model that does not fit in RAM runs at ~2.8 tokens/sec — usable for batch coding. Speed scales with SSD bandwidth and available RAM cache." } },
+    { "@type": "Question", "name": "Is it free and private?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Slipstream is MIT-licensed and runs entirely on-device. No cloud, no API keys, no data leaves your Mac. The engine is bundled inside the app — nothing to compile." } }
+  ]
+}
+</script>
+
+<style>
+  :root{
+    --bg:#0a0e15; --bg2:#0b1019; --surface:#111827; --surface2:#0e1420;
+    --line:#1c2536; --line2:#28324a;
+    --ink:#eef2f8; --muted:#98a4b8; --faint:#6b7688;
+    --amber:#ff9d2f; --amber-l:#ffce80; --amber-d:#f4830f;
+    --cyan:#39c0ff; --green:#3cc878; --stream:#ffaa3c;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",system-ui,sans-serif;
+    --wrap:1080px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;line-height:1.6;overflow-x:hidden;letter-spacing:-0.01em}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:var(--wrap);margin:0 auto;padding:0 24px}
+  .eyebrow{font-size:12.5px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--amber)}
+  h1,h2,h3{letter-spacing:-0.03em;line-height:1.05;font-weight:650;margin:0;text-wrap:balance}
+  section{padding:clamp(64px,9vw,120px) 0;position:relative}
+  .muted{color:var(--muted)}
+  .amber{color:var(--amber)}
+
+  /* nav */
+  nav{position:fixed;top:0;left:0;right:0;z-index:50;transition:background .3s,border-color .3s;
+    border-bottom:1px solid transparent}
+  nav.solid{background:rgba(10,14,21,.78);backdrop-filter:saturate(160%) blur(16px);border-bottom-color:var(--line)}
+  .nav-in{display:flex;align-items:center;justify-content:space-between;height:60px;max-width:var(--wrap);margin:0 auto;padding:0 24px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:650;font-size:16px;letter-spacing:-0.02em}
+  .brand svg{width:26px;height:26px;display:block}
+  .nav-links{display:flex;gap:26px;align-items:center;font-size:14px}
+  .nav-links a{color:var(--muted);transition:color .2s}
+  .nav-links a:hover{color:var(--ink)}
+  .nav-cta{padding:7px 15px;border-radius:999px;background:var(--amber);color:#1a1206;font-weight:600;font-size:13.5px}
+  @media(max-width:720px){.nav-links a:not(.nav-cta){display:none}}
+
+  /* hero */
+  .hero{padding-top:130px;padding-bottom:40px;text-align:center;position:relative}
+  .hero h1{font-size:clamp(38px,6.4vw,74px);max-width:15ch;margin:0 auto}
+  .hero h1 .g{background:linear-gradient(120deg,var(--amber-l),var(--amber));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero .sub{font-size:clamp(17px,2.2vw,21px);color:var(--muted);max-width:56ch;margin:22px auto 0}
+  .cta-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:34px}
+  .btn{padding:13px 26px;border-radius:999px;font-weight:600;font-size:15px;border:1px solid transparent;transition:transform .15s,background .2s,border-color .2s;display:inline-flex;align-items:center;gap:9px}
+  .btn:hover{transform:translateY(-2px)}
+  .btn-primary{background:var(--amber);color:#1a1206}
+  .btn-primary:hover{background:var(--amber-l)}
+  .btn-ghost{border-color:var(--line2);color:var(--ink)}
+  .btn-ghost:hover{border-color:var(--muted);background:rgba(255,255,255,.03)}
+  .hero-note{margin-top:14px;font-size:13px;color:var(--faint)}
+
+  /* arena hero visual */
+  .arena-shell{max-width:900px;margin:52px auto 0;border:1px solid var(--line);border-radius:18px;overflow:hidden;
+    background:radial-gradient(140% 130% at 50% -10%,rgba(255,157,47,.08),transparent 55%),var(--surface2);
+    box-shadow:0 40px 120px -50px rgba(255,157,47,.28),0 1px 0 rgba(255,255,255,.03) inset}
+  .arena-bar{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--line);font-size:12.5px}
+  .arena-legend i{width:9px;height:9px;border-radius:2px;display:inline-block;margin:0 5px 0 14px;vertical-align:middle}
+  .lg-hot{background:var(--green)} .lg-stream{background:var(--stream)}
+  #arena{display:block;width:100%;height:210px}
+  .arena-cap{font-size:12px;color:var(--faint);text-align:center;margin-top:12px}
+
+  /* stat strip */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:16px;overflow:hidden;margin-top:64px}
+  .stat{background:var(--bg2);padding:26px 18px;text-align:center}
+  .stat b{display:block;font-size:clamp(26px,4vw,38px);font-weight:680;letter-spacing:-0.03em;
+    background:linear-gradient(120deg,var(--amber-l),var(--amber));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .stat span{font-size:13px;color:var(--muted)}
+  @media(max-width:720px){.stats{grid-template-columns:repeat(2,1fr)}}
+
+  /* generic section head */
+  .head{max-width:64ch}
+  .head h2{font-size:clamp(28px,4.3vw,46px);margin-top:14px}
+  .head p{color:var(--muted);font-size:clamp(16px,2vw,18.5px);margin-top:18px}
+
+  /* insight band */
+  .insight{background:linear-gradient(180deg,transparent,rgba(255,157,47,.04),transparent);border-block:1px solid var(--line)}
+  .insight .big{font-size:clamp(28px,4.6vw,50px);font-weight:640;letter-spacing:-0.03em;max-width:20ch}
+  .insight .big em{font-style:normal;color:var(--amber)}
+
+  /* cards */
+  .grid{display:grid;gap:18px;margin-top:44px}
+  .g3{grid-template-columns:repeat(3,1fr)} .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:860px){.g3,.g2{grid-template-columns:1fr}}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:24px;transition:border-color .25s,transform .25s}
+  .card:hover{border-color:var(--line2);transform:translateY(-3px)}
+  .card h3{font-size:18.5px;margin-bottom:9px}
+  .card p{color:var(--muted);font-size:14.5px;margin:0}
+  .card .k{font-family:var(--mono);font-size:12px;color:var(--cyan);margin-bottom:14px;display:block}
+
+  /* tables */
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:14px;margin-top:30px}
+  table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:460px}
+  th,td{padding:13px 18px;text-align:left;border-bottom:1px solid var(--line)}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);font-weight:600}
+  td{font-variant-numeric:tabular-nums}
+  tr:last-child td{border-bottom:none}
+  td.num,th.num{text-align:right}
+  .win{color:var(--amber);font-weight:650}
+  .tbl-cap{font-size:13px;color:var(--faint);margin-top:12px}
+
+  /* honesty section */
+  .fail{border-left:2px solid var(--stream);padding-left:22px}
+  .fail li{margin-bottom:16px;color:var(--muted);font-size:15px}
+  .fail li b{color:var(--ink);font-weight:600}
+
+  /* research */
+  .paper{display:flex;gap:16px;align-items:flex-start;background:var(--surface2);border:1px solid var(--line);border-radius:14px;padding:18px 20px;transition:border-color .2s}
+  .paper:hover{border-color:var(--line2)}
+  .paper .id{font-family:var(--mono);font-size:11.5px;color:var(--amber);white-space:nowrap;padding-top:2px}
+  .paper h4{margin:0 0 4px;font-size:15.5px;font-weight:600;letter-spacing:-0.01em}
+  .paper p{margin:0;font-size:13.5px;color:var(--muted)}
+
+  /* download */
+  .dl{text-align:center;background:radial-gradient(120% 130% at 50% 0%,rgba(255,157,47,.09),transparent 60%);border:1px solid var(--line);border-radius:22px;padding:clamp(40px,6vw,72px) 24px;margin-top:20px}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;max-width:720px;margin:38px auto 0;text-align:left}
+  @media(max-width:720px){.steps{grid-template-columns:1fr}}
+  .step{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .step b{color:var(--amber);font-family:var(--mono);font-size:13px}
+  .step p{margin:8px 0 0;font-size:14px;color:var(--muted)}
+
+  footer{border-top:1px solid var(--line);padding:44px 0 60px;color:var(--faint);font-size:13.5px}
+  .foot-in{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+  footer a{color:var(--muted)} footer a:hover{color:var(--ink)}
+
+  /* reveal */
+  .rv{opacity:0;transform:translateY(22px);transition:opacity .7s cubic-bezier(.2,.6,.2,1),transform .7s cubic-bezier(.2,.6,.2,1)}
+  .rv.in{opacity:1;transform:none}
+  @media(prefers-reduced-motion:reduce){.rv{opacity:1;transform:none;transition:none}.btn:hover,.card:hover{transform:none}}
+</style>
+
+<nav id="nav">
+  <div class="nav-in">
+    <a class="brand" href="#top">
+      <svg viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffce80"/><stop offset="1" stop-color="#ff9d2f"/></linearGradient></defs><path d="M63 20 C44 20,30 34,30 52 C30 72,46 84,64 82 C77 80.6,87 72,90 60 L74 57 C77 49,77 41,73 34" fill="none" stroke="url(#lg)" stroke-width="9" stroke-linecap="round"/><circle cx="63" cy="20" r="5.5" fill="#39c0ff"/></svg>
+      Slipstream
+    </a>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#benchmarks">Benchmarks</a>
+      <a href="#research">Research</a>
+      <a class="nav-cta" href="#download">Download</a>
+    </div>
+  </div>
+</nav>
+
+<main id="top">
+<header class="hero wrap">
+  <div class="rv in">
+    <div class="eyebrow">Local · Private · Apple Silicon</div>
+    <h1>Run coding models <span class="g">bigger than your Mac's RAM</span></h1>
+    <p class="sub">Slipstream is a llama.cpp fork that <b>streams Mixture-of-Experts weights from your SSD</b> — so a 16–36 GB Mac runs 35B–480B MoE coders, locally, while the machine stays usable.</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#download">↓ Download for macOS</a>
+      <a class="btn btn-ghost" href="https://github.com/Schero94/slipstream" target="_blank" rel="noopener">View on GitHub</a>
+    </div>
+    <div class="hero-note">Free · MIT · engine bundled — nothing to compile</div>
+  </div>
+
+  <div class="arena-shell rv">
+    <div class="arena-bar">
+      <span class="muted" style="font-family:var(--mono)">expert cache · live</span>
+      <span class="arena-legend muted"><i class="lg-hot"></i>resident hit<i class="lg-stream"></i>streaming from SSD</span>
+    </div>
+    <canvas id="arena" width="900" height="210"></canvas>
+  </div>
+  <div class="arena-cap rv">Illustrative of the app's live view — green cells are experts resident in the RAM cache, amber cells are streaming from SSD. The app draws this from your real cache hit-rate.</div>
+
+  <div class="stats rv">
+    <div class="stat"><b>480B</b><span>largest MoE that runs</span></div>
+    <div class="stat"><b>16 GB</b><span>minimum Mac RAM</span></div>
+    <div class="stat"><b>3.9×</b><span>optimization speedup</span></div>
+    <div class="stat"><b>100%</b><span>on-device, private</span></div>
+  </div>
+</header>
+
+<section class="insight">
+  <div class="wrap rv">
+    <div class="eyebrow">The core finding</div>
+    <p class="big">We moved <em>one file</em> — the streamed experts — onto the fastest disk. That single change was <em>2.7×</em>. Not a clever kernel. Storage placement.</p>
+    <p class="muted" style="margin-top:20px;max-width:60ch">A MoE model activates only a few experts per token, so most weights sit idle. Slipstream keeps the always-needed weights resident and streams the routed experts from SSD on demand — with a bounded, RAM-sized cache that refuses to load anything that would swap your Mac.</p>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="head rv">
+      <div class="eyebrow">How it works</div>
+      <h2>An engine designed around one bottleneck: SSD fetch.</h2>
+      <p>Decode is ~78–92% fetch-bound. Every mechanism below exists to keep the Mac responsive and hide that fetch behind compute.</p>
+    </div>
+    <div class="grid g3">
+      <div class="card rv"><span class="k">pread + F_NOCACHE</span><h3>SSD expert streaming</h3><p>A binary sidecar (PGRN) holds the stacked experts. Reads bypass the OS page cache, so it never balloons and fights the RAM budget.</p></div>
+      <div class="card rv"><span class="k">CLOCK-LRU-K</span><h3>Layer-partitioned arena</h3><p>One bounded cache tier per layer. Cross-layer eviction is impossible by design — streaming stays predictable.</p></div>
+      <div class="card rv"><span class="k">admission gate</span><h3>Memory-health guard</h3><p>The engine refuses a cache that would push the Mac into swap. "The Mac stays usable" is a hard invariant, not a hope.</p></div>
+      <div class="card rv"><span class="k">MTP · DFlash</span><h3>Speculative decoding</h3><p>Drafts several tokens per target pass — MTP for Qwen, a DFlash draft model for Laguna — amortizing expert fetches.</p></div>
+      <div class="card rv"><span class="k">PGCT1 · PGCC1</span><h3>Async prefetch</h3><p>A background thread warms the next layer's experts while the current one computes. Wired end-to-end; the predictor is active research.</p></div>
+      <div class="card rv"><span class="k">NMSE = 0</span><h3>Parity gate</h3><p>A test asserts streamed output is bit-identical to fully-resident output. Optimizations that only reorder eviction can't change results.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="benchmarks" style="background:var(--bg2)">
+  <div class="wrap">
+    <div class="head rv">
+      <div class="eyebrow">Measured, on a 36 GB Mac</div>
+      <h2>Evidence-first. We publish the numbers — including the ones we lost.</h2>
+      <p>Real runs, recorded methodology. No hand-waved 5× miracle.</p>
+    </div>
+
+    <div class="rv">
+      <h3 style="margin-top:44px;font-size:19px">Qwen3.6-35B-A3B (Q4) — the interactive workhorse</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>RAM cache</th><th class="num">Decode</th><th class="num">Cache hit-rate</th><th>Fits</th></tr></thead>
+        <tbody>
+          <tr><td>2 GiB</td><td class="num">5.5 tok/s</td><td class="num">21%</td><td>16 GB Mac</td></tr>
+          <tr><td>10 GiB</td><td class="num win">~13 tok/s</td><td class="num">78%</td><td>36 GB, interactive</td></tr>
+          <tr><td>14 GiB</td><td class="num win">~19 tok/s</td><td class="num">86%</td><td>mostly-idle Mac</td></tr>
+        </tbody>
+      </table></div>
+      <div class="tbl-cap">Prefill of a ~30k-token agent prompt: 75 → 208 tok/s (2.7×) with ubatch 2048 + parallel I/O threads.</div>
+    </div>
+
+    <div class="rv">
+      <h3 style="margin-top:52px;font-size:19px">Laguna S 2.1 (118B-A8B, Q4) — larger than 36 GB RAM</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Configuration (each row adds one lever)</th><th class="num">Decode</th><th class="num">vs. baseline</th></tr></thead>
+        <tbody>
+          <tr><td>PGRN on external USB SSD, no draft</td><td class="num">0.72 tok/s</td><td class="num">1.0×</td></tr>
+          <tr><td><b>PGRN on internal NVMe</b> (storage split)</td><td class="num">1.95 tok/s</td><td class="num win">2.7×</td></tr>
+          <tr><td>+ DFlash speculative draft</td><td class="num">2.36 tok/s</td><td class="num">3.3×</td></tr>
+          <tr><td>+ larger cache</td><td class="num win">2.83 tok/s</td><td class="num win">3.9×</td></tr>
+        </tbody>
+      </table></div>
+      <div class="tbl-cap">A model that does not fit in RAM, made runnable. Usable for batch coding at ~2.8 tok/s.</div>
+    </div>
+  </div>
+</section>
+
+<section id="honesty">
+  <div class="wrap">
+    <div class="head rv">
+      <div class="eyebrow">What did <em style="font-style:normal;color:var(--stream)">not</em> work</div>
+      <h2>The negatives, recorded honestly.</h2>
+      <p>Credibility comes from the experiments we rejected. All of these are in the repo's benchmark logs.</p>
+    </div>
+    <ul class="fail rv" style="list-style:none;padding:0;margin-top:34px">
+      <li><b>OS page-cache instead of our bounded arena</b> — ~75% faster, but 1000+ swapouts. It breaks "the Mac stays usable." Rejected.</li>
+      <li><b>Naive coupled-layer prefetch</b> — 5–15% <em>slower</em> from cache thrash. The async machinery is there; the predictor that beats the fetch wall is still open research.</li>
+      <li><b>ANE / MLX compute paths</b> — real 1.2–1.4× gains, but only for models that fit in RAM. They don't help the &gt;RAM streaming regime.</li>
+      <li><b>Lossless expert compression &amp; pinning</b> — low ROI once the storage split made fetch cheap. Not shipped.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="research" style="background:var(--bg2)">
+  <div class="wrap">
+    <div class="head rv">
+      <div class="eyebrow">Standing on the shoulders of</div>
+      <h2>The research we read.</h2>
+      <p>Slipstream's design is grounded in published work on MoE offloading, flash-memory inference, and speculative decoding.</p>
+    </div>
+    <div class="grid g2" style="margin-top:36px">
+      <a class="paper rv" href="https://arxiv.org/abs/2312.11514" target="_blank" rel="noopener"><span class="id">2312.11514</span><div><h4>LLM in a flash (Apple)</h4><p>Efficient LLM inference with limited memory by streaming weights from flash — the foundational idea Slipstream builds on for Apple Silicon.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2510.10302" target="_blank" rel="noopener"><span class="id">2510.10302</span><div><h4>SP-MoE</h4><p>Speculative decoding <em>and</em> prefetching to accelerate MoE inference — validates coupling our draft tokens to expert prefetch.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2508.21706" target="_blank" rel="noopener"><span class="id">2508.21706</span><div><h4>Hiding Offloading Latency with Speculative Decoding</h4><p>Uses the draft pass to hide expert-fetch latency — the exact lever behind our async prefetch trigger.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2602.06036" target="_blank" rel="noopener"><span class="id">2602.06036</span><div><h4>DFlash: Block Diffusion for Flash Speculative Decoding</h4><p>The DFlash speculative approach used for Laguna's draft model.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2401.15077" target="_blank" rel="noopener"><span class="id">2401.15077</span><div><h4>EAGLE</h4><p>Feature-level speculative sampling — reference for lossless draft-and-verify decoding.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2503.06823" target="_blank" rel="noopener"><span class="id">2503.06823</span><div><h4>eMoE</h4><p>Task-aware, memory-efficient MoE inference — the memory-constrained expert-loading landscape.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2505.05950" target="_blank" rel="noopener"><span class="id">2505.05950</span><div><h4>FloE</h4><p>On-the-fly MoE inference on memory-constrained hardware — comparable offloading strategy.</p></div></a>
+      <a class="paper rv" href="https://arxiv.org/abs/2401.10774" target="_blank" rel="noopener"><span class="id">2401.10774</span><div><h4>Medusa</h4><p>Multiple decoding heads for parallel token prediction — the multi-token-prediction lineage behind MTP.</p></div></a>
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <div class="dl rv">
+      <div class="eyebrow">Get started</div>
+      <h2 style="font-size:clamp(28px,4.3vw,44px);margin-top:14px">A 480B coding model.<br/>On your MacBook.</h2>
+      <p class="muted" style="max-width:46ch;margin:18px auto 0">The engine is bundled inside the app. Download, drag to Applications, open. Point your coding assistant at localhost and go.</p>
+      <div class="cta-row" style="margin-top:30px">
+        <a class="btn btn-primary" href="https://github.com/Schero94/slipstream/releases/latest" target="_blank" rel="noopener">↓ Download the .dmg</a>
+        <a class="btn btn-ghost" href="https://github.com/Schero94/slipstream" target="_blank" rel="noopener">Read the docs</a>
+      </div>
+      <div class="steps">
+        <div class="step"><b>01</b><p>Drag <b>Slipstream.app</b> to Applications. First launch: right-click → Open (not yet notarized).</p></div>
+        <div class="step"><b>02</b><p>Open it — it auto-detects your Mac and shows the best settings. Pick a model, click Start.</p></div>
+        <div class="step"><b>03</b><p>Point Kilo / Cline / Cursor / OpenCode at <span style="font-family:var(--mono);color:var(--cyan)">127.0.0.1:8080</span> — or one-click patch.</p></div>
+      </div>
+      <div class="hero-note" style="margin-top:24px">Requires an Apple-Silicon Mac, 16 GB+ RAM. macOS 11+.</div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap foot-in">
+    <div>Slipstream · MIT-licensed · built on <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener">llama.cpp</a> (© the ggml authors)</div>
+    <div style="display:flex;gap:22px">
+      <a href="https://github.com/Schero94/slipstream" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Schero94/slipstream/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="https://github.com/Schero94/slipstream/blob/main/BENCHMARKS.md" target="_blank" rel="noopener">Benchmarks</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // nav solidify on scroll
+  const nav = document.getElementById('nav');
+  const onScroll = () => nav.classList.toggle('solid', window.scrollY > 24);
+  onScroll(); addEventListener('scroll', onScroll, {passive:true});
+
+  // scroll reveal
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!reduce) {
+    const io = new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+    document.querySelectorAll('.rv').forEach(el=>io.observe(el));
+  } else document.querySelectorAll('.rv').forEach(el=>el.classList.add('in'));
+
+  // live expert-cache arena (illustrative: cycles through a warming cache)
+  (function(){
+    const cv = document.getElementById('arena'); if(!cv) return;
+    const ctx = cv.getContext('2d');
+    const COLS=54, ROWS=12;
+    const cells = Array.from({length:COLS*ROWS},()=>({rank:Math.random(),flick:0}));
+    let hit=8, hitTarget=82, dir=1, t0=null;
+    function frame(ts){
+      if(t0===null)t0=ts; const dt=ts-t0;
+      // breathe the hit-rate to show the cache warming, then churning
+      hit += (hitTarget-hit)*0.02;
+      if(Math.abs(hit-hitTarget)<2){ hitTarget = dir>0? (44+Math.random()*44) : hitTarget; }
+      const w=cv.clientWidth||900, h=210, dpr=Math.min(devicePixelRatio||1,2);
+      if(cv.width!==Math.round(w*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);}
+      ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+      const cw=w/COLS, ch=h/ROWS, pad=1.6, frac=hit/100, streamP=reduce?0:0.05;
+      for(let i=0;i<cells.length;i++){
+        const c=cells[i], x=(i%COLS)*cw+pad, y=((i/COLS)|0)*ch+pad, tw=cw-2*pad, th=ch-2*pad;
+        if(!reduce && Math.random()<streamP) c.flick=1; c.flick*=0.9;
+        if(c.flick>0.05) ctx.fillStyle='rgba(255,168,58,'+(0.3+0.62*c.flick)+')';
+        else if(c.rank<frac) ctx.fillStyle='rgba(60,200,120,0.5)';
+        else ctx.fillStyle='rgba(120,132,155,0.10)';
+        ctx.beginPath();
+        if(ctx.roundRect) ctx.roundRect(x,y,tw,th,2); else ctx.rect(x,y,tw,th);
+        ctx.fill();
+      }
+      if(!reduce) requestAnimationFrame(frame);
+    }
+    if(reduce){ // static frame
+      const w=900,h=210; cv.width=w;cv.height=h; const cw=w/COLS,ch=h/ROWS,pad=1.6,frac=.78;
+      for(let i=0;i<cells.length;i++){const c=cells[i],x=(i%COLS)*cw+pad,y=((i/COLS)|0)*ch+pad;
+        ctx.fillStyle=c.rank<frac?'rgba(60,200,120,0.5)':'rgba(120,132,155,0.10)';ctx.fillRect(x,y,cw-2*pad,ch-2*pad);}
+    } else requestAnimationFrame(frame);
+  })();
+</script>

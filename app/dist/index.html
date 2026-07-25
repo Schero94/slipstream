@@ -75,6 +75,13 @@
         <div class="card-head">
           <h2><span data-i18n="sec.liveMonitor">Live-Monitor</span> <span class="info" data-i18n-tip="tip.liveMonitor">ⓘ</span></h2>
         </div>
+        <div class="arena">
+          <div class="arena-head">
+            <span class="chart-label" data-i18n="chart.arena">Expert cache — live</span>
+            <span class="arena-legend"><i class="lg lg-hot"></i><span data-i18n="arena.resident">resident hit</span> <i class="lg lg-stream"></i><span data-i18n="arena.stream">streaming from SSD</span></span>
+          </div>
+          <canvas id="expertGrid" class="expert-grid"></canvas>
+        </div>
         <div class="charts">
           <div class="chart">
             <div class="chart-head"><span class="chart-label" data-i18n="chart.ssd">SSD-Durchsatz</span><span class="chart-now"><span id="ssdNow">0</span> <span class="unit">MB/s</span></span></div>
