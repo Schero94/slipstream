@@ -84,7 +84,9 @@
   .nav-links{display:flex;gap:26px;align-items:center;font-size:14px}
   .nav-links a{color:var(--muted);transition:color .2s}
   .nav-links a:hover{color:var(--ink)}
-  .nav-cta{padding:7px 15px;border-radius:999px;background:var(--amber);color:#1a1206;font-weight:600;font-size:13.5px}
+  /* needs `.nav-links a` specificity, else the muted link colour wins over the pill's ink */
+  .nav-links a.nav-cta{padding:7px 15px;border-radius:999px;background:var(--amber);color:#1a1206;font-weight:650;font-size:13.5px;transition:background .2s,transform .15s}
+  .nav-links a.nav-cta:hover{color:#1a1206;background:var(--amber-l);transform:translateY(-1px)}
   @media(max-width:720px){.nav-links a:not(.nav-cta){display:none}}
 
   /* hero */
@@ -151,9 +153,17 @@
   .tbl-cap{font-size:13px;color:var(--faint);margin-top:12px}
 
   /* honesty section */
-  .fail{border-left:2px solid var(--stream);padding-left:22px}
-  .fail li{margin-bottom:16px;color:var(--muted);font-size:15px}
-  .fail li b{color:var(--ink);font-weight:600}
+  .fail{list-style:none;padding:0;margin:24px 0 0;display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .fail li{margin:0;padding:18px 20px;color:var(--muted);font-size:14.5px;line-height:1.62;
+    background:var(--surface2);border:1px solid var(--line);border-left:2px solid var(--stream);
+    border-radius:14px;transition:border-color .2s}
+  .fail li:hover{border-color:var(--line2);border-left-color:var(--stream)}
+  .fail li:last-child{grid-column:1/-1}
+  .fail h4{display:flex;align-items:baseline;justify-content:space-between;gap:14px;
+    margin:0 0 8px;font-size:15px;font-weight:600;color:var(--ink);letter-spacing:-0.01em}
+  .fail .verdict{flex:none;font-family:var(--mono);font-size:11px;font-weight:600;color:var(--stream);
+    background:rgba(255,170,60,.1);border:1px solid rgba(255,170,60,.28);border-radius:999px;padding:3px 9px}
+  @media(max-width:760px){.fail{grid-template-columns:1fr}}
 
   /* research */
   .paper{display:flex;gap:16px;align-items:flex-start;background:var(--surface2);border:1px solid var(--line);border-radius:14px;padding:18px 20px;transition:border-color .2s}
@@ -312,12 +322,27 @@
     <div class="rv" style="margin-top:30px;padding:20px 24px;border:1px solid var(--line2);border-radius:14px;background:linear-gradient(180deg,rgba(255,157,47,.07),transparent)">
       <b class="amber">One verdict flipped.</b> The compact / zero-copy expert path was rejected at a 2 GiB cache — a size almost no Mac uses, where there is nothing to save. Re-measured across the cache the app actually recommends, it is <b>+13–24% faster</b> (peak +24% at 6 GiB), swap-safe, bit-exact output — <b>now on by default</b>. The lesson we kept: re-measure a rejection in the regime it targets before believing it.
     </div>
-    <ul class="fail rv" style="list-style:none;padding:0;margin-top:24px">
-      <li><b>OS page-cache instead of our bounded arena</b> — ~75% faster, but 1000+ swapouts. It breaks "the Mac stays usable." Rejected.</li>
-      <li><b>Speculative prefetch predictors</b> (static + online co-activation) — −8% at real cache. Prediction isn't accurate enough to beat the cost of the speculative reads on a fetch-bound path. The async machinery is wired; a predictor that wins is still open research.</li>
-      <li><b>HOT/WARM tier reservation</b> — −1 to −6%, even on top of compact. Pinning "hot" experts shrinks the general working set → lower hit-rate. Pure LRU-K stays best.</li>
-      <li><b>Dual-SSD striping</b> — tok/s-negative on internal NVMe + slow USB (shared bus). A real capacity feature for two fast disks — opt-in, not a speed default.</li>
-      <li><b>ANE / MLX compute paths</b> — real 1.2–1.4× gains, but only for models that fit in RAM. They don't help the &gt;RAM streaming regime.</li>
+    <ul class="fail rv">
+      <li>
+        <h4>OS page-cache instead of our bounded arena <span class="verdict">unsafe</span></h4>
+        ~75% faster, but 1000+ swapouts. It breaks “the Mac stays usable.” Rejected.
+      </li>
+      <li>
+        <h4>Speculative prefetch predictors <span class="verdict">−8%</span></h4>
+        Static + online co-activation, at real cache sizes. Prediction isn’t accurate enough to beat the cost of the speculative reads on a fetch-bound path. The async machinery is wired; a predictor that wins is still open research.
+      </li>
+      <li>
+        <h4>HOT/WARM tier reservation <span class="verdict">−1…−6%</span></h4>
+        Even on top of compact. Pinning “hot” experts shrinks the general working set → lower hit-rate. Pure LRU-K stays best.
+      </li>
+      <li>
+        <h4>Dual-SSD striping <span class="verdict">slower</span></h4>
+        tok/s-negative on internal NVMe + slow USB (shared bus). A real capacity feature for two fast disks — opt-in, not a speed default.
+      </li>
+      <li>
+        <h4>ANE / MLX compute paths <span class="verdict">wrong regime</span></h4>
+        Real 1.2–1.4× gains, but only for models that fit in RAM. They don’t help the &gt;RAM streaming regime — which is the whole point of Slipstream.
+      </li>
     </ul>
   </div>
 </section>
