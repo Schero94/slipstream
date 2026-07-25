@@ -181,6 +181,10 @@
           <input type="text" id="pUrl" spellcheck="false" />
           <label data-i18n="path.binary">Server-Binary (unsere llama.cpp-Engine)</label>
           <input type="text" id="pServer" spellcheck="false" />
+          <label class="adv-label"><span data-i18n="adv.mirror">Advanced: 2. SSD-Mirror (Dual-SSD)</span> <span class="info" data-i18n-tip="tip.mirror">ⓘ</span></label>
+          <input type="text" id="pMirror" spellcheck="false" data-i18n-ph="adv.mirrorPh" />
+          <div class="adv-warn" data-i18n="adv.mirrorWarn">⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.</div>
+          <label class="chk adv-chk"><input type="checkbox" id="bufferedReads" /> <span data-i18n="adv.buffered">Advanced: gepufferte Reads (Nicht-NVMe-Laufwerke)</span></label>
         </details>
       </div>
       <div class="card">

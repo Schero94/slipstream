@@ -103,6 +103,10 @@ struct ServerConfig {
     thinking: bool,
     spec_type: String,   // "draft-mtp" (Qwen), "draft-dflash" (Laguna), or "none"
     draft_model: String, // draft gguf path (DFlash); empty for MTP/none
+    #[serde(default)]
+    pgrn_mirror: String, // advanced: byte-identical PGRN copy on a 2nd SSD -> dual-SSD striping
+    #[serde(default)]
+    pgrn_buffered: bool, // advanced: buffered reads (skip F_NOCACHE) for non-NVMe drives
 }
 
 #[tauri::command]
@@ -126,6 +130,14 @@ fn start_server(cfg: ServerConfig, state: State<AppState>) -> Result<String, Str
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
 
     let mut cmd = Command::new(&cfg.server);
+    // Advanced I/O levers (opt-in): dual-SSD striping + buffered reads. The engine
+    // reads these env vars; both default-off, parity-safe (mirror is CRC-checked).
+    if !cfg.pgrn_mirror.trim().is_empty() {
+        cmd.env("PGRN_MIRROR", cfg.pgrn_mirror.trim());
+    }
+    if cfg.pgrn_buffered {
+        cmd.env("PGRN_BUFFERED", "1");
+    }
     cmd.args([
         "--model", &cfg.model,
         "--pgrn", &cfg.pgrn,

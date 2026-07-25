@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -26,6 +27,10 @@
 
 struct pgrn_file {
     int fd;
+    int fd2;   /* optional byte-identical mirror on a 2nd SSD (PGRN_MIRROR); reads striped across both */
+    uint32_t stripe_threshold;   /* reads with block-hash < this (out of 1024) go to fd, else fd2 */
+    double probe_primary_bps;    /* measured read speed of each disk (0 if not probed) */
+    double probe_mirror_bps;
     uint64_t file_size;
     pgrn_expert_ref * refs;
     pgrn_tensor_layout * layouts;
@@ -67,6 +72,73 @@ static int pgrn_read_full(int fd, void * dst, size_t size, uint64_t offset) {
         done += (size_t)n;
     }
     return 0;
+}
+
+/* Skip F_NOCACHE (buffered reads) when PGRN_BUFFERED is set — some drives
+ * (DRAM-less / non-NVMe externals) run smoother through the page cache. Opt-in;
+ * the default stays direct/uncached so the OS cache never fights the RAM budget. */
+static void pgrn_set_cache_mode(int fd) {
+    if (fd >= 0 && getenv("PGRN_BUFFERED") == NULL) (void)fcntl(fd, F_NOCACHE, 1);
+}
+
+/* Micro-benchmark a disk's cold-read speed: a few spread reads of the record size.
+ * Returns bytes/sec (0 on failure). Used to split reads proportional to bandwidth. */
+static double pgrn_probe_speed(int fd, uint64_t file_size, size_t rec) {
+    if (fd < 0 || rec == 0 || file_size <= rec) return 0.0;
+    enum { PROBES = 6 };
+    unsigned char * buf = (unsigned char *)malloc(rec);
+    if (!buf) return 0.0;
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    size_t total = 0;
+    for (int i = 0; i < PROBES; ++i) {
+        uint64_t off = (uint64_t)i * ((file_size - rec) / PROBES);
+        off -= off % 512;
+        if (pgrn_read_full(fd, buf, rec, off) == 0) total += rec;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    free(buf);
+    const double secs = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) * 1e-9;
+    return (secs > 0.0 && total > 0) ? (double)total / secs : 0.0;
+}
+
+/* Set the primary's read share so both disks finish their halves together:
+ * share = speed_primary / (speed_primary + speed_mirror) — proportional to bandwidth,
+ * which is throughput-optimal for two UNEQUAL disks (a slow mirror becomes additive,
+ * never a bottleneck). PGRN_MIRROR_WEIGHT (percent to primary) overrides the probe.
+ * Threshold is out of 1024. */
+static void pgrn_calibrate_stripe(pgrn_file * file, size_t rec) {
+    file->stripe_threshold = 512;  /* default 50/50 */
+    const char * w = getenv("PGRN_MIRROR_WEIGHT");
+    if (w && w[0]) {
+        long pct = strtol(w, NULL, 10);
+        if (pct < 1) pct = 1;
+        if (pct > 99) pct = 99;
+        file->stripe_threshold = (uint32_t)(pct * 1024 / 100);
+        return;
+    }
+    const double sp = pgrn_probe_speed(file->fd, file->file_size, rec);
+    const double sm = pgrn_probe_speed(file->fd2, file->file_size, rec);
+    if (sp > 0.0 && sm > 0.0) {
+        double frac = sp / (sp + sm);
+        if (frac < 0.02) frac = 0.02;
+        if (frac > 0.98) frac = 0.98;
+        file->stripe_threshold = (uint32_t)(frac * 1024.0 + 0.5);
+        file->probe_primary_bps = sp;   /* surfaced for the UI / diagnostics */
+        file->probe_mirror_bps  = sm;
+    }
+}
+
+/* Dual-SSD striping: route each record to fd or the mirror fd2 by a deterministic
+ * block hash, in proportion to the two disks' measured bandwidth (pgrn_calibrate_stripe).
+ * The mirror is byte-identical and every read is CRC-checked, so returned bytes are
+ * unchanged whichever disk served them (parity-safe). Same expert -> same disk. */
+static int pgrn_pick_fd(const pgrn_file * file, const pgrn_expert_ref * ref) {
+    if (!file) return -1;
+    if (file->fd2 < 0) return file->fd;
+    const uint32_t block = (uint32_t)(ref->offset / PGRN_ALIGN);
+    const uint32_t h = (block * 2654435761u) >> 22;   /* Knuth multiplicative hash -> 10 bits [0,1024) */
+    return (h < file->stripe_threshold) ? file->fd : file->fd2;
 }
 
 static const unsigned char * pgrn_find_bytes(
@@ -302,9 +374,10 @@ pgrn_file * pgrn_open(const char * path, const char * expected_sha256) {
     pgrn_file * file = (pgrn_file *)calloc(1, sizeof(*file));
     if (!file) return NULL;
     file->fd = -1;
+    file->fd2 = -1;
     file->fd = open(path, O_RDONLY);
     if (file->fd < 0) { pgrn_close(file); return NULL; }
-    (void)fcntl(file->fd, F_NOCACHE, 1);
+    pgrn_set_cache_mode(file->fd);
     struct stat st;
     if (fstat(file->fd, &st) != 0 || st.st_size < (off_t)PGRN_ALIGN) { pgrn_close(file); return NULL; }
     file->file_size = (uint64_t)st.st_size;
@@ -357,6 +430,30 @@ pgrn_file * pgrn_open(const char * path, const char * expected_sha256) {
         free(raw); pgrn_close(file); return NULL;
     }
     free(raw);
+    /* Optional dual-SSD mirror: a byte-identical PGRN copy on a second disk. Reads
+     * stripe across both fds (pgrn_pick_fd) to sum bandwidth. Best-effort: a missing
+     * or size-mismatched mirror is silently ignored (stay single-disk); a corrupt one
+     * is caught per-read by the existing CRC check. */
+    const char * mirror_path = getenv("PGRN_MIRROR");
+    if (mirror_path && mirror_path[0]) {
+        int mfd = open(mirror_path, O_RDONLY);
+        if (mfd >= 0) {
+            struct stat ms;
+            if (fstat(mfd, &ms) == 0 && (uint64_t)ms.st_size == file->file_size) {
+                pgrn_set_cache_mode(mfd);
+                file->fd2 = mfd;
+                pgrn_calibrate_stripe(file, file->max_expert_bytes);
+                fprintf(stderr,
+                    "[PGRN] dual-SSD mirror ON: primary %.0f MB/s + mirror %.0f MB/s, "
+                    "reads split %u%%/%u%% (byte-identical, CRC-checked)\n",
+                    file->probe_primary_bps / 1e6, file->probe_mirror_bps / 1e6,
+                    file->stripe_threshold * 100u / 1024u,
+                    100u - file->stripe_threshold * 100u / 1024u);
+            } else {
+                close(mfd);
+            }
+        }
+    }
     return file;
 }
 
@@ -392,7 +489,7 @@ int pgrn_read_expert(pgrn_file * file, const pgrn_expert_ref * ref, void * dst, 
         pgrn_set_error(file, "invalid expert read buffer"); return -1;
     }
     if (ref->offset > file->file_size || ref->nbytes > file->file_size - ref->offset ||
-            pgrn_read_full(file->fd, dst, ref->nbytes, ref->offset) != 0) {
+            pgrn_read_full(pgrn_pick_fd(file, ref), dst, ref->nbytes, ref->offset) != 0) {
         pgrn_set_error(file, "short expert read"); return -1;
     }
     if (pgrn_crc32((const unsigned char *)dst, ref->nbytes) != ref->crc32) {
@@ -412,7 +509,7 @@ int pgrn_read_expert_mt(const pgrn_file * file, const pgrn_expert_ref * ref,
     /* Read-only file state + pread(offset) + a caller-owned error buffer: no shared
      * mutable state is written, so concurrent callers with distinct dst never race. */
     if (ref->offset > file->file_size || ref->nbytes > file->file_size - ref->offset ||
-            pgrn_read_full(file->fd, dst, ref->nbytes, ref->offset) != 0) {
+            pgrn_read_full(pgrn_pick_fd(file, ref), dst, ref->nbytes, ref->offset) != 0) {
         if (err && err_capacity) snprintf(err, err_capacity, "short expert read");
         return -1;
     }
@@ -439,6 +536,7 @@ const char *pgrn_error(const pgrn_file * file) { return file ? file->error : "in
 void pgrn_close(pgrn_file * file) {
     if (!file) return;
     if (file->fd >= 0) close(file->fd);
+    if (file->fd2 >= 0) close(file->fd2);
     free(file->refs);
     free(file->layouts);
     free(file);

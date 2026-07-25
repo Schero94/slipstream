@@ -149,6 +149,11 @@ details.paths input { font-family: "SF Mono", monospace; font-size: 11.5px; }
 .badge.missing { color: var(--muted); }
 .badge.soon { color: #39c0ff; border-color: #14425a; background: #0c2230; }
 
+/* advanced I/O levers (opt-in) */
+.adv-label { margin-top: 14px; color: var(--muted); font-size: 12.5px; display: block; }
+.adv-warn { font-size: 11.5px; color: #ffb454; margin: 6px 0 4px; line-height: 1.45; }
+.adv-chk { margin-top: 10px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+
 /* Expert-cache arena — the signature live visualization */
 .arena { margin-bottom: 16px; }
 .arena-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }

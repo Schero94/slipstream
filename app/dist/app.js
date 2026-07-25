@@ -136,6 +136,7 @@ const I18N_EXT = {
     "reco.computing": "Computing…", "toast.noSys": "No system data yet", "toast.applied": "Best settings applied",
     "path.gguf": "GGUF folder", "path.pgrn": "PGRN path (streamed)",
     "path.source": "Download source (HuggingFace repo/URL)", "path.binary": "Server binary (our llama.cpp engine)",
+    "adv.mirror": "Advanced: 2nd SSD mirror (dual-SSD)", "adv.mirrorPh": "path to a byte-identical .pgrn copy on a 2nd fast disk", "adv.mirrorWarn": "⚠ Only helps with two equally-fast SSDs (2× NVMe or TB4). On internal + slow USB it's slower — leave empty.", "adv.buffered": "Advanced: buffered reads (non-NVMe drives)",
     "path.summary": "Source & location",
     "picker.folder": "Choose folder…", "picker.pgrn": "Choose PGRN…", "picker.binary": "Choose binary…",
     "compat.text": "<b>Compatibility:</b> our engine streams <b>experts</b> from SSD — compatible are <b>MoE models</b> with <b>Q4_K/Q5_K/Q6_K</b> experts whose architecture llama.cpp knows (Qwen3-MoE, DeepSeek, Mixtral, GLM-4.5-MoE, Laguna). Not: dense models, IQ/Q2/Q3/Q8_0/MXFP4.",
@@ -173,6 +174,7 @@ const I18N_EXT = {
     "reco.computing": "Ermittle Werte…", "toast.noSys": "Noch keine Systemdaten", "toast.applied": "Beste Einstellungen angewendet",
     "path.gguf": "GGUF-Ordner", "path.pgrn": "PGRN-Pfad (gestreamt)",
     "path.source": "Download-Quelle (HuggingFace-Repo/URL)", "path.binary": "Server-Binary (unsere llama.cpp-Engine)",
+    "adv.mirror": "Advanced: 2. SSD-Mirror (Dual-SSD)", "adv.mirrorPh": "Pfad zu einer byte-identischen .pgrn-Kopie auf einer 2. schnellen Disk", "adv.mirrorWarn": "⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.", "adv.buffered": "Advanced: gepufferte Reads (Nicht-NVMe-Laufwerke)",
     "path.summary": "Quelle & Speicherort",
     "picker.folder": "Ordner wählen…", "picker.pgrn": "PGRN wählen…", "picker.binary": "Binary wählen…",
     "compat.text": "<b>Kompatibilität:</b> unsere Engine streamt <b>Experten</b> von SSD — kompatibel sind <b>MoE-Modelle</b> mit <b>Q4_K/Q5_K/Q6_K</b>-Experten, deren Architektur llama.cpp kennt (Qwen3-MoE, DeepSeek, Mixtral, GLM-4.5-MoE, Laguna). Nicht: Dense-Modelle, IQ/Q2/Q3/Q8_0/MXFP4.",
@@ -215,6 +217,7 @@ const TIPS = {
     "tip.cache": "How many experts stay resident in RAM. Bigger = faster (more hits) but needs more free RAM.",
     "tip.ctx": "Window for prompt + history. Coding agents send ~30k+ tokens, so 40k is the best compromise. 32k can overflow; 64k causes memory pressure.",
     "tip.io": "Parallel SSD read threads for fetching experts. 8 = much faster prefill (large agent prompts); 1 = conservative.",
+    "tip.mirror": "Stripe expert reads across two disks, split by measured bandwidth. Wins only with two comparably-fast, independent SSDs; a slow USB drive makes it slower. Parity is CRC-checked.",
     "tip.mtp": "Speculative decoding via multi-token prediction. Only for models with an MTP/DFlash draft; off otherwise.",
     "tip.thinking": "The model's reasoning mode. Leave OFF for agentic coding: otherwise it loops in endless thinking and burns the token budget before answering. ON only for hard single questions.",
     "tip.model": "Compatible = MoE architecture + Q4_K/Q5_K/Q6_K experts + known to llama.cpp.",
@@ -233,6 +236,7 @@ const TIPS = {
     "tip.cache": "Wie viele Experten resident im RAM bleiben. Größer = schneller (mehr Treffer), braucht aber mehr freien RAM.",
     "tip.ctx": "Fenster für Prompt + Verlauf. Coding-Agenten schicken ~30k+ Tokens, daher ist 40k der beste Kompromiss. 32k kann überlaufen; 64k erzeugt Speicherdruck.",
     "tip.io": "Parallele SSD-Lesethreads beim Experten-Holen. 8 = deutlich schnellerer Prefill (große Agenten-Prompts); 1 = konservativ.",
+    "tip.mirror": "Verteilt Experten-Reads bandbreiten-proportional über zwei Disks. Gewinnt nur mit zwei ähnlich schnellen, unabhängigen SSDs; eine langsame USB-Disk macht es langsamer. Parity ist CRC-geprüft.",
     "tip.mtp": "Spekulatives Decoding via Multi-Token-Prediction. Nur bei Modellen mit MTP/DFlash-Draft; sonst automatisch aus.",
     "tip.thinking": "Reasoning-Modus des Modells. Für Agenten-Coding AUS lassen: sonst verheddert es sich im Endlos-Denken und verbraucht das Token-Budget, bevor es antwortet. AN nur für schwere Einzelfragen.",
     "tip.model": "Kompatibel = MoE-Architektur + Q4_K/Q5_K/Q6_K-Experten + von llama.cpp unterstützt.",
@@ -506,6 +510,8 @@ async function startServer() {
     thinking: $("thinking").checked,
     spec_type: state.model.spec || "none",
     draft_model: draft,
+    pgrn_mirror: ($("pMirror") && $("pMirror").value.trim()) || "",
+    pgrn_buffered: !!($("bufferedReads") && $("bufferedReads").checked),
   };
   try {
     const msg = await invoke("start_server", { cfg }); toast(t("srv.startedLoading"));
@@ -1048,6 +1054,7 @@ async function boot() {
   addPicker("pDir", { directory: true }, t("picker.folder"));
   addPicker("pPgrn", { directory: false }, t("picker.pgrn"));
   addPicker("pServer", { directory: false }, t("picker.binary"));
+  addPicker("pMirror", { directory: false }, t("picker.pgrn"));
   renderAgents();
   $("lang").onchange = (e) => { applyLang(e.target.value); setPill(state.running ? "loading" : "off"); };
   applyLang(LANG);
