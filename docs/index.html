@@ -4,12 +4,26 @@
 <meta name="description" content="Slipstream is a llama.cpp fork that streams Mixture-of-Experts weights from your SSD, so 35B–480B coding models run locally on a 16–36 GB Apple-Silicon Mac. Self-contained macOS app, honest benchmarks." />
 <meta name="keywords" content="local LLM, MoE, mixture of experts, llama.cpp, Apple Silicon, macOS, SSD streaming, expert offloading, on-device AI, coding assistant, DeepSeek, Qwen, GLM, Llama 4" />
 <meta name="author" content="Slipstream" />
+
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<meta name="theme-color" content="#0a0e15" />
+
 <meta property="og:type" content="website" />
+<meta property="og:url" content="https://schero94.github.io/slipstream/" />
 <meta property="og:title" content="Slipstream — Run coding models bigger than your Mac's RAM" />
 <meta property="og:description" content="A 480B coding model. On a MacBook. Streaming experts from SSD. Self-contained app, evidence-first benchmarks (including what didn't work)." />
+<!-- crawlers do not resolve relative image URLs, so these stay absolute -->
+<meta property="og:image" content="https://schero94.github.io/slipstream/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="Slipstream — run coding models bigger than your Mac's RAM" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="Slipstream — Run coding models bigger than your Mac's RAM" />
 <meta name="twitter:description" content="Stream MoE experts from SSD. 35B–480B models on a 16–36 GB Mac. Self-contained macOS app. Honest benchmarks." />
+<meta name="twitter:image" content="https://schero94.github.io/slipstream/og-image.png" />
 
 <script type="application/ld+json">
 {
@@ -19,6 +33,7 @@
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS 11+ (Apple Silicon)",
   "description": "A llama.cpp fork that streams Mixture-of-Experts weights from SSD, running 35B–480B MoE coding models on 16–36 GB Apple-Silicon Macs while the machine stays usable.",
+  "image": "https://schero94.github.io/slipstream/og-image.png",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "license": "https://opensource.org/licenses/MIT"
 }
@@ -65,7 +80,7 @@
   nav.solid{background:rgba(10,14,21,.78);backdrop-filter:saturate(160%) blur(16px);border-bottom-color:var(--line)}
   .nav-in{display:flex;align-items:center;justify-content:space-between;height:60px;max-width:var(--wrap);margin:0 auto;padding:0 24px}
   .brand{display:flex;align-items:center;gap:10px;font-weight:650;font-size:16px;letter-spacing:-0.02em}
-  .brand svg{width:26px;height:26px;display:block}
+  .brand img{width:26px;height:26px;display:block}
   .nav-links{display:flex;gap:26px;align-items:center;font-size:14px}
   .nav-links a{color:var(--muted);transition:color .2s}
   .nav-links a:hover{color:var(--ink)}
@@ -168,7 +183,7 @@
 <nav id="nav">
   <div class="nav-in">
     <a class="brand" href="#top">
-      <svg viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffce80"/><stop offset="1" stop-color="#ff9d2f"/></linearGradient></defs><path d="M63 20 C44 20,30 34,30 52 C30 72,46 84,64 82 C77 80.6,87 72,90 60 L74 57 C77 49,77 41,73 34" fill="none" stroke="url(#lg)" stroke-width="9" stroke-linecap="round"/><circle cx="63" cy="20" r="5.5" fill="#39c0ff"/></svg>
+      <img src="icon.png" width="26" height="26" alt="" aria-hidden="true" />
       Slipstream
     </a>
     <div class="nav-links">
