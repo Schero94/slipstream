@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/icon.png" alt="" width="128" height="128" />
+</p>
+
 # Slipstream
 
 ![Slipstream — expert cache streaming live from SSD](docs/hero.gif)
