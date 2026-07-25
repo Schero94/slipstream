@@ -212,7 +212,7 @@
 
 <section class="insight">
   <div class="wrap rv">
-    <div class="eyebrow">The core finding</div>
+    <div class="eyebrow">01 — The core finding</div>
     <p class="big">We moved <em>one file</em> — the streamed experts — onto the fastest disk. That single change was <em>2.7×</em>. Not a clever kernel. Storage placement.</p>
     <p class="muted" style="margin-top:20px;max-width:60ch">A MoE model activates only a few experts per token, so most weights sit idle. Slipstream keeps the always-needed weights resident and streams the routed experts from SSD on demand — with a bounded, RAM-sized cache that refuses to load anything that would swap your Mac.</p>
   </div>
@@ -221,7 +221,7 @@
 <section id="how">
   <div class="wrap">
     <div class="head rv">
-      <div class="eyebrow">How it works</div>
+      <div class="eyebrow">02 — How it works</div>
       <h2>An engine designed around one bottleneck: SSD fetch.</h2>
       <p>Decode is ~78–92% fetch-bound. Every mechanism below exists to keep the Mac responsive and hide that fetch behind compute.</p>
     </div>
@@ -239,7 +239,7 @@
 <section id="benchmarks" style="background:var(--bg2)">
   <div class="wrap">
     <div class="head rv">
-      <div class="eyebrow">Measured, on a 36 GB Mac</div>
+      <div class="eyebrow">03 — Measured, on a 36 GB Mac</div>
       <h2>Evidence-first. We publish the numbers — including the ones we lost.</h2>
       <p>Real runs, recorded methodology. No hand-waved 5× miracle.</p>
     </div>
@@ -270,13 +270,27 @@
       </table></div>
       <div class="tbl-cap">A model that does not fit in RAM, made runnable. Usable for batch coding at ~2.8 tok/s.</div>
     </div>
+
+    <div class="rv" style="margin-top:52px">
+      <h3 style="font-size:19px">What to expect on your Mac</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Your Mac</th><th>Sweet-spot model</th><th>Experience</th></tr></thead>
+        <tbody>
+          <tr><td>16 GB</td><td>Qwen3.6-35B-A3B · small cache</td><td>runnable, more SSD reads</td></tr>
+          <tr><td>24–36 GB</td><td>35B · 10–14 GiB cache</td><td class="win">interactive · ~13–19 tok/s</td></tr>
+          <tr><td>36 GB + fast SSD</td><td>118B (Laguna) for hard tasks</td><td>batch quality · ~2.8 tok/s</td></tr>
+          <tr><td>0.5–2 TB fast NVMe</td><td>XL tier — up to 480B</td><td>showcase / batch coding</td></tr>
+        </tbody>
+      </table></div>
+      <div class="tbl-cap">Guidance, not a promise — the app computes the best settings and an expected speed for your exact machine. Got real numbers? <a href="https://github.com/Schero94/slipstream/issues" target="_blank" rel="noopener" style="color:var(--cyan)">share them →</a></div>
+    </div>
   </div>
 </section>
 
 <section id="honesty">
   <div class="wrap">
     <div class="head rv">
-      <div class="eyebrow">What did <em style="font-style:normal;color:var(--stream)">not</em> work</div>
+      <div class="eyebrow">04 — What did <em style="font-style:normal;color:var(--stream)">not</em> work</div>
       <h2>The negatives, recorded honestly.</h2>
       <p>Credibility comes from the experiments we rejected. All of these are in the repo's benchmark logs.</p>
     </div>
@@ -292,7 +306,7 @@
 <section id="research" style="background:var(--bg2)">
   <div class="wrap">
     <div class="head rv">
-      <div class="eyebrow">Standing on the shoulders of</div>
+      <div class="eyebrow">05 — Standing on the shoulders of</div>
       <h2>The research we read.</h2>
       <p>Slipstream's design is grounded in published work on MoE offloading, flash-memory inference, and speculative decoding.</p>
     </div>
@@ -312,7 +326,7 @@
 <section id="download">
   <div class="wrap">
     <div class="dl rv">
-      <div class="eyebrow">Get started</div>
+      <div class="eyebrow">06 — Get started</div>
       <h2 style="font-size:clamp(28px,4.3vw,44px);margin-top:14px">A 480B coding model.<br/>On your MacBook.</h2>
       <p class="muted" style="max-width:46ch;margin:18px auto 0">The engine is bundled inside the app. Download, drag to Applications, open. Point your coding assistant at localhost and go.</p>
       <div class="cta-row" style="margin-top:30px">
