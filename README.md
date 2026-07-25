@@ -1,5 +1,7 @@
 # Slipstream
 
+![Slipstream — expert cache streaming live from SSD](docs/hero.gif)
+
 **Run coding models that are bigger than your Mac's RAM — locally, privately, at usable speed.**
 
 Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that **streams Mixture-of-Experts (MoE) expert weights from your SSD** instead of forcing the whole model into memory. A 16–36 GB Apple-Silicon Mac can run 35B–480B MoE coding models while the machine stays usable — no cloud, no API keys, no data leaving your laptop.
@@ -146,6 +148,12 @@ cd app/src-tauri && cargo tauri build   # -> the self-contained .dmg
 ```
 
 `otool -L build-static/bin/llama-server` should list **only** system frameworks — no `@rpath`, no Homebrew, no OpenSSL. That's what makes the app copy-and-run on any Apple-Silicon Mac.
+
+---
+
+## Acknowledgements
+
+Slipstream was **inspired by [Colibrì](https://github.com/JustVugg/colibri)** by JustVugg — the project that showed a 700B-scale MoE model streaming from disk on consumer hardware. Colibrì is pure-C on CPU/CUDA; Slipstream adapts the idea for **Apple Silicon** (Metal + unified memory) with a native app and its own PGRN engine. Several reference ideas — the disk-benchmarking methodology, route-trace / expert-coupling analysis, and RAM admission — came from studying Colibrì. Thank you. 🐦
 
 ---
 
