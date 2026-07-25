@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "episodes": [
+    {
+      "id": "repair-slug-normalization",
+      "category": "repair",
+      "fixture_dir": "fixtures/repair_slug",
+      "task": "Repair src/slug.py. slugify must lowercase text, transliterate German umlauts (ä->ae, ö->oe, ü->ue, ß->ss), treat every run of non-ASCII-alphanumeric characters as one hyphen, and never return leading or trailing hyphens. Preserve the public function signature. Inspect the repository, implement the fix, run visible tests, then finish.",
+      "writable_paths": ["src/slug.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 12, "max_output_tokens": 1600, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "implement-event-summary",
+      "category": "cross-file implementation",
+      "fixture_dir": "fixtures/event_summary",
+      "task": "Implement summarize_events in src/summary.py using the existing parse_event contract in src/events.py. Consume any iterable exactly once. Ignore blank lines. Return a dict with total accepted event count, per-level counts for info/warning/error (including zero counts), and sorted unique component names. Invalid nonblank records must propagate ValueError. Do not change the parser API. Run visible tests, then finish.",
+      "writable_paths": ["src/summary.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 14, "max_output_tokens": 1800, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "refactor-tier-pricing",
+      "category": "refactor",
+      "fixture_dir": "fixtures/tier_pricing",
+      "task": "Refactor src/pricing.py to remove the duplicated tier-selection branches while preserving quote(quantity, customer) behavior and its exact return shape. Pricing is progressive: units 1-10 cost 12 each, 11-50 cost 9 each, and units above 50 cost 7 each. Customer discounts are regular=0%, partner=10%, internal=100%, applied after the progressive subtotal. Reject booleans and non-integer or non-positive quantities with ValueError; reject unknown customers with ValueError. Run visible tests, then finish.",
+      "writable_paths": ["src/pricing.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 14, "max_output_tokens": 1800, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "debug-stream-chunks",
+      "category": "regression debugging",
+      "fixture_dir": "fixtures/stream_chunks",
+      "task": "Fix the regression in src/chunks.py. chunked(iterable, size) must work with one-shot iterators without dropping or duplicating values, return lists of at most size items, include the final partial chunk, stay lazy (consume no input until iteration and no more than one chunk ahead), and reject booleans/non-integer/non-positive sizes with ValueError. Preserve the public API. Run visible tests, then finish.",
+      "writable_paths": ["src/chunks.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 14, "max_output_tokens": 1800, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    }
+  ]
+}

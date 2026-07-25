@@ -1,0 +1,23 @@
+{
+  "schema": "peregrine-ane-v1",
+  "mode": "one-shot-linear",
+  "compiled_model": "Qwen3.6-35B-A3B-one-shot.mlmodelc",
+  "package_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "source_model_sha256": "55983c5a75a1ab969824077b3bb3de4146e82a9234072b48ad4e8f92ad3fe9f1",
+  "architecture": "qwen35moe",
+  "input": {
+    "name": "tokens",
+    "count": 32,
+    "pad_token": 0
+  },
+  "output": {
+    "name": "candidates",
+    "count": 8
+  },
+  "draft": {
+    "depth": 8,
+    "width": 1,
+    "vocabulary": 248320,
+    "precision": "float16"
+  }
+}

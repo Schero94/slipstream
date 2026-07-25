@@ -1,0 +1,65 @@
+{
+  "baseline_agent_mean_tokens_per_second": 41.16568436511494,
+  "baseline_agent_peak_rss_kb": 25042928,
+  "baseline_perplexity": 2.254,
+  "baseline_profile": "baseline-f16-fa-mtp4",
+  "baseline_verifier_passes": 4,
+  "candidate_agent_mean_tokens_per_second": 40.11962055227766,
+  "candidate_agent_peak_rss_kb": 24671632,
+  "candidate_perplexity": 2.2601,
+  "candidate_profile": "kv-q8_0-fa-mtp4",
+  "candidate_verifier_passes": 4,
+  "decision": "PROFILE_REJECTED_SPEED_REGRESSION",
+  "llama_cpp_commit": "79bba02a6741de194912d370015866414faa83ad",
+  "llama_cpp_dirty": true,
+  "m0a_admitted_tokens": 0,
+  "model_sha256": "55983c5a75a1ab969824077b3bb3de4146e82a9234072b48ad4e8f92ad3fe9f1",
+  "perplexity_decision": {
+    "delta": 0.006099999999999994,
+    "maximum_delta": 0.05,
+    "passed": true,
+    "reasons": []
+  },
+  "points": {
+    "32000": {
+      "baseline_peak_rss_kb": 24615488,
+      "baseline_tokens_per_second": 33.61189188734974,
+      "candidate_peak_rss_kb": 24038208,
+      "candidate_tokens_per_second": 26.680290289895947,
+      "rss_delta_kb": -577280,
+      "speed_delta_percent": -20.622467847644693,
+      "speed_delta_tokens_per_second": -6.9316015974537954
+    },
+    "4000": {
+      "baseline_peak_rss_kb": 24437664,
+      "baseline_tokens_per_second": 43.74776134502492,
+      "candidate_peak_rss_kb": 23937808,
+      "candidate_tokens_per_second": 38.627143052003,
+      "rss_delta_kb": -499856,
+      "speed_delta_percent": -11.704869313511162,
+      "speed_delta_tokens_per_second": -5.12061829302192
+    },
+    "64000": {
+      "baseline_peak_rss_kb": 24873568,
+      "baseline_tokens_per_second": 25.51289387772268,
+      "candidate_peak_rss_kb": 24257568,
+      "candidate_tokens_per_second": 18.483869286119756,
+      "rss_delta_kb": -616000,
+      "speed_delta_percent": -27.55087143501396,
+      "speed_delta_tokens_per_second": -7.029024591602923
+    }
+  },
+  "profile_recommended": false,
+  "qualification_gate_passed": true,
+  "quality_gate_passed": true,
+  "schema": 1,
+  "source_evidence_sha256": {
+    "/Users/schero/Desktop/Privat.nosync/LLM-BOOM/artifacts/s1-kv-q8-ab/perplexity-baseline.json": "b5609d86760a666f275aff5ab0633dbca6f9e6707eb1b0bcec9579aa61f5e336",
+    "/Users/schero/Desktop/Privat.nosync/LLM-BOOM/artifacts/s1-kv-q8-ab/perplexity-q8.json": "09def1d37891247337e72899aed9966cfe9606287c6f42a177b3f7a504c33c70",
+    "/Users/schero/Desktop/Privat.nosync/LLM-BOOM/artifacts/s1-kv-q8-ab/qualification-baseline/qualification.json": "9eccf84e7f03de5c949ac97563368ae53509a76007237faea74895820573f445",
+    "/Users/schero/Desktop/Privat.nosync/LLM-BOOM/artifacts/s1-kv-q8-ab/qualification-q8/qualification.json": "dec507b2ceff9cab791ee1b76a6997a3148c3db8033a382bd541526421f6079b",
+    "/Users/schero/Desktop/Privat.nosync/LLM-BOOM/artifacts/s1-kv-q8-ab/verifier-baseline/profile-verifier.json": "b18ca7af216cb48fbf824e9bbc1102441e844eed587d4e71ef95a3aa8ed812b0",
+    "/Users/schero/Desktop/Privat.nosync/LLM-BOOM/artifacts/s1-kv-q8-ab/verifier-q8/profile-verifier.json": "b0e222bb95721434b31533e1969aa6c2a5965b69d27f9228f3b9447f7a59e501"
+  },
+  "speed_improved_all_contexts": false
+}

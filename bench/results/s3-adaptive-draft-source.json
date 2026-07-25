@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "evidence_sha256": "47cbdef9838b3eda7c9772376e92d6bf10dff7b4e2d8342a82b075425d1900cb",
+  "llama_cpp_base_commit": "4395934af5a4abc0ced4703381549806ff7ae0f3",
+  "llama_cpp_integration_commit": "48ab345b30cbdbdc551087b1015e2bca2661e5db",
+  "measured_source_diff_sha256": "a6a8ca405598810969e533893c1b958293c9f6d087c788fed3a6c7b0371a650f",
+  "note": "The S3 reporter ran before the measured adaptive source diff was committed. This sidecar binds the immutable evidence hash to the exact integration commit; the measured diff is byte-identical to that commit relative to the recorded base."
+}

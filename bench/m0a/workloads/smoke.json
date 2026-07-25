@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "tasks": [
+    {
+      "id": "stable-unique-repair",
+      "fixture_dir": "fixtures/stable_unique",
+      "prompt": "Repair this Python function. Return the complete solution.py source only, with no Markdown fences or explanation. Preserve first-seen order and remove duplicates.\n\ndef stable_unique(values):\n    result = []\n    seen = set()\n    for value in values:\n        if value in seen:\n            result.append(value)\n        seen.add(value)\n    return result\n",
+      "response": {
+        "kind": "file",
+        "path": "solution.py"
+      },
+      "verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]
+    },
+    {
+      "id": "chunked-from-contract",
+      "fixture_dir": "fixtures/chunked",
+      "prompt": "Implement this Python function. Return the complete solution.py source only, with no Markdown fences or explanation. It must return an eager list of lists, never a generator or iterator; preserve consecutive chunks; keep a short final chunk; accept any iterable; and raise ValueError immediately when called with a size that is not positive.\n\ndef chunked(values, size):\n    raise NotImplementedError\n",
+      "response": {
+        "kind": "file",
+        "path": "solution.py"
+      },
+      "verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]
+    },
+    {
+      "id": "structured-search-tool-call",
+      "fixture_dir": "fixtures/tool_call",
+      "prompt": "Return only one JSON object for a repository search tool call. Use tool name search_code and arguments containing exactly one key query with the value draft-mtp. Do not add Markdown or explanation.",
+      "response": {
+        "kind": "json",
+        "path": "tool_call.json"
+      },
+      "verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "episodes": [
+    {
+      "id": "repair-merge-intervals",
+      "category": "interval algorithm",
+      "fixture_dir": "fixtures/merge_intervals",
+      "task": "Repair merge_intervals in src/intervals.py. Consume the interval iterable once, validate that each item is a two-element tuple/list of finite real numbers with start <= end (booleans are invalid), sort without mutating input objects, and return lists merging both overlapping and touching intervals. Return [] for empty input. Run visible tests, then finish.",
+      "writable_paths": ["src/intervals.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2200, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "implement-config-overlay",
+      "category": "cross-file configuration integration",
+      "fixture_dir": "fixtures/config_overlay",
+      "task": "Implement overlay in src/config.py using the exact converters in src/schema.py. Return a new dict and never mutate defaults or env. Only recognized schema keys with the prefix PGR_ may override defaults, using upper-case schema names. Ignore unrelated environment entries. If a recognized value fails conversion, propagate ValueError. Preserve APIs, run visible tests, then finish.",
+      "writable_paths": ["src/config.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2200, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "debug-lru-accesses",
+      "category": "stateful cache simulation",
+      "fixture_dir": "fixtures/lru_accesses",
+      "task": "Fix simulate_lru in src/lru.py. capacity must be a positive non-boolean integer. Consume accesses once. A hit moves the key to most-recent position. A miss inserts it and evicts exactly the least-recent key when full. Return dict hits, misses, evictions (in order), and final keys from least to most recent. Keys must be hashable; propagate TypeError. Run visible tests, then finish.",
+      "writable_paths": ["src/lru.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2200, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "parse-key-value-lines",
+      "category": "line-oriented parser",
+      "fixture_dir": "fixtures/key_value_lines",
+      "task": "Implement parse_lines in src/kv.py. Consume lines once. Ignore blank lines and lines whose first non-space character is #. Every other line must contain exactly one '=' separator with a nonempty trimmed ASCII identifier key and a nonempty trimmed value. Reject duplicate keys and malformed/non-string lines with ValueError. Preserve insertion order in the returned dict. Run visible tests, then finish.",
+      "writable_paths": ["src/kv.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2000, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "implement-flatten-tree",
+      "category": "recursive structure traversal",
+      "fixture_dir": "fixtures/flatten_tree",
+      "task": "Implement flatten in src/tree.py. Input must be a dict whose keys at every level are nonempty strings without '/'. Nested dicts are branches; every non-dict is a leaf. Return a new dict mapping slash-joined paths to the original leaf objects, traversed in insertion order. Reject empty branch dicts and a non-dict root with ValueError. Do not mutate the tree. Run visible tests, then finish.",
+      "writable_paths": ["src/tree.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2200, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "refactor-round-robin-allocation",
+      "category": "fair work allocation",
+      "fixture_dir": "fixtures/round_robin",
+      "task": "Refactor allocate in src/allocation.py. workers must be a nonempty sequence of unique nonempty strings. Consume items once and assign them cyclically in worker order. Return a dict containing every worker in input order, including empty lists, and preserve item identity/order. Reject invalid workers with ValueError and never mutate either input. Run visible tests, then finish.",
+      "writable_paths": ["src/allocation.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2000, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "decision": "PENDING_VALID_RERUN",
+  "k10_status": "SUPPORTED_NOT_CONFIRMED",
+  "raw_evidence": {
+    "path": "artifacts/s7-decode-profile-stage3/decode-profile.json",
+    "sha256": "c0394a9164f7aced2c51fcf5383557a4949eed13275c41fae5ebc76f747e4c1a"
+  },
+  "source": {
+    "llama_cpp_commit": "3db61980a30f22cf183072415684e448a9cca213",
+    "model_sha256": "55983c5a75a1ab969824077b3bb3de4146e82a9234072b48ad4e8f92ad3fe9f1"
+  },
+  "instrumentation": {
+    "default_enabled": false,
+    "sampling_point": "MTLCounterSamplingPointAtStageBoundary",
+    "boundary": "one compute encoder per ggml op",
+    "graph_identity": "process-global atomic sequence",
+    "dispatch_coverage": 1.0,
+    "counter_errors": 0
+  },
+  "shares": {
+    "4000": {
+      "s1": {"attention": 0.02349934831787413, "expert_gemm": 0.035374437578089474, "other": 0.9411262141040364},
+      "s9": {"attention": 0.04612995329602952, "expert_gemm": 0.33921659581145974, "other": 0.6146534508925108}
+    },
+    "64000": {
+      "s1": {"attention": 0.4285795533550589, "expert_gemm": 0.0246433609722137, "other": 0.5467770856727274},
+      "s9": {"attention": 0.5252065590267094, "expert_gemm": 0.169246359938301, "other": 0.30554708103498956}
+    }
+  },
+  "host_validity": {
+    "wired_limit_mb": 31744,
+    "pageouts_delta_4000": 48,
+    "pageouts_delta_64000": 2053,
+    "measurement_valid": false
+  },
+  "w2_gate": "PENDING_VALID_RERUN",
+  "m0a_admitted_tokens": 0
+}

@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "episodes": [
+    {
+      "id": "parse-clock-duration",
+      "category": "strict parsing",
+      "fixture_dir": "fixtures/clock_duration",
+      "task": "Repair parse_duration in src/duration.py. Accept only nonempty ASCII decimal SS, MM:SS, or HH:MM:SS strings and return total seconds. In two- and three-field forms the minute/second fields must each be 0..59; the leading field may be any non-negative integer. Reject whitespace, signs, empty fields, extra fields, and non-strings with ValueError. Preserve the API, run visible tests, then finish.",
+      "writable_paths": ["src/duration.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 14, "max_output_tokens": 1800, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "repair-order-transitions",
+      "category": "state transition repair",
+      "fixture_dir": "fixtures/order_state",
+      "task": "Repair transition in src/orders.py. Legal transitions are pending+pay->paid, pending+cancel->cancelled, paid+ship->shipped, and paid+cancel->cancelled. shipped and cancelled are terminal. Reject unknown states, unknown events, and every illegal transition with ValueError. Inputs must be strings and the function must have no global state. Preserve the API, run visible tests, then finish.",
+      "writable_paths": ["src/orders.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 14, "max_output_tokens": 1800, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "implement-retry-plan",
+      "category": "cross-file policy integration",
+      "fixture_dir": "fixtures/retry_plan",
+      "task": "Implement retry_plan in src/planner.py using src/policy.py. Consume the status iterable once. For each leading retryable status append delay_for_attempt using zero-based retry attempt numbers. Stop and return immediately on a success status. Raise ValueError on the first non-retryable failure or invalid status. Never inspect statuses after success. Preserve both public APIs, run visible tests, then finish.",
+      "writable_paths": ["src/planner.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2200, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "debug-stable-unique-by",
+      "category": "stream deduplication",
+      "fixture_dir": "fixtures/stable_unique",
+      "task": "Fix unique_by in src/unique.py. Consume any iterable exactly once, call key exactly once per item, preserve first-seen order and the original first item object for each hashable key, and return a list. Do not sort or mutate input items. Let key exceptions and unhashable-key TypeError propagate. Preserve the API, run visible tests, then finish.",
+      "writable_paths": ["src/unique.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 14, "max_output_tokens": 1800, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "refactor-capped-backoff",
+      "category": "bounded arithmetic refactor",
+      "fixture_dir": "fixtures/capped_backoff",
+      "task": "Refactor backoff_delays in src/backoff.py to return attempts delays starting at base and doubling each time without exceeding cap. Reject booleans and non-integer or negative attempts; reject booleans and non-positive/non-numeric base or cap; reject base greater than cap. Return an empty list for zero attempts and avoid computing unbounded powers after the cap is reached. Preserve the API, run visible tests, then finish.",
+      "writable_paths": ["src/backoff.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 14, "max_output_tokens": 1800, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "implement-rolling-average",
+      "category": "single-pass aggregation",
+      "fixture_dir": "fixtures/rolling_average",
+      "task": "Implement rolling_average in src/rolling.py. Consume values once and return a list of arithmetic means for every complete contiguous window. Reject booleans and non-integer or non-positive window sizes with ValueError. Return [] when there are fewer values than the window. Support numeric iterables without mutating them and keep only O(window) values in working memory. Preserve the API, run visible tests, then finish.",
+      "writable_paths": ["src/rolling.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2000, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    }
+  ]
+}

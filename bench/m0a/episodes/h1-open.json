@@ -1,0 +1,71 @@
+{
+  "episodes": [
+    {
+      "category": "streaming stateful parser",
+      "fixture_dir": "fixtures/unified_diff",
+      "hidden_verifier": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "hidden_tests",
+        "-v"
+      ],
+      "id": "parse-streaming-unified-diff",
+      "limits": {
+        "max_output_tokens": 3200,
+        "max_steps": 18,
+        "max_test_runs": 4,
+        "wall_timeout_seconds": 360
+      },
+      "task": "Implement parse_unified_diff in src/diff.py. Consume the line iterable once and return one dict per changed content line with path, kind ('add' or 'delete'), old_line, new_line, and text. Parse standard ---/+++ file headers and @@ -old,count +new,count @@ hunks; /dev/null denotes creation/deletion. Context advances both counters, deletion only old, addition only new, and '\\ No newline at end of file' advances neither. Reject malformed ordering, headers, hunk ranges, unexpected lines, and truncated hunk counts with ValueError. Preserve change order and do not retain line objects. Run visible tests, then finish.",
+      "visible_verifier": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-v"
+      ],
+      "writable_paths": [
+        "src/diff.py"
+      ]
+    },
+    {
+      "category": "clocked bounded lease state",
+      "fixture_dir": "fixtures/worker_leases",
+      "hidden_verifier": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "hidden_tests",
+        "-v"
+      ],
+      "id": "renew-bounded-worker-leases",
+      "limits": {
+        "max_output_tokens": 3400,
+        "max_steps": 20,
+        "max_test_runs": 4,
+        "wall_timeout_seconds": 360
+      },
+      "task": "Implement LeaseBook in src/leases.py using the injected zero-argument clock; never call time directly. max_workers is a positive non-boolean integer. acquire(worker, ttl) requires a nonempty string and positive finite non-boolean ttl, expires stale leases first, rejects an already-active worker or capacity overflow, and returns the expiry. renew applies the same validation, expires stale leases first, requires an active worker, and sets expiry to current clock plus ttl. release requires an active worker. active returns worker-expiry pairs in acquisition order after expiry cleanup, and expired returns newly expired workers once in expiry then acquisition order. Call the clock exactly once per public operation and reject backwards time with ValueError. Run visible tests, then finish.",
+      "visible_verifier": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-v"
+      ],
+      "writable_paths": [
+        "src/leases.py"
+      ]
+    }
+  ],
+  "schema": 1
+}

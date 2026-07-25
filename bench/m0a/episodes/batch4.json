@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "episodes": [
+    {
+      "id": "resolve-stable-dependencies",
+      "category": "dependency graph resolution",
+      "fixture_dir": "fixtures/dependency_order",
+      "task": "Implement dependency_order in src/dependencies.py. graph must be a dict with unique nonempty string keys; every value must be a list/tuple of unique dependency names that are keys in the same graph. Return every key once with dependencies before dependants. When several nodes are ready, preserve their original graph-key order. Reject malformed graphs, unknown dependencies, and cycles with ValueError. Do not mutate graph or dependency lists. Run visible tests, then finish.",
+      "writable_paths": ["src/dependencies.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2200, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "parse-http-header-lines",
+      "category": "protocol line parsing",
+      "fixture_dir": "fixtures/http_headers",
+      "task": "Implement parse_headers in src/headers.py. Consume lines once, ignore blank lines, and parse each other string at its first ':'. Header names must be nonempty ASCII HTTP-token names; values must be nonempty after trimming spaces and tabs. Return a dict keyed by lower-case names whose values are lists of trimmed values in encounter order. Reject malformed or non-string lines with ValueError. Run visible tests, then finish.",
+      "writable_paths": ["src/headers.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2200, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "pack-weight-bounded-batches",
+      "category": "bounded streaming partition",
+      "fixture_dir": "fixtures/weighted_batches",
+      "task": "Implement weighted_batches in src/batches.py. max_weight must be a positive finite real number and booleans are invalid. Consume items once and call weight(item) exactly once per item. Each weight must also be positive, finite, non-boolean, and no greater than max_weight. Pack consecutive items greedily into nonempty lists without exceeding max_weight; preserve item identity and order. Return all batches and do not mutate inputs. Run visible tests, then finish.",
+      "writable_paths": ["src/batches.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2200, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "join-unique-record-streams",
+      "category": "relational stream join",
+      "fixture_dir": "fixtures/record_join",
+      "task": "Implement inner_join in src/join.py. Consume left and right exactly once. Every record must be a dict containing id_key; IDs must be hashable, non-boolean, and unique within each side. Return new dicts for IDs present on both sides in left-stream order. Each result starts with the left record and is updated by the right record, but an overlapping non-ID field with unequal values is an error. Never mutate or alias input records. Reject malformed records and duplicate IDs with ValueError; propagate TypeError for unhashable IDs. Run visible tests, then finish.",
+      "writable_paths": ["src/join.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2400, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "debounce-keyed-events",
+      "category": "temporal state filtering",
+      "fixture_dir": "fixtures/event_debounce",
+      "task": "Implement debounce in src/debounce.py. cooldown must be a nonnegative finite real number and booleans are invalid. Consume events once. Every event must be a two-element tuple/list (timestamp, key), timestamps must be finite non-boolean real numbers in nondecreasing order, and keys must be hashable. Keep the first event for each key and later events only when timestamp - last kept timestamp >= cooldown. Return the original kept event objects in encounter order without mutating them. Propagate TypeError for unhashable keys and reject other invalid input with ValueError. Run visible tests, then finish.",
+      "writable_paths": ["src/debounce.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2200, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    },
+    {
+      "id": "aggregate-nested-metrics",
+      "category": "recursive numeric aggregation",
+      "fixture_dir": "fixtures/metric_aggregation",
+      "task": "Implement aggregate_metrics in src/metrics.py. Consume snapshots once. Each snapshot must be a dict whose keys at every level are nonempty strings without '.', branches are nonempty dicts, and leaves are finite non-boolean real numbers. All snapshots must have exactly the same tree shape. Return a new flattened dict mapping dot-joined leaf paths to their arithmetic mean, in first-snapshot traversal order. Require at least one snapshot; reject invalid input or shape drift with ValueError and never mutate inputs. Run visible tests, then finish.",
+      "writable_paths": ["src/metrics.py"],
+      "visible_verifier": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "hidden_verifier": ["python3", "-m", "unittest", "discover", "-s", "hidden_tests", "-v"],
+      "limits": {"max_steps": 16, "max_output_tokens": 2400, "wall_timeout_seconds": 300, "max_test_runs": 3}
+    }
+  ]
+}

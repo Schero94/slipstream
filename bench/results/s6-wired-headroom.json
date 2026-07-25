@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "decision": "MEASUREMENT_INVALID_PAGEOUTS",
+  "raw_evidence": {
+    "path": "artifacts/s6-wired-headroom/headroom.json",
+    "sha256": "13228a96459bf9cfe52e3f91e5d9b260c2db8e3613bcd9cefe2b77f5aa00954b"
+  },
+  "source": {
+    "llama_cpp_commit": "48ab345b30cbdbdc551087b1015e2bca2661e5db",
+    "model_sha256": "55983c5a75a1ab969824077b3bb3de4146e82a9234072b48ad4e8f92ad3fe9f1"
+  },
+  "host": {
+    "wired_limit_key": "iogpu.wired_limit_mb",
+    "wired_limit_mb": 31744,
+    "requested_wired_limit_mb": 30720,
+    "requested_wired_limit_active": false,
+    "memory_free_percent_before": 89,
+    "memory_free_percent_after": 28,
+    "pageouts_delta": 1175
+  },
+  "profile": "baseline-f16-fa-mtp8",
+  "context_tokens": 64000,
+  "decoded_tokens": 128,
+  "decode_tokens_per_second": 18.972451999696442,
+  "peak_rss_kb": 20190416,
+  "measurement_valid": false,
+  "invalid_reasons": [
+    "pageouts"
+  ],
+  "system_setting_changed_by_agent": false,
+  "m0a_admitted_tokens": 0
+}

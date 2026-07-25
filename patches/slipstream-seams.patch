@@ -1,0 +1,4058 @@
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 7bc770ab4..7fe5077c1 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -24,6 +24,7 @@
+ #include <nlohmann/json.hpp>
+ 
+ #include <algorithm>
++#include <cmath>
+ #include <cinttypes>
+ #include <climits>
+ #include <cstdarg>
+@@ -71,6 +72,42 @@ static std::string read_file(const std::string & fname) {
+     return content;
+ }
+ 
++static uint64_t parse_pgrn_gib(const std::string & value) {
++    size_t consumed = 0;
++    const double gib = std::stod(value, &consumed);
++    constexpr double bytes_per_gib = 1024.0 * 1024.0 * 1024.0;
++    if (consumed != value.size() || !std::isfinite(gib) || gib <= 0.0 ||
++            gib > (double) UINT64_MAX / bytes_per_gib) {
++        throw std::invalid_argument("PGRN budget must be a positive number of GiB");
++    }
++    const double bytes = gib * bytes_per_gib;
++    if (bytes < 1.0 || bytes > (double) UINT64_MAX) {
++        throw std::invalid_argument("PGRN budget is outside the uint64 byte range");
++    }
++    return (uint64_t) bytes;
++}
++
++static uint64_t parse_pgrn_uint(
++        const std::string & value, const char * label, uint64_t minimum, uint64_t maximum) {
++    size_t consumed = 0;
++    uint64_t parsed = 0;
++    if (value.empty() || value[0] == '-') {
++        throw std::invalid_argument(string_format("%s must be between %llu and %llu", label,
++                (unsigned long long) minimum, (unsigned long long) maximum));
++    }
++    try {
++        parsed = std::stoull(value, &consumed, 10);
++    } catch (const std::exception &) {
++        throw std::invalid_argument(string_format("%s must be between %llu and %llu", label,
++                (unsigned long long) minimum, (unsigned long long) maximum));
++    }
++    if (consumed != value.size() || parsed < minimum || parsed > maximum) {
++        throw std::invalid_argument(string_format("%s must be between %llu and %llu", label,
++                (unsigned long long) minimum, (unsigned long long) maximum));
++    }
++    return parsed;
++}
++
+ static const std::vector<common_arg> & get_common_arg_defs() {
+     static const std::vector<common_arg> options = [] {
+         common_params params;
+@@ -771,6 +808,16 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
+         ));
+     }
+ 
++    // Generic --fit measures a no-allocation shadow model and therefore cannot
++    // account for PGRN's admitted cache and fixed shared scratch. PGRN performs
++    // its own fail-closed unified-memory admission immediately before allocation.
++    if (params.pgrn_compact_slots && params.pgrn_path.empty()) {
++        throw std::runtime_error("error: --pgrn-compact-slots requires --pgrn");
++    }
++    if (!params.pgrn_path.empty()) {
++        params.fit_params = false;
++    }
++
+     return true;
+ }
+ 
+@@ -2418,6 +2465,91 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.use_mmap = value;
+         }
+     ).set_env("LLAMA_ARG_MMAP"));
++    add_opt(common_arg(
++        {"--pgrn"}, "FILE",
++        "stream MoE expert weights from an identity-bound PGRN file with a hard cache limit; disables model mmap",
++        [](common_params & params, const std::string & value) {
++            if (value.empty()) {
++                throw std::invalid_argument("PGRN path must not be empty");
++            }
++            params.pgrn_path = value;
++            params.use_mmap = false;
++        }
++    ).set_env("LLAMA_ARG_PGRN"));
++    add_opt(common_arg(
++        {"--pgrn-cache-gb"}, "N",
++        "hard upper bound in GiB for the resident PGRN expert cache (required with --pgrn)",
++        [](common_params & params, const std::string & value) {
++            params.pgrn_cache_bytes = parse_pgrn_gib(value);
++        }
++    ).set_env("LLAMA_ARG_PGRN_CACHE_GB"));
++    add_opt(common_arg(
++        {"--pgrn-headroom-gb"}, "N",
++        "minimum available RAM in GiB reserved for macOS and foreground applications (required with --pgrn)",
++        [](common_params & params, const std::string & value) {
++            params.pgrn_headroom_bytes = parse_pgrn_gib(value);
++        }
++    ).set_env("LLAMA_ARG_PGRN_HEADROOM_GB"));
++    add_opt(common_arg(
++        {"--pgrn-io-threads"}, "N",
++        "parallel cold-read threads per layer stream for PGRN expert fetch (1 = serial; "
++        "each extra thread adds one staging record per layer to the admitted high-water)",
++        [](common_params & params, const std::string & value) {
++            params.pgrn_io_threads = (int32_t) parse_pgrn_uint(value, "PGRN I/O threads", 1, 64);
++        }
++    ).set_env("LLAMA_ARG_PGRN_IO_THREADS"));
++    add_opt(common_arg(
++        {"--pgrn-predict"}, "FILE",
++        "optional PGCT1 hot-set table (bench.m1.export_coupling_table) for speculative "
++        "next-layer expert prefetch; warms the cache only, never changes output",
++        [](common_params & params, const std::string & value) {
++            params.pgrn_predict_path = value;
++        }
++    ).set_env("LLAMA_ARG_PGRN_PREDICT"));
++    add_opt(common_arg(
++        {"--pgrn-coupling"}, "FILE",
++        "optional PGCC1 coupled table (bench.m1.export_coupling_table --coupled) for speculative "
++        "next-layer prefetch conditioned on the current layer's fired experts; preferred over "
++        "--pgrn-predict when set; warms the cache only, never changes output",
++        [](common_params & params, const std::string & value) {
++            params.pgrn_coupling_path = value;
++        }
++    ).set_env("LLAMA_ARG_PGRN_COUPLING"));
++    add_opt(common_arg(
++        {"--pgrn-hot-percent"}, "N",
++        "logical HOT percentage inside the fixed PGRN cache (0 keeps pure CLOCK-LRU-K)",
++        [](common_params & params, const std::string & value) {
++            params.pgrn_hot_percent = (uint32_t) parse_pgrn_uint(value, "PGRN HOT percent", 0, 100);
++        }
++    ).set_env("LLAMA_ARG_PGRN_HOT_PERCENT"));
++    add_opt(common_arg(
++        {"--pgrn-promote-hits"}, "N",
++        "bounded access score required to promote a WARM expert to HOT",
++        [](common_params & params, const std::string & value) {
++            params.pgrn_promote_hits = (uint32_t) parse_pgrn_uint(value, "PGRN promotion hits", 1, 255);
++        }
++    ).set_env("LLAMA_ARG_PGRN_PROMOTE_HITS"));
++    add_opt(common_arg(
++        {"--pgrn-demote-idle"}, "N",
++        "policy epochs before an idle HOT expert can demote to WARM",
++        [](common_params & params, const std::string & value) {
++            params.pgrn_demote_idle_epochs = parse_pgrn_uint(value, "PGRN demotion idle epochs", 1, UINT64_MAX);
++        }
++    ).set_env("LLAMA_ARG_PGRN_DEMOTE_IDLE"));
++    add_opt(common_arg(
++        {"--pgrn-hot-cooldown"}, "N",
++        "policy epochs protecting a newly promoted HOT expert from demotion",
++        [](common_params & params, const std::string & value) {
++            params.pgrn_cooldown_epochs = parse_pgrn_uint(value, "PGRN HOT cooldown", 0, UINT64_MAX);
++        }
++    ).set_env("LLAMA_ARG_PGRN_HOT_COOLDOWN"));
++    add_opt(common_arg(
++        {"--pgrn-compact-slots"},
++        "execute single-token MoE layers directly from pinned compact PGRN arena slots (experimental, default: off)",
++        [](common_params & params) {
++            params.pgrn_compact_slots = true;
++        }
++    ).set_env("LLAMA_ARG_PGRN_COMPACT_SLOTS"));
+     add_opt(common_arg(
+         {"-dio", "--direct-io"},
+         {"-ndio", "--no-direct-io"},
+@@ -3807,6 +3939,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.speculative.draft.n_min = value;
+         }
+     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MIN"));
++    add_opt(common_arg(
++        {"--spec-draft-adaptive"},
++        "adapt the maximum draft length per response with a bounded EWMA controller (default: off)",
++        [](common_params & params) {
++            params.speculative.draft.adaptive = true;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SPEC_DRAFT_ADAPTIVE"));
+ 
+     add_opt(common_arg(
+         {"--spec-draft-p-split", "--draft-p-split"}, "P",
+@@ -3877,6 +4016,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
+         }
+     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
++    add_opt(common_arg(
++        {"--pgrn-ane-draft"}, "MANIFEST",
++        "fail-closed Core ML one-shot draft manifest; every candidate is verified by the target model",
++        [](common_params & params, const std::string & value) {
++            if (value.empty()) throw std::invalid_argument("ANE draft manifest path cannot be empty");
++            params.speculative.ane.manifest_path = value;
++            if (std::find(params.speculative.types.begin(), params.speculative.types.end(),
++                        COMMON_SPECULATIVE_TYPE_DRAFT_ANE) == params.speculative.types.end()) {
++                params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_ANE);
++            }
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PGRN_ANE_DRAFT"));
++    add_opt(common_arg(
++        {"--pgrn-ane-budget-mib"}, "N",
++        string_format("maximum admitted Core ML package and fixed-array bytes in MiB (default: %llu)",
++            (unsigned long long) (params.speculative.ane.budget_bytes / 1048576ULL)),
++        [](common_params & params, int value) {
++            if (value < 1 || value > 16384) throw std::invalid_argument("ANE budget must be between 1 and 16384 MiB");
++            params.speculative.ane.budget_bytes = static_cast<uint64_t>(value) * 1048576ULL;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PGRN_ANE_BUDGET_MIB"));
+     add_opt(common_arg(
+         {"--spec-ngram-mod-n-min"}, "N",
+         string_format("minimum number of ngram tokens to use for ngram-based speculative decoding (default: %d)", params.speculative.ngram_mod.n_min),
+diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
+index 3f91364c5..af84ff323 100644
+--- a/common/chat-auto-parser-generator.cpp
++++ b/common/chat-auto-parser-generator.cpp
+@@ -47,6 +47,8 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &
+     data.generation_prompt = common_chat_template_generation_prompt(tmpl, inputs);
+     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
+     data.preserved_tokens  = autoparser.preserved_tokens;
++    data.additional_stops.insert(data.additional_stops.end(),
++        autoparser.additional_stops.begin(), autoparser.additional_stops.end());
+ 
+     std::string parser_generation_prompt = data.generation_prompt;
+ 
+@@ -286,7 +288,13 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p,
+         // we only emit tool_close when we can actually see the closing marker. This prevents
+         // premature closing during partial parsing when we've seen e.g. "</" which could be
+         // either "</tool_call>" (end) or "<arg_key>" prefix that failed to match.
+-        func_parser = func_parser + p.tool_close(p.peek(p.literal(format.per_call_end)));
++        // Laguna (v4): the model may emit whitespace between the last </arg_value> and
++        // </tool_call> even though the template renders them tight. Tolerate optional
++        // leading space in the close lookahead so the tool call still closes.
++        auto close_peek = arguments.tolerate_intertag_whitespace
++                              ? p.peek(p.space() + p.literal(format.per_call_end))
++                              : p.peek(p.literal(format.per_call_end));
++        func_parser = func_parser + p.tool_close(close_peek);
+     } else {
+         func_parser = func_parser + p.tool_close(p.space());  // force this to process tool closing callbacks in mapper
+     }
+diff --git a/common/chat-auto-parser.h b/common/chat-auto-parser.h
+index d47b09dcf..074216b11 100644
+--- a/common/chat-auto-parser.h
++++ b/common/chat-auto-parser.h
+@@ -206,6 +206,7 @@ struct tool_arguments_analysis {
+     std::string value_prefix;  // e.g., "", "<arg_value>", ""
+     std::string value_suffix;  // e.g., "</param>", "</arg_value>", ""
+     std::string separator;     // e.g., "", "\n", ","
++    bool tolerate_intertag_whitespace = false; // Laguna: accept optional whitespace between arg tags
+ };
+ 
+ struct tool_id_analysis {
+@@ -388,6 +389,7 @@ struct autoparser {
+ 
+     // Preserved tokens for tokenizer (union of all non-empty markers)
+     std::vector<std::string> preserved_tokens;
++    std::vector<std::string> additional_stops;  // literal stop strings (e.g. Laguna </assistant>) caught however tokenized
+ 
+     autoparser() = default;
+ 
+diff --git a/common/chat-diff-analyzer.cpp b/common/chat-diff-analyzer.cpp
+index 127278dfb..7db1dcb0f 100644
+--- a/common/chat-diff-analyzer.cpp
++++ b/common/chat-diff-analyzer.cpp
+@@ -173,6 +173,26 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
+               LOG_DBG(ANSI_ORANGE "[Patch: JSON name/parameters tool instruction]\n" ANSI_RESET);
+           }
+       },
++      // Laguna (poolside) - the v4 chat template renders reasoning and tool-arg
++      // delimiters with formatting whitespace ("<think>\n", "</arg_value>\n") that
++      // the model does not emit, so the inferred delimiters carry a spurious
++      // newline and never match the model output. Trim to the bare tag. (v8
++      // renders without the whitespace, so this is a no-op there.)
++      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
++          if (tmpl.src.find("laguna_glm_thinking") != std::string::npos) {
++              analysis.reasoning.start              = trim_whitespace(analysis.reasoning.start);
++              analysis.reasoning.end                = trim_whitespace(analysis.reasoning.end);
++              analysis.tools.arguments.value_prefix = trim_whitespace(analysis.tools.arguments.value_prefix);
++              analysis.tools.arguments.value_suffix = trim_whitespace(analysis.tools.arguments.value_suffix);
++              analysis.tools.arguments.separator    = trim_whitespace(analysis.tools.arguments.separator);
++              analysis.tools.arguments.tolerate_intertag_whitespace = true;
++              // The CONTROL/eot </assistant> token only halts generation when emitted as the
++              // single token; after tool calls the model can spell it out as text tokens.
++              // A literal stop string catches it either way.
++              analysis.additional_stops.push_back("</assistant>");
++              LOG_DBG(ANSI_ORANGE "[Patch: Laguna]\n" ANSI_RESET);
++          }
++      },
+ 
+     });
+ 
+diff --git a/common/common.cpp b/common/common.cpp
+index 8f13217ab..987bc5c52 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -1559,9 +1559,20 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
+     mparams.main_gpu        = params.main_gpu;
+     mparams.split_mode      = params.split_mode;
+     mparams.tensor_split    = params.tensor_split;
+-    mparams.use_mmap        = params.use_mmap;
++    mparams.use_mmap        = params.pgrn_path.empty() && params.use_mmap;
+     mparams.use_direct_io   = params.use_direct_io;
+     mparams.use_mlock       = params.use_mlock;
++    mparams.pgrn_path           = params.pgrn_path.empty() ? nullptr : params.pgrn_path.c_str();
++    mparams.pgrn_cache_bytes    = params.pgrn_cache_bytes;
++    mparams.pgrn_headroom_bytes = params.pgrn_headroom_bytes;
++    mparams.pgrn_hot_percent = params.pgrn_hot_percent;
++    mparams.pgrn_promote_hits = params.pgrn_promote_hits;
++    mparams.pgrn_demote_idle_epochs = params.pgrn_demote_idle_epochs;
++    mparams.pgrn_cooldown_epochs = params.pgrn_cooldown_epochs;
++    mparams.pgrn_io_threads = params.pgrn_io_threads;
++    mparams.pgrn_predict_path = params.pgrn_predict_path.empty() ? nullptr : params.pgrn_predict_path.c_str();
++    mparams.pgrn_coupling_path = params.pgrn_coupling_path.empty() ? nullptr : params.pgrn_coupling_path.c_str();
++    mparams.pgrn_compact_slots = params.pgrn_compact_slots;
+     mparams.check_tensors   = params.check_tensors;
+     mparams.use_extra_bufts = !params.no_extra_bufts;
+     mparams.no_host         = params.no_host;
+diff --git a/common/common.h b/common/common.h
+index bffc1767a..cf7e43c0e 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -172,6 +172,7 @@ enum common_speculative_type {
+     COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
+     COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
+     COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
++    COMMON_SPECULATIVE_TYPE_DRAFT_ANE,     // bounded Core ML one-shot proposals, target-verified
+     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
+     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
+     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
+@@ -327,6 +328,8 @@ struct common_params_speculative_draft {
+     int32_t n_max = 3; // maximum number of tokens to draft during speculative decoding
+     int32_t n_min = 0; // minimum number of draft tokens to use for speculative decoding
+ 
++    bool adaptive = false; // response-level EWMA draft controller (default: off)
++
+     float p_split = 0.1f; // speculative decoding split probability
+     float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
+ 
+@@ -368,6 +371,14 @@ struct common_params_speculative_ngram_cache {
+     std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding
+ };
+ 
++struct common_params_speculative_ane {
++    std::string manifest_path;
++    std::string target_model_sha256;
++    std::string target_architecture;
++    int32_t target_n_vocab = 0;
++    uint64_t budget_bytes = 256ULL * 1024ULL * 1024ULL;
++};
++
+ struct common_params_speculative {
+     std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
+ 
+@@ -380,6 +391,7 @@ struct common_params_speculative {
+     common_params_speculative_ngram_map ngram_map_k4v;
+ 
+     common_params_speculative_ngram_cache ngram_cache;
++    common_params_speculative_ane ane;
+ 
+     bool has_dft() const {
+         return !draft.mparams.empty();
+@@ -575,6 +587,17 @@ struct common_params {
+     bool use_mmap          = true;  // enable mmap to use filesystem cache
+     bool use_direct_io     = false; // read from disk without buffering
+     bool use_mlock         = false; // use mlock to keep model in memory
++    std::string pgrn_path;          // optional PGRN expert store for bounded SSD streaming
++    uint64_t pgrn_cache_bytes    = 0; // hard resident expert-cache budget
++    uint64_t pgrn_headroom_bytes = 0; // RAM reserved for macOS and foreground applications
++    uint32_t pgrn_hot_percent = 0; // logical HOT share of the fixed cache; zero preserves pure Clox
++    uint32_t pgrn_promote_hits = 3;
++    uint64_t pgrn_demote_idle_epochs = 64;
++    uint64_t pgrn_cooldown_epochs = 16;
++    int32_t  pgrn_io_threads = 1; // parallel cold-read threads per layer stream; <=1 = serial
++    std::string pgrn_predict_path;   // optional PGCT1 hot-set table for speculative prefetch
++    std::string pgrn_coupling_path;  // optional PGCC1 coupled table; preferred over predict_path
++    bool pgrn_compact_slots = false; // default-off until numerical and real-model gates pass
+     bool verbose_prompt    = false; // print prompt tokens before generation
+     bool display_prompt    = true;  // print prompt before generation
+     bool no_kv_offload     = false; // disable KV offloading
+diff --git a/common/speculative.cpp b/common/speculative.cpp
+index 3cb08767b..e3044717b 100644
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -1,5 +1,9 @@
+ #include "speculative.h"
+ 
++#if defined(__APPLE__)
++#include "../src/peregrine_ane.h"
++#endif
++
+ #include "common.h"
+ #include "ggml.h"
+ #include "llama.h"
+@@ -28,12 +32,26 @@
+ #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
+ #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
+ 
++common_speculative_kernel_scope::common_speculative_kernel_scope(bool active)
++    : active(active) {
++    if (active) {
++        ggml_speculation_scope_enter();
++    }
++}
++
++common_speculative_kernel_scope::~common_speculative_kernel_scope() {
++    if (active) {
++        ggml_speculation_scope_leave();
++    }
++}
++
+ const std::map<std::string, common_speculative_type> common_speculative_type_from_name_map = {
+     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
+     {"draft-simple",  COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE},
+     {"draft-eagle3",  COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3},
+     {"draft-mtp",     COMMON_SPECULATIVE_TYPE_DRAFT_MTP},
+     {"draft-dflash",  COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH},
++    {"draft-ane",     COMMON_SPECULATIVE_TYPE_DRAFT_ANE},
+     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
+     {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
+     {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
+@@ -178,6 +196,96 @@ struct common_speculative_impl {
+     virtual bool need_embd_nextn() const { return false; }
+ };
+ 
++struct common_speculative_impl_draft_ane : public common_speculative_impl {
++    common_params_speculative_ane params;
++#if defined(__APPLE__)
++    pgr_ane * adapter = nullptr;
++    pgr_ane_info info{};
++#endif
++    std::vector<int32_t> input;
++
++    common_speculative_impl_draft_ane(const common_params_speculative & params, uint32_t n_seq)
++        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_ANE, n_seq), params(params.ane) {
++#if defined(__APPLE__)
++        if (this->params.manifest_path.empty() || this->params.target_model_sha256.size() != 64 ||
++                this->params.target_architecture.empty() || this->params.target_n_vocab <= 0 ||
++                this->params.budget_bytes == 0) {
++            throw std::runtime_error("ANE draft identity or budget is unavailable");
++        }
++        pgr_ane_manifest_params manifest_params{};
++        manifest_params.manifest_path = this->params.manifest_path.c_str();
++        manifest_params.expected_model_sha256 = this->params.target_model_sha256.c_str();
++        manifest_params.expected_architecture = this->params.target_architecture.c_str();
++        manifest_params.expected_vocabulary = static_cast<uint32_t>(this->params.target_n_vocab);
++        manifest_params.allocation_budget_bytes = this->params.budget_bytes;
++        char error[256] = {};
++        adapter = pgr_ane_new_from_manifest(&manifest_params, &info, error, sizeof(error));
++        if (!adapter) throw std::runtime_error(std::string("ANE draft admission failed: ") + error);
++        input.resize(info.input_count, info.pad_token);
++        SPC_INF("ANE one-shot draft admitted: input=%zu candidates=%zu budget=%.2f MiB\n",
++                info.input_count, info.candidate_count, this->params.budget_bytes / 1048576.0);
++#else
++        GGML_UNUSED(params);
++        GGML_UNUSED(n_seq);
++        throw std::runtime_error("ANE draft requires macOS Core ML");
++#endif
++    }
++
++    ~common_speculative_impl_draft_ane() override {
++#if defined(__APPLE__)
++        pgr_ane_free(adapter);
++#endif
++    }
++
++    void begin(llama_seq_id, const llama_tokens &) override {}
++    bool process(const llama_batch &) override { return true; }
++
++    void draft(common_speculative_draft_params_vec & dparams) override {
++#if defined(__APPLE__)
++        for (auto & dp : dparams) {
++            if (!dp.drafting || !dp.prompt || !dp.result) continue;
++            std::fill(input.begin(), input.end(), info.pad_token);
++            const size_t history_count = dp.prompt->size();
++            const bool append_last = history_count == 0 || dp.prompt->back() != dp.id_last;
++            const size_t total = history_count + (append_last ? 1 : 0);
++            const size_t keep = std::min(total, input.size());
++            const size_t first = total - keep;
++            for (size_t i = 0; i < keep; ++i) {
++                const size_t source = first + i;
++                input[input.size() - keep + i] = source < history_count ? (*dp.prompt)[source] : dp.id_last;
++            }
++            const int32_t * candidates = nullptr;
++            size_t candidate_count = 0;
++            char error[256] = {};
++            if (pgr_ane_propose(adapter, input.data(), input.size(), &candidates,
++                        &candidate_count, error, sizeof(error)) != 0) {
++                SPC_WRN("ANE proposal failed closed: %s\n", error);
++                continue;
++            }
++            const size_t limit = std::min(candidate_count,
++                    static_cast<size_t>(dp.n_max > 0 ? dp.n_max : candidate_count));
++            bool valid = true;
++            for (size_t i = 0; i < limit; ++i) {
++                if (candidates[i] < 0 || candidates[i] >= this->params.target_n_vocab) {
++                    valid = false;
++                    break;
++                }
++            }
++            if (!valid) {
++                SPC_WRN("%s", "ANE proposal contained an out-of-vocabulary token; discarded\n");
++                continue;
++            }
++            dp.result->insert(dp.result->end(), candidates, candidates + limit);
++        }
++#else
++        GGML_UNUSED(dparams);
++#endif
++    }
++
++    void accept(llama_seq_id, uint16_t, bool) override {}
++    bool need_embd() const override { return false; }
++};
++
+ struct common_speculative_impl_draft_simple : public common_speculative_impl {
+     common_params_speculative_draft params;
+ 
+@@ -920,6 +1028,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+ 
+     const int32_t * target_layer_ids   = nullptr; // model_dft's extract layer indices
+     uint32_t        target_layer_ids_n = 0;
++    int32_t         n_layer_tgt        = 0;       // extract id == n_layer_tgt -> pre-final-norm state (nextn)
+ 
+     // scratch buffer for concatenated target features [n_tokens, n_embd_enc]
+     std::vector<float> features_buf;
+@@ -977,13 +1086,30 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+             s.reset(common_sampler_init(model_dft, sparams));
+         }
+ 
+-        // turn on extraction of the target layers' input embeddings
++        // turn on extraction of the target layers' input embeddings; an id equal
++        // to the target's layer count means the pre-final-norm hidden state,
++        // which is captured through the unmasked nextn path instead
++        n_layer_tgt = llama_model_n_layer(model_tgt);
+         for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+-            llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k], true);
++            if (target_layer_ids[k] == n_layer_tgt) {
++                llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
++            } else {
++                llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k], true);
++            }
+         }
+ 
+         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
+-        llama_set_causal_attn(ctx_dft, false); // DFlash needs non-causal attention
++
++        // generic DFlash drafts with non-causal block attention; Laguna drafters
++        // are trained with a causal noise block
++        bool causal = false;
++        {
++            char buf[32] = {};
++            if (llama_model_meta_val_str(model_dft, "dflash.decoder_arch", buf, sizeof(buf)) >= 0) {
++                causal = strcmp(buf, "laguna") == 0;
++            }
++        }
++        llama_set_causal_attn(ctx_dft, causal);
+     }
+ 
+     ~common_speculative_impl_draft_dflash() override {
+@@ -1052,7 +1178,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+                 // gather this chunk's target features, interleaved by extract layer
+                 features_buf.resize((size_t) n_chunk * n_embd_enc);
+                 for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+-                    const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
++                    const float * layer = target_layer_ids[k] == n_layer_tgt
++                        ? llama_get_embeddings_nextn(ctx_tgt)
++                        : llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
+                     if (!layer) {
+                         GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
+                     }
+@@ -1063,6 +1191,29 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+                     }
+                 }
+ 
++                // sanitize non-finite feature values before fusing. on Metal, the
++                // mat-mat kernels stage f32 activations as f16 for the simdgroup
++                // multiply; Laguna's massive-activation rows (attention-sink tokens,
++                // |x| ~ 1e6 in the pre-final-norm residual) overflow f16 -> inf/nan.
++                // one poisoned row would otherwise NaN the whole drafter KV cache.
++                {
++                    size_t n_bad = 0;
++                    for (auto & v : features_buf) {
++                        if (!std::isfinite(v)) {
++                            v = v != v ? 0.0f : (v > 0.0f ? 65504.0f : -65504.0f);
++                            n_bad++;
++                        }
++                    }
++                    if (n_bad > 0) {
++                        static bool warned = false;
++                        if (!warned) {
++                            LOG_WRN("%s: sanitized %zu non-finite target feature values (f16 overflow on massive activations); "
++                                    "draft quality may degrade slightly on affected rows\n", __func__, n_bad);
++                            warned = true;
++                        }
++                    }
++                }
++
+                 // fuse extracted features through DFlash encoder
+                 llama_batch enc_batch = {
+                     /*.n_tokens =*/ n_chunk,
+@@ -1233,6 +1384,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+     // Row 0 corresponds to the sampled token, row N to the Nth accepted draft token.
+     std::vector<std::vector<float>> verify_h;
+     std::vector<int32_t> verify_h_rows;
++    std::vector<bool> spec_live;
+ 
+     std::vector<int>                i_last;
+     std::vector<std::vector<float>> chain_h;
+@@ -1314,6 +1466,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+ 
+         verify_h.assign(n_seq, {});
+         verify_h_rows.assign(n_seq, 0);
++        spec_live.assign(n_seq, false);
+     }
+ 
+     ~common_speculative_impl_draft_mtp() override {
+@@ -1337,6 +1490,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+     }
+ 
+     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
++        spec_live.at(seq_id) = false;
+         const int32_t N = (int32_t) prompt.size();
+         if (N <= 0) {
+             return;
+@@ -1365,6 +1519,15 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+         }
+ 
+         const int32_t n_tokens = batch_in.n_tokens;
++        bool is_speculative_verify = false;
++        for (int k = 0; k < n_tokens; ++k) {
++            GGML_ASSERT(batch_in.n_seq_id[k] == 1);
++            const llama_seq_id seq_id = batch_in.seq_id[k][0];
++            if (seq_id >= 0 && seq_id < (llama_seq_id) spec_live.size() && spec_live[seq_id]) {
++                is_speculative_verify = true;
++                break;
++            }
++        }
+ 
+         // remember the frist and last batch index for each sequence
+         std::fill(i_batch_beg.begin(), i_batch_beg.end(), -1);
+@@ -1434,6 +1597,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+                     llama_set_nextn_layer_offset(ctx_dft, head);
+                 }
+ 
++                common_speculative_kernel_scope kernel_scope(is_speculative_verify);
+                 const int32_t rc = llama_decode(ctx_dft, batch);
+                 if (rc != 0) {
+                     SPC_ERR("llama_decode(ctx_dft) head=%d failed rc=%d (pos=%d)\n",
+@@ -1492,6 +1656,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+ 
+             n_drafting++;
+             drafting[seq_id] = true;
++            spec_live[seq_id] = true;
+             common_sampler_reset(smpls[seq_id].get());
+ 
+             common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
+@@ -1523,6 +1688,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+                 llama_set_nextn_layer_offset(ctx_dft, i);
+             }
+ 
++            common_speculative_kernel_scope kernel_scope(true);
+             int ret = llama_decode(ctx_dft, batch);
+             if (ret != 0) {
+                 SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
+@@ -2145,6 +2311,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
+         case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
+         case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
+         case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:  return "draft-dflash";
++        case COMMON_SPECULATIVE_TYPE_DRAFT_ANE:     return "draft-ane";
+         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
+         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram-map-k";
+         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram-map-k4v";
+@@ -2198,6 +2365,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
+             case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
+             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
+             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
++            case COMMON_SPECULATIVE_TYPE_DRAFT_ANE:
+                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
+                 break;
+             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
+@@ -2342,6 +2510,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+         bool has_draft_eagle3 = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3)) && params.draft.ctx_dft != nullptr;
+         bool has_draft_mtp    = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP))    && params.draft.ctx_dft != nullptr;
+         bool has_draft_dflash = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)) && params.draft.ctx_dft != nullptr;
++        bool has_draft_ane    = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_ANE)) && !params.ane.manifest_path.empty();
+ 
+ 
+ 
+@@ -2352,7 +2521,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+         bool has_ngram_mod     = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MOD));
+ 
+         // when adding a new type - update here the logic above
+-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 10);
++        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 11);
+ 
+         // this list here defines the priority of the speculators
+         // the one with highest priority are listed first
+@@ -2385,6 +2554,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+         if (has_draft_dflash) {
+             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params));
+         }
++        if (has_draft_ane) {
++            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_ANE, params));
++        }
+     }
+ 
+     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
+@@ -2409,6 +2581,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+                 impls.push_back(std::make_unique<common_speculative_impl_draft_dflash>(config.params, n_seq));
+                 break;
+             }
++            case COMMON_SPECULATIVE_TYPE_DRAFT_ANE: {
++                impls.push_back(std::make_unique<common_speculative_impl_draft_ane>(config.params, n_seq));
++                break;
++            }
+             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
+                 common_ngram_map ngram_map = get_common_ngram_map(config.type, config.params.ngram_simple);
+ 
+@@ -2726,3 +2902,26 @@ void common_speculative_print_stats(const common_speculative * spec) {
+                 str_perf.c_str());
+     }
+ }
++void common_speculative_adaptive_draft::reset() {
++    current = n_start;
++    ewma = -1.0f;
++    last_used = 0;
++    last_next = 0;
++    last_acceptance = -1.0f;
++}
++
++void common_speculative_adaptive_draft::observe(int32_t generated, int32_t accepted) {
++    GGML_ASSERT(generated > 0);
++    GGML_ASSERT(accepted >= 0 && accepted <= generated);
++
++    last_used = current;
++    last_acceptance = (float) accepted / (float) generated;
++    ewma = ewma < 0.0f ? last_acceptance : alpha * last_acceptance + (1.0f - alpha) * ewma;
++
++    if (ewma < 0.70f) {
++        current = std::max(n_min, current - 1);
++    } else if (ewma > 0.85f) {
++        current = std::min(n_max, current + 1);
++    }
++    last_next = current;
++}
+diff --git a/common/speculative.h b/common/speculative.h
+index 062bf2093..5e1e5f84c 100644
+--- a/common/speculative.h
++++ b/common/speculative.h
+@@ -5,6 +5,38 @@
+ 
+ struct common_speculative;
+ 
++// Response-level adaptive draft controller. The state is owned by a server
++// slot, survives individual requests, and is reset when the server session
++// starts. Fixed speculative decoding never constructs or consults it.
++struct common_speculative_adaptive_draft {
++    static constexpr int32_t n_min = 4;
++    static constexpr int32_t n_max = 12;
++    static constexpr int32_t n_start = 8;
++    static constexpr float alpha = 0.25f;
++
++    int32_t current = n_start;
++    float ewma = -1.0f;
++
++    int32_t last_used = 0;
++    int32_t last_next = 0;
++    float last_acceptance = -1.0f;
++
++    void reset();
++    void observe(int32_t generated, int32_t accepted);
++};
++
++class common_speculative_kernel_scope {
++public:
++    explicit common_speculative_kernel_scope(bool active);
++    ~common_speculative_kernel_scope();
++
++    common_speculative_kernel_scope(const common_speculative_kernel_scope &) = delete;
++    common_speculative_kernel_scope & operator=(const common_speculative_kernel_scope &) = delete;
++
++private:
++    bool active;
++};
++
+ // comma separated list the provided types
+ std::string common_speculative_type_name_str(const std::vector<enum common_speculative_type> & types);
+ 
+diff --git a/conversion/__init__.py b/conversion/__init__.py
+index 02102fac8..37fe56d6c 100644
+--- a/conversion/__init__.py
++++ b/conversion/__init__.py
+@@ -18,6 +18,7 @@ __all__ = [
+ 
+ TEXT_MODEL_MAP: dict[str, str] = {
+     "AfmoeForCausalLM": "afmoe",
++    "LagunaForCausalLM": "laguna",
+     "ApertusForCausalLM": "llama",
+     "ArceeForCausalLM": "llama",
+     "ArcticForCausalLM": "arctic",
+@@ -51,6 +52,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
+     "DeepseekV3ForCausalLM": "deepseek",
+     "DeepseekV32ForCausalLM": "deepseek",
+     "DFlashDraftModel": "qwen",
++    "DFlashLagunaForCausalLM": "laguna",
+     "DeepseekV4ForCausalLM": "deepseek",
+     "DistilBertForMaskedLM": "bert",
+     "DistilBertForSequenceClassification": "bert",
+diff --git a/conversion/base.py b/conversion/base.py
+index 1b85ef0a1..051b8b4e5 100644
+--- a/conversion/base.py
++++ b/conversion/base.py
+@@ -1682,6 +1682,9 @@ class TextModel(ModelBase):
+         if chkhsh == "9dcf830ee9990cdbf78cc523a5f7bd9ad8f3f9890c2d3581d2785ad10f07049d":
+             # ref: https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base
+             res = "mellum2"
++        if chkhsh == "972da7b59cec44d1f0a490a86c96df53859e486e481563e5dddac155013d87ac":
++            # ref: https://huggingface.co/poolside/Laguna-XS.2
++            res = "laguna"
+ 
+         if res is None:
+             logger.warning("\n")
+diff --git a/conversion/qwen.py b/conversion/qwen.py
+index 82d42fcc1..9529d7b33 100644
+--- a/conversion/qwen.py
++++ b/conversion/qwen.py
+@@ -651,10 +651,11 @@ class DFlashModel(Qwen3Model):
+     def set_gguf_parameters(self):
+         super().set_gguf_parameters()
+ 
+-        block_size = self.hparams.get("block_size", 16)
+-        self.gguf_writer.add_block_size(block_size)
+         dflash_config = self.hparams.get("dflash_config", {})
+ 
++        block_size = dflash_config.get("block_size", self.hparams.get("block_size", 16))
++        self.gguf_writer.add_block_size(block_size)
++
+         target_layer_ids = dflash_config.get("target_layer_ids", [])
+         if target_layer_ids:
+             extract_layer_ids = [i + 1 for i in target_layer_ids]
+diff --git a/convert_hf_to_gguf_update.py b/convert_hf_to_gguf_update.py
+index 91c006278..e5d3196ef 100755
+--- a/convert_hf_to_gguf_update.py
++++ b/convert_hf_to_gguf_update.py
+@@ -162,6 +162,7 @@ models = [
+     {"name": "granite-embed-multi-97m", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ibm-granite/granite-embedding-97m-multilingual-r2", },
+     {"name": "granite-embed-multi-311m", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2", },
+     {"name": "mellum2",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base"},
++    {"name": "laguna",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/poolside/Laguna-XS.2", },
+ ]
+ 
+ # some models are known to be broken upstream, so we will skip them as exceptions
+diff --git a/docs/speculative.md b/docs/speculative.md
+index 4100b92f8..0425fcb3e 100644
+--- a/docs/speculative.md
++++ b/docs/speculative.md
+@@ -74,6 +74,20 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DFlash.gguf \
+ 
+ `--spec-draft-n-max` is clamped to the draft model's trained block size.
+ 
++Laguna DFlash drafters (for example `poolside/Laguna-XS-2.1-DFlash` for
++`poolside/Laguna-XS-2.1`) are supported through the same flow. Their GGUF is marked
++with `dflash.decoder_arch = laguna`, which switches the draft layers to the Laguna
++decoder contract (softplus attention gate, per-aux feature norms, context K/V through
++the input layernorm, causal noise block):
++
++```bash
++python convert_hf_to_gguf.py poolside/Laguna-XS-2.1-DFlash \
++    --target-model-dir poolside/Laguna-XS-2.1 --outtype bf16 --outfile Laguna-XS-2.1-DFlash.gguf
++
++llama-server -m Laguna-XS-2.1.gguf -md Laguna-XS-2.1-DFlash.gguf \
++    --spec-type draft-dflash --spec-draft-n-max 15 -fa on --jinja
++```
++
+ See:
+ 
+ - #22105
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+index 92ba65222..3f03a5e88 100644
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -365,6 +365,12 @@ extern "C" {
+     // get ggml_status name string
+     GGML_API const char * ggml_status_to_string(enum ggml_status status);
+ 
++    // Depth-counted scope used by backends to identify active speculative
++    // draft/verify forwards without changing prefill or ordinary decode.
++    GGML_API void ggml_speculation_scope_enter(void);
++    GGML_API void ggml_speculation_scope_leave(void);
++    GGML_API bool ggml_speculation_scope_active(void);
++
+     // ieee 754-2008 half-precision float16
+     // todo: make this not an integral type
+     typedef uint16_t ggml_fp16_t;
+diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
+index 00ffacf29..c10c50253 100644
+--- a/ggml/src/ggml-cuda/fattn.cu
++++ b/ggml/src/ggml-cuda/fattn.cu
+@@ -89,17 +89,17 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
+         }
+     }
+ 
+-    if (use_gqa_opt && gqa_ratio > 4) {
++    if (use_gqa_opt && gqa_ratio % 8 == 0) {
+         ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
+         return;
+     }
+ 
+-    if (use_gqa_opt && gqa_ratio > 2) {
++    if (use_gqa_opt && gqa_ratio % 4 == 0) {
+         ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 4>(ctx, dst);
+         return;
+     }
+ 
+-    if (use_gqa_opt && gqa_ratio > 1) {
++    if (use_gqa_opt && gqa_ratio % 2 == 0) {
+         ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 2>(ctx, dst);
+         return;
+     }
+diff --git a/ggml/src/ggml-metal/ggml-metal-context.m b/ggml/src/ggml-metal/ggml-metal-context.m
+index 32d97cd5d..1ccc93209 100644
+--- a/ggml/src/ggml-metal/ggml-metal-context.m
++++ b/ggml/src/ggml-metal/ggml-metal-context.m
+@@ -11,6 +11,8 @@
+ 
+ #import <Metal/Metal.h>
+ 
++#include <stdatomic.h>
++
+ #undef MIN
+ #undef MAX
+ #define MIN(a, b) ((a) < (b) ? (a) : (b))
+@@ -19,6 +21,8 @@
+ // max number of MTLCommandBuffer used to submit a graph for processing
+ #define GGML_METAL_MAX_COMMAND_BUFFERS 8
+ 
++static atomic_uint_fast64_t pgr_profile_graph_sequence = 0;
++
+ struct ggml_metal_command_buffer {
+     id<MTLCommandBuffer> obj;
+ };
+@@ -58,6 +62,12 @@ struct ggml_metal {
+     int n_nodes_1;      // remaining number of nodes submitted by the n_cb threads
+     int n_nodes_per_cb;
+ 
++    uint64_t profile_graph_id;
++    atomic_uint_fast64_t profile_commit_us;
++    int64_t profile_query_tokens;
++    bool profile_cpu_enabled;
++    bool profile_cpu_pending;
++
+     struct ggml_cgraph * gf;
+ 
+     // the callback given to the thread pool
+@@ -237,12 +247,23 @@ const char * ggml_metal_get_name(ggml_metal_t ctx) {
+ }
+ 
+ void ggml_metal_synchronize(ggml_metal_t ctx) {
++    const int64_t pgr_wait_started_us = ctx->profile_cpu_pending ? ggml_time_us() : 0;
+     // wait for any backend operations to finish
+     if (ctx->cmd_buf_last) {
+         [ctx->cmd_buf_last waitUntilCompleted];
+         ctx->cmd_buf_last = nil;
+     }
+ 
++    if (ctx->profile_cpu_pending) {
++        const int64_t wait_us = ggml_time_us() - pgr_wait_started_us;
++        fprintf(stderr,
++                "PGR_METAL_CPU_PROFILE {\"schema\":1,\"kind\":\"wait\",\"graph_id\":%llu,\"wait_us\":%lld}\n",
++                (unsigned long long) ctx->profile_graph_id,
++                (long long) wait_us);
++        fflush(stderr);
++        ctx->profile_cpu_pending = false;
++    }
++
+     // check status of all command buffers
+     {
+         const int n_cb = ctx->n_cb;
+@@ -441,6 +462,20 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
+         return GGML_STATUS_FAILED;
+     }
+ 
++    const char * pgr_cpu_profile = getenv("PGR_METAL_CPU_PROFILE");
++    ctx->profile_cpu_enabled = pgr_cpu_profile != NULL && atoi(pgr_cpu_profile) != 0;
++    const int64_t pgr_graph_started_us = ctx->profile_cpu_enabled ? ggml_time_us() : 0;
++    atomic_store_explicit(&ctx->profile_commit_us, 0, memory_order_relaxed);
++    ctx->profile_query_tokens = 0;
++    if (ctx->profile_cpu_enabled) {
++        for (int i = 0; i < gf->n_nodes; ++i) {
++            const struct ggml_tensor * node = gf->nodes[i];
++            if (node->op == GGML_OP_FLASH_ATTN_EXT && node->src[0] != NULL) {
++                ctx->profile_query_tokens = MAX(ctx->profile_query_tokens, node->src[0]->ne[1]);
++            }
++        }
++    }
++
+     // number of nodes encoded by the main thread (empirically determined)
+     const int n_main = MAX(64, 0.1*gf->n_nodes);
+ 
+@@ -459,6 +494,8 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
+ 
+     @autoreleasepool {
+         ctx->gf = gf;
++        ctx->profile_graph_id = atomic_fetch_add_explicit(
++            &pgr_profile_graph_sequence, 1, memory_order_relaxed) + 1;
+ 
+         ctx->n_nodes_0 = MIN(n_main, gf->n_nodes);
+         ctx->n_nodes_1 = gf->n_nodes - ctx->n_nodes_0;
+@@ -549,6 +586,19 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
+ 
+         dispatch_apply(n_cb, ctx->d_queue, ctx->encode_async);
+ 
++        if (ctx->profile_cpu_enabled) {
++            const int64_t encode_submit_us = ggml_time_us() - pgr_graph_started_us;
++            fprintf(stderr,
++                    "PGR_METAL_CPU_PROFILE {\"schema\":1,\"kind\":\"graph\",\"graph_id\":%llu,"
++                    "\"query_tokens\":%lld,\"encode_submit_us\":%lld,\"commit_us\":%llu}\n",
++                    (unsigned long long) ctx->profile_graph_id,
++                    (long long) ctx->profile_query_tokens,
++                    (long long) encode_submit_us,
++                    (unsigned long long) atomic_load_explicit(&ctx->profile_commit_us, memory_order_relaxed));
++            fflush(stderr);
++            ctx->profile_cpu_pending = true;
++        }
++
+         // for debugging: block until graph is computed
+         //[ctx->cmd_buf_last waitUntilCompleted];
+ 
+@@ -702,7 +752,8 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
+             ctx->use_concurrency,
+             ctx->capture_compute,
+             ctx->debug_graph,
+-            ctx->debug_fusion);
++            ctx->debug_fusion,
++            ctx->profile_graph_id);
+ 
+         for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
+             const int res = ggml_metal_op_encode(ctx_op, idx);
+@@ -716,7 +767,14 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
+         ggml_metal_op_free(ctx_op);
+ 
+         if (cb_idx < 2 || ctx->abort_callback == NULL) {
++            const int64_t pgr_commit_started_us = ctx->profile_cpu_enabled ? ggml_time_us() : 0;
+             [cmd_buf commit];
++            if (ctx->profile_cpu_enabled) {
++                atomic_fetch_add_explicit(
++                    &ctx->profile_commit_us,
++                    (uint64_t) (ggml_time_us() - pgr_commit_started_us),
++                    memory_order_relaxed);
++            }
+         }
+     });
+ }
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
+index b36fa8110..f363ec95e 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.h
++++ b/ggml/src/ggml-metal/ggml-metal-device.h
+@@ -72,9 +72,27 @@ typedef void * ggml_metal_cmd_buf_t;
+ 
+ typedef struct ggml_metal_encoder * ggml_metal_encoder_t;
+ 
+-ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, bool concurrent);
++enum ggml_metal_profile_category {
++    GGML_METAL_PROFILE_ATTENTION = 0,
++    GGML_METAL_PROFILE_EXPERT_GEMM,
++    GGML_METAL_PROFILE_DENSE_GEMM,
++    GGML_METAL_PROFILE_NORMALIZATION,
++    GGML_METAL_PROFILE_ROPE,
++    GGML_METAL_PROFILE_DATA_MOVEMENT,
++    GGML_METAL_PROFILE_ELEMENTWISE,
++    GGML_METAL_PROFILE_OTHER,
++    GGML_METAL_PROFILE_CATEGORY_COUNT,
++};
++
++ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, bool concurrent, uint64_t graph_id);
+ void ggml_metal_encoder_free(ggml_metal_encoder_t encoder);
+ 
++void ggml_metal_encoder_profile_op(
++        ggml_metal_encoder_t encoder,
++        enum ggml_metal_profile_category category,
++        int64_t attention_q_tokens,
++        int64_t attention_kv_tokens);
++
+ void ggml_metal_encoder_debug_group_push(ggml_metal_encoder_t encoder, const char * name);
+ void ggml_metal_encoder_debug_group_pop (ggml_metal_encoder_t encoder);
+ 
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index 80e47f2c2..bb303d91b 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -456,28 +456,213 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
+ // MTLComputeCommandEncoder wrapper
+ //
+ 
++struct ggml_metal_profile_entry {
++    uint8_t category;
++    NSUInteger dispatches;
++};
++
+ struct ggml_metal_encoder {
+     id<MTLComputeCommandEncoder> obj;
++    id<MTLCommandBuffer> cmd_buf;
++    id<MTLCounterSampleBuffer> sample_buf;
++    struct ggml_metal_profile_entry * entries;
++    NSUInteger entry_capacity;
++    NSUInteger entry_count;
++    NSUInteger total_dispatches;
++    enum ggml_metal_profile_category category;
++    uint64_t graph_id;
++    int64_t max_attention_q_tokens;
++    int64_t max_attention_kv_tokens;
++    bool profile_enabled;
++    bool profile_coarse;
++    bool profile_overflow;
++    bool concurrent;
+ };
+ 
+-ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, bool concurrent) {
++static id<MTLCounterSet> ggml_metal_profile_timestamp_set(id<MTLDevice> device) {
++    for (id<MTLCounterSet> counter_set in [device counterSets]) {
++        if ([[counter_set name] isEqualToString:MTLCommonCounterSetTimestamp]) {
++            return counter_set;
++        }
++    }
++    return nil;
++}
++
++ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, bool concurrent, uint64_t graph_id) {
+     ggml_metal_encoder_t res = calloc(1, sizeof(struct ggml_metal_encoder));
+ 
+     id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
+ 
+-    if (concurrent) {
+-        res->obj = [cmd_buf computeCommandEncoderWithDispatchType: MTLDispatchTypeConcurrent];
+-    } else {
+-        res->obj = [cmd_buf computeCommandEncoder];
++    res->cmd_buf = cmd_buf;
++    res->graph_id = graph_id;
++    res->category = GGML_METAL_PROFILE_OTHER;
++    res->concurrent = concurrent;
++
++    const char * profile = getenv("PGR_METAL_PROFILE");
++    if (profile != NULL && atoi(profile) != 0) {
++        const char * coarse = getenv("PGR_METAL_PROFILE_COARSE");
++        res->profile_coarse = coarse != NULL && atoi(coarse) != 0;
++        id<MTLDevice> device = [cmd_buf device];
++        id<MTLCounterSet> timestamp_set = ggml_metal_profile_timestamp_set(device);
++        if ([device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary] && timestamp_set != nil) {
++            // Apple Silicon exposes at most 4096 timestamp samples here. Each
++            // measured compute pass consumes a start and an end sample.
++            const NSUInteger max_entries = 2048;
++            MTLCounterSampleBufferDescriptor * descriptor = [MTLCounterSampleBufferDescriptor new];
++            descriptor.counterSet = timestamp_set;
++            descriptor.label = @"Peregrine S7 compute-pass timestamps";
++            descriptor.storageMode = MTLStorageModeShared;
++            descriptor.sampleCount = 2 * max_entries;
++
++            NSError * error = nil;
++            res->sample_buf = [device newCounterSampleBufferWithDescriptor:descriptor error:&error];
++            [descriptor release];
++            if (res->sample_buf != nil) {
++                res->entries = calloc(max_entries, sizeof(struct ggml_metal_profile_entry));
++                res->entry_capacity = max_entries;
++                res->profile_enabled = res->entries != NULL;
++            } else {
++                GGML_LOG_ERROR("PGR_METAL_PROFILE_ERROR counter buffer: %s\n", [[error localizedDescription] UTF8String]);
++            }
++        } else {
++            GGML_LOG_ERROR("PGR_METAL_PROFILE_ERROR compute-pass timestamp counters unsupported\n");
++        }
+     }
+ 
+-    [res->obj retain];
++    if (!res->profile_enabled) {
++        if (concurrent) {
++            res->obj = [cmd_buf computeCommandEncoderWithDispatchType: MTLDispatchTypeConcurrent];
++        } else {
++            res->obj = [cmd_buf computeCommandEncoder];
++        }
++        [res->obj retain];
++    }
+ 
+     return res;
+ }
+ 
++void ggml_metal_encoder_profile_op(
++        ggml_metal_encoder_t encoder,
++        enum ggml_metal_profile_category category,
++        int64_t attention_q_tokens,
++        int64_t attention_kv_tokens) {
++    if (encoder->profile_coarse && category != GGML_METAL_PROFILE_ATTENTION) {
++        category = GGML_METAL_PROFILE_OTHER;
++    }
++    encoder->max_attention_q_tokens = MAX(encoder->max_attention_q_tokens, attention_q_tokens);
++    encoder->max_attention_kv_tokens = MAX(encoder->max_attention_kv_tokens, attention_kv_tokens);
++
++    if (!encoder->profile_enabled) {
++        encoder->category = category;
++        return;
++    }
++
++    // Consecutive ggml operations in the same category can share a measured
++    // compute pass. This preserves full dispatch coverage while avoiding a
++    // stage boundary that carries no classification information.
++    if (encoder->obj != nil && encoder->category == category) {
++        return;
++    }
++
++    encoder->category = category;
++
++    if (encoder->obj != nil) {
++        [encoder->obj endEncoding];
++        [encoder->obj release];
++        encoder->obj = nil;
++    }
++
++    if (encoder->entry_count >= encoder->entry_capacity) {
++        encoder->profile_overflow = true;
++        if (encoder->concurrent) {
++            encoder->obj = [encoder->cmd_buf computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
++        } else {
++            encoder->obj = [encoder->cmd_buf computeCommandEncoder];
++        }
++        [encoder->obj retain];
++        return;
++    }
++
++    const NSUInteger entry = encoder->entry_count++;
++    encoder->entries[entry].category = category;
++    MTLComputePassDescriptor * descriptor = [MTLComputePassDescriptor computePassDescriptor];
++    descriptor.dispatchType = encoder->concurrent ? MTLDispatchTypeConcurrent : MTLDispatchTypeSerial;
++    MTLComputePassSampleBufferAttachmentDescriptor * attachment = descriptor.sampleBufferAttachments[0];
++    attachment.sampleBuffer = encoder->sample_buf;
++    attachment.startOfEncoderSampleIndex = 2 * entry;
++    attachment.endOfEncoderSampleIndex = 2 * entry + 1;
++    encoder->obj = [encoder->cmd_buf computeCommandEncoderWithDescriptor:descriptor];
++    [encoder->obj retain];
++}
++
+ void ggml_metal_encoder_free(ggml_metal_encoder_t encoder) {
++    if (encoder->profile_enabled && encoder->entry_count > 0) {
++        const NSUInteger entry_count = encoder->entry_count;
++        const NSUInteger total_dispatches = encoder->total_dispatches;
++        const NSUInteger sample_count = 2 * entry_count;
++        const uint64_t graph_id = encoder->graph_id;
++        const int64_t max_q = encoder->max_attention_q_tokens;
++        const int64_t max_kv = encoder->max_attention_kv_tokens;
++        const bool overflow = encoder->profile_overflow;
++        id<MTLCounterSampleBuffer> sample_buf = encoder->sample_buf;
++        NSData * entries = [NSData dataWithBytes:encoder->entries length:entry_count * sizeof(struct ggml_metal_profile_entry)];
++
++        [encoder->cmd_buf addCompletedHandler:^(id<MTLCommandBuffer> command_buffer) {
++            NSData * resolved = [sample_buf resolveCounterRange:NSMakeRange(0, sample_count)];
++            const MTLCounterResultTimestamp * timestamps = [resolved bytes];
++            const struct ggml_metal_profile_entry * profile_entries = [entries bytes];
++            uint64_t category_ticks[GGML_METAL_PROFILE_CATEGORY_COUNT] = { 0 };
++            NSUInteger counter_errors = 0;
++            NSUInteger sampled_dispatches = 0;
++
++            if (resolved == nil || [resolved length] < sample_count * sizeof(MTLCounterResultTimestamp)) {
++                counter_errors = total_dispatches;
++            } else {
++                for (NSUInteger i = 0; i < entry_count; ++i) {
++                    const uint64_t start = timestamps[2*i + 0].timestamp;
++                    const uint64_t end   = timestamps[2*i + 1].timestamp;
++                    if (start == MTLCounterErrorValue || end == MTLCounterErrorValue || end < start) {
++                        counter_errors += profile_entries[i].dispatches;
++                        continue;
++                    }
++                    sampled_dispatches += profile_entries[i].dispatches;
++                    const NSUInteger category = profile_entries[i].category < GGML_METAL_PROFILE_CATEGORY_COUNT
++                        ? profile_entries[i].category : GGML_METAL_PROFILE_OTHER;
++                    category_ticks[category] += end - start;
++                }
++            }
++
++            const double gpu_ms = ([command_buffer GPUEndTime] - [command_buffer GPUStartTime]) * 1000.0;
++            fprintf(stderr,
++                    "PGR_METAL_PROFILE {\"schema\":2,\"graph_id\":%llu,\"sampled_dispatches\":%lu,\"total_dispatches\":%lu,"
++                    "\"attention_ticks\":%llu,\"expert_gemm_ticks\":%llu,\"dense_gemm_ticks\":%llu,"
++                    "\"normalization_ticks\":%llu,\"rope_ticks\":%llu,\"data_movement_ticks\":%llu,"
++                    "\"elementwise_ticks\":%llu,\"other_ticks\":%llu,"
++                    "\"command_buffer_gpu_ms\":%.9f,\"max_attention_q_tokens\":%lld,\"max_attention_kv_tokens\":%lld,"
++                    "\"counter_errors\":%lu,\"overflow\":%s}\n",
++                    (unsigned long long) graph_id,
++                    (unsigned long) sampled_dispatches,
++                    (unsigned long) total_dispatches,
++                    (unsigned long long) category_ticks[GGML_METAL_PROFILE_ATTENTION],
++                    (unsigned long long) category_ticks[GGML_METAL_PROFILE_EXPERT_GEMM],
++                    (unsigned long long) category_ticks[GGML_METAL_PROFILE_DENSE_GEMM],
++                    (unsigned long long) category_ticks[GGML_METAL_PROFILE_NORMALIZATION],
++                    (unsigned long long) category_ticks[GGML_METAL_PROFILE_ROPE],
++                    (unsigned long long) category_ticks[GGML_METAL_PROFILE_DATA_MOVEMENT],
++                    (unsigned long long) category_ticks[GGML_METAL_PROFILE_ELEMENTWISE],
++                    (unsigned long long) category_ticks[GGML_METAL_PROFILE_OTHER],
++                    gpu_ms,
++                    (long long) max_q,
++                    (long long) max_kv,
++                    (unsigned long) counter_errors,
++                    overflow ? "true" : "false");
++            fflush(stderr);
++        }];
++    }
++
+     [encoder->obj release];
++    [encoder->sample_buf release];
++    free(encoder->entries);
+     free(encoder);
+ }
+ 
+@@ -506,6 +691,12 @@ void ggml_metal_encoder_set_threadgroup_memory_size(ggml_metal_encoder_t encoder
+ }
+ 
+ void ggml_metal_encoder_dispatch_threadgroups(ggml_metal_encoder_t encoder, int tg0, int tg1, int tg2, int tptg0, int tptg1, int tptg2) {
++    if (encoder->profile_enabled) {
++        encoder->total_dispatches++;
++        if (!encoder->profile_overflow && encoder->entry_count > 0) {
++            encoder->entries[encoder->entry_count - 1].dispatches++;
++        }
++    }
+     [encoder->obj dispatchThreadgroups:MTLSizeMake(tg0, tg1, tg2) threadsPerThreadgroup:MTLSizeMake(tptg0, tptg1, tptg2)];
+ }
+ 
+@@ -514,7 +705,9 @@ void ggml_metal_encoder_memory_barrier(ggml_metal_encoder_t encoder) {
+ }
+ 
+ void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder) {
+-    [encoder->obj endEncoding];
++    if (encoder->obj != nil) {
++        [encoder->obj endEncoding];
++    }
+ }
+ 
+ struct ggml_metal_device {
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index c716f118f..da1f10ec1 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -10,9 +10,24 @@
+ 
+ #include <cassert>
+ #include <algorithm>
++#include <atomic>
++#include <cstdlib>
+ #include <limits>
+ #include <cmath>
+ 
++// Adapted from colibrì c/glm.c, PR #163 / commit 37da111 (Apache-2.0).
++// Draft and verify can cross S-dependent Metal kernel thresholds and therefore
++// accumulate differently. SPEC_PIN=1 is deliberately opt-in in Peregrine: only
++// forwards inside the depth-counted speculation scope use the S=1 mul_mv family;
++// prefill, ordinary decode, and the frozen M0a routing baseline are untouched.
++static bool pgr_spec_pin_active() {
++    static const bool enabled = [] {
++        const char * value = getenv("SPEC_PIN");
++        return value != nullptr && atoi(value) != 0;
++    }();
++    return enabled && ggml_speculation_scope_active();
++}
++
+ static ggml_metal_buffer_id ggml_metal_get_buffer_id(const ggml_tensor * t) {
+     if (!t) {
+         return { nullptr, 0 };
+@@ -36,10 +51,11 @@ struct ggml_metal_op {
+         bool use_concurrency,
+         bool use_capture,
+         int  debug_graph,
+-        int  debug_fusion) {
++        int  debug_fusion,
++        uint64_t graph_id) {
+         this->dev             = dev;
+         this->lib             = ggml_metal_device_get_library(dev);
+-        this->enc             = ggml_metal_encoder_init(cmd_buf, use_concurrency);
++        this->enc             = ggml_metal_encoder_init(cmd_buf, use_concurrency, graph_id);
+         this->mem_ranges      = ggml_mem_ranges_init(debug_graph);
+         this->idx_start       = idx_start;
+         this->idx_end         = idx_end;
+@@ -120,7 +136,8 @@ ggml_metal_op_t ggml_metal_op_init(
+         bool use_concurrency,
+         bool use_capture,
+         int debug_graph,
+-        int debug_fusion) {
++        int debug_fusion,
++        uint64_t graph_id) {
+     ggml_metal_op_t res = new ggml_metal_op(
+         dev,
+         cmd_buf,
+@@ -131,7 +148,8 @@ ggml_metal_op_t ggml_metal_op_init(
+         use_concurrency,
+         use_capture,
+         debug_graph,
+-        debug_fusion);
++        debug_fusion,
++        graph_id);
+ 
+     return res;
+ }
+@@ -504,9 +522,74 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
+     return n_fuse;
+ }
+ 
++static enum ggml_metal_profile_category ggml_metal_profile_category_for_op(enum ggml_op op) {
++    switch (op) {
++        case GGML_OP_FLASH_ATTN_EXT:
++            return GGML_METAL_PROFILE_ATTENTION;
++        case GGML_OP_MUL_MAT_ID:
++            return GGML_METAL_PROFILE_EXPERT_GEMM;
++        case GGML_OP_MUL_MAT:
++            return GGML_METAL_PROFILE_DENSE_GEMM;
++        case GGML_OP_NORM:
++        case GGML_OP_RMS_NORM:
++        case GGML_OP_GROUP_NORM:
++        case GGML_OP_L2_NORM:
++            return GGML_METAL_PROFILE_NORMALIZATION;
++        case GGML_OP_ROPE:
++        case GGML_OP_ROPE_BACK:
++            return GGML_METAL_PROFILE_ROPE;
++        case GGML_OP_DUP:
++        case GGML_OP_CPY:
++        case GGML_OP_CONT:
++        case GGML_OP_SET:
++        case GGML_OP_GET_ROWS:
++        case GGML_OP_SET_ROWS:
++            return GGML_METAL_PROFILE_DATA_MOVEMENT;
++        case GGML_OP_ADD:
++        case GGML_OP_ADD_ID:
++        case GGML_OP_SUB:
++        case GGML_OP_MUL:
++        case GGML_OP_DIV:
++        case GGML_OP_REPEAT:
++        case GGML_OP_ACC:
++        case GGML_OP_SCALE:
++        case GGML_OP_FILL:
++        case GGML_OP_CLAMP:
++        case GGML_OP_LEAKY_RELU:
++        case GGML_OP_SQR:
++        case GGML_OP_SQRT:
++        case GGML_OP_SIN:
++        case GGML_OP_COS:
++        case GGML_OP_LOG:
++        case GGML_OP_UNARY:
++        case GGML_OP_GLU:
++        case GGML_OP_SUM:
++        case GGML_OP_SUM_ROWS:
++        case GGML_OP_MEAN:
++        case GGML_OP_CUMSUM:
++        case GGML_OP_SOFT_MAX:
++        case GGML_OP_ARGSORT:
++        case GGML_OP_TOP_K:
++        case GGML_OP_ARGMAX:
++            return GGML_METAL_PROFILE_ELEMENTWISE;
++        default:
++            return GGML_METAL_PROFILE_OTHER;
++    }
++}
++
+ int ggml_metal_op_encode(ggml_metal_op_t ctx, int idx) {
++    const ggml_tensor * node = ctx->node(idx);
++    const enum ggml_metal_profile_category category = ggml_metal_profile_category_for_op(node->op);
++    int64_t attention_q_tokens = 0;
++    int64_t attention_kv_tokens = 0;
++    if (node->op == GGML_OP_FLASH_ATTN_EXT) {
++        attention_q_tokens = node->src[0] ? node->src[0]->ne[1] : 0;
++        attention_kv_tokens = node->src[1] ? node->src[1]->ne[1] : 0;
++    }
++    ggml_metal_encoder_profile_op(ctx->enc, category, attention_q_tokens, attention_kv_tokens);
++
+     if (ctx->use_capture) {
+-        ggml_metal_encoder_debug_group_push(ctx->enc, ggml_op_desc(ctx->node(idx)));
++        ggml_metal_encoder_debug_group_push(ctx->enc, ggml_op_desc(node));
+     }
+ 
+     int res = ggml_metal_op_encode_impl(ctx, idx);
+@@ -2066,10 +2149,20 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
+     // find the break-even point where the matrix-matrix kernel becomes more efficient compared
+     // to the matrix-vector kernel
+     const int ne11_mm_min = 8;
++    const bool spec_pinned = pgr_spec_pin_active();
++
++    if (spec_pinned) {
++        static std::atomic<uint64_t> rows_logged{0};
++        const uint64_t bit = UINT64_C(1) << std::min<int32_t>(ne11, 63);
++        const uint64_t previous = rows_logged.fetch_or(bit, std::memory_order_relaxed);
++        if ((previous & bit) == 0) {
++            GGML_LOG_INFO("[SPEC_PIN] Metal dense MUL_MAT rows=%d forced to S=1 mul_mv family (#163)\n", ne11);
++        }
++    }
+ 
+     // first try to use small-batch mat-mv kernels
+     // these should be efficient for BS [2, ~8]
+-    if (op->src[1]->type == GGML_TYPE_F32 && (ne00%128 == 0) &&
++    if (!spec_pinned && op->src[1]->type == GGML_TYPE_F32 && (ne00%128 == 0) &&
+         (
+          (
+           (
+@@ -2174,7 +2267,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
+         !ggml_is_transposed(op->src[1]) &&
+         // for now the matrix-matrix multiplication kernel only works on A14+/M1+ SoCs
+         // AMD GPU and older A-chips will reuse matrix-vector multiplication kernel
+-        props_dev->has_simdgroup_mm && ne00 >= 64 && ne11 > ne11_mm_min) {
++        !spec_pinned && props_dev->has_simdgroup_mm && ne00 >= 64 && ne11 > ne11_mm_min) {
+         //GGML_LOG_INFO("matrix: ne00 = %6d, ne01 = %6d, ne02 = %6d, ne11 = %6d, ne12 = %6d\n", ne00, ne01, ne02, ne11, ne12);
+ 
+         // some Metal matrix data types require aligned pointers
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.h b/ggml/src/ggml-metal/ggml-metal-ops.h
+index 89a6ad82f..486eaa188 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.h
++++ b/ggml/src/ggml-metal/ggml-metal-ops.h
+@@ -18,7 +18,8 @@ ggml_metal_op_t ggml_metal_op_init(
+         bool use_concurrency,
+         bool use_capture,
+         int  debug_graph,
+-        int  debug_fusion);
++        int  debug_fusion,
++        uint64_t graph_id);
+ 
+ void ggml_metal_op_free(ggml_metal_op_t ctx);
+ 
+diff --git a/ggml/src/ggml.cpp b/ggml/src/ggml.cpp
+index 0d388d455..af6dcaf33 100644
+--- a/ggml/src/ggml.cpp
++++ b/ggml/src/ggml.cpp
+@@ -1,8 +1,24 @@
+ #include "ggml-impl.h"
+ 
++#include <atomic>
+ #include <cstdlib>
+ #include <exception>
+ 
++static std::atomic<uint32_t> g_ggml_speculation_scope_depth{0};
++
++void ggml_speculation_scope_enter(void) {
++    g_ggml_speculation_scope_depth.fetch_add(1, std::memory_order_acq_rel);
++}
++
++void ggml_speculation_scope_leave(void) {
++    const uint32_t previous = g_ggml_speculation_scope_depth.fetch_sub(1, std::memory_order_acq_rel);
++    GGML_ASSERT(previous > 0);
++}
++
++bool ggml_speculation_scope_active(void) {
++    return g_ggml_speculation_scope_depth.load(std::memory_order_acquire) > 0;
++}
++
+ static std::terminate_handler previous_terminate_handler;
+ 
+ GGML_NORETURN static void ggml_uncaught_exception() {
+diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
+index 63ac2ed1f..98bbe8e0a 100644
+--- a/gguf-py/gguf/constants.py
++++ b/gguf-py/gguf/constants.py
+@@ -159,6 +159,7 @@ class Keys:
+         TARGET_HIDDEN_SIZE                = "{arch}.target_hidden_size"
+         BLOCK_SIZE                        = "{arch}.block_size"
+         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
++        DECODER_ARCH                      = "{arch}.decoder_arch"
+ 
+     class Attention:
+         HEAD_COUNT                   = "{arch}.attention.head_count"
+@@ -507,6 +508,7 @@ class MODEL_ARCH(IntEnum):
+     DOTS1            = auto()
+     ARCEE            = auto()
+     AFMOE            = auto()
++    LAGUNA           = auto()
+     ERNIE4_5         = auto()
+     ERNIE4_5_MOE     = auto()
+     HUNYUAN_MOE      = auto()
+@@ -741,6 +743,7 @@ class MODEL_TENSOR(IntEnum):
+     ENC_FFN_DOWN         = auto()
+     ENC_FFN_UP           = auto()
+     ENC_OUTPUT_NORM      = auto()
++    ENC_AUX_NORM         = auto()
+     CLS                  = auto() # classifier
+     CLS_OUT              = auto() # classifier output projection
+     CLS_NORM             = auto()
+@@ -1088,6 +1091,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+     MODEL_ARCH.DOTS1:            "dots1",
+     MODEL_ARCH.ARCEE:            "arcee",
+     MODEL_ARCH.AFMOE:            "afmoe",
++    MODEL_ARCH.LAGUNA:           "laguna",
+     MODEL_ARCH.ERNIE4_5:         "ernie4_5",
+     MODEL_ARCH.ERNIE4_5_MOE:     "ernie4_5-moe",
+     MODEL_ARCH.FALCON_H1:        "falcon-h1",
+@@ -1321,6 +1325,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+     MODEL_TENSOR.ENC_FFN_DOWN:              "enc.blk.{bid}.ffn_down",
+     MODEL_TENSOR.ENC_FFN_UP:                "enc.blk.{bid}.ffn_up",
+     MODEL_TENSOR.ENC_OUTPUT_NORM:           "enc.output_norm",
++    MODEL_TENSOR.ENC_AUX_NORM:              "enc.aux_norm",
+     MODEL_TENSOR.CLS:                       "cls",
+     MODEL_TENSOR.CLS_OUT:                   "cls.output",
+     MODEL_TENSOR.CLS_NORM:                  "cls.norm",
+@@ -3823,6 +3828,31 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+         MODEL_TENSOR.FFN_POST_NORM,
+         MODEL_TENSOR.FFN_EXP_PROBS_B,
+     ],
++    MODEL_ARCH.LAGUNA: [
++        MODEL_TENSOR.TOKEN_EMBD,
++        MODEL_TENSOR.OUTPUT_NORM,
++        MODEL_TENSOR.OUTPUT,
++        MODEL_TENSOR.ATTN_NORM,
++        MODEL_TENSOR.ATTN_Q,
++        MODEL_TENSOR.ATTN_K,
++        MODEL_TENSOR.ATTN_V,
++        MODEL_TENSOR.ATTN_OUT,
++        MODEL_TENSOR.ATTN_Q_NORM,
++        MODEL_TENSOR.ATTN_K_NORM,
++        MODEL_TENSOR.ATTN_GATE,
++        MODEL_TENSOR.FFN_NORM,
++        MODEL_TENSOR.FFN_GATE,
++        MODEL_TENSOR.FFN_DOWN,
++        MODEL_TENSOR.FFN_UP,
++        MODEL_TENSOR.FFN_GATE_INP,
++        MODEL_TENSOR.FFN_EXP_PROBS_B,
++        MODEL_TENSOR.FFN_GATE_EXP,
++        MODEL_TENSOR.FFN_DOWN_EXP,
++        MODEL_TENSOR.FFN_UP_EXP,
++        MODEL_TENSOR.FFN_GATE_SHEXP,
++        MODEL_TENSOR.FFN_UP_SHEXP,
++        MODEL_TENSOR.FFN_DOWN_SHEXP,
++    ],
+     MODEL_ARCH.ERNIE4_5: [
+         MODEL_TENSOR.TOKEN_EMBD,
+         MODEL_TENSOR.OUTPUT_NORM,
+@@ -4230,12 +4260,14 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+         MODEL_TENSOR.ATTN_OUT,
+         MODEL_TENSOR.ATTN_Q_NORM,
+         MODEL_TENSOR.ATTN_K_NORM,
++        MODEL_TENSOR.ATTN_GATE,
+         MODEL_TENSOR.FFN_NORM,
+         MODEL_TENSOR.FFN_GATE,
+         MODEL_TENSOR.FFN_DOWN,
+         MODEL_TENSOR.FFN_UP,
+         MODEL_TENSOR.FC,
+         MODEL_TENSOR.ENC_OUTPUT_NORM,
++        MODEL_TENSOR.ENC_AUX_NORM,
+     ],
+     MODEL_ARCH.MISTRAL4: [
+         MODEL_TENSOR.TOKEN_EMBD,
+diff --git a/gguf-py/gguf/gguf_writer.py b/gguf-py/gguf/gguf_writer.py
+index 1e277f068..04450db57 100644
+--- a/gguf-py/gguf/gguf_writer.py
++++ b/gguf-py/gguf/gguf_writer.py
+@@ -952,6 +952,9 @@ class GGUFWriter:
+     def add_target_hidden_size(self, value: int) -> None:
+         self.add_uint32(Keys.LLM.TARGET_HIDDEN_SIZE.format(arch=self.arch), value)
+ 
++    def add_decoder_arch(self, value: str) -> None:
++        self.add_string(Keys.LLM.DECODER_ARCH.format(arch=self.arch), value)
++
+     def add_norm_before_residual(self, value: bool) -> None:
+         self.add_bool(Keys.LLM.NORM_BEFORE_RESIDUAL.format(arch=self.arch), value)
+ 
+diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
+index 9efb36f8a..b5707f11f 100644
+--- a/gguf-py/gguf/tensor_mapping.py
++++ b/gguf-py/gguf/tensor_mapping.py
+@@ -479,6 +479,7 @@ class TensorNameMap:
+             "model.layers.{bid}.mlp.e_score_correction",                    # exaone-moe
+             "model.layers.{bid}.block_sparse_moe.gate.e_score_correction",  # kimi
+             "model.layers.{bid}.moe.router_bias",                           # step3.5 expert selection bias
++            "model.layers.{bid}.mlp.experts.e_score_correction",       # laguna
+         ),
+ 
+         # Feed-forward up
+diff --git a/include/llama.h b/include/llama.h
+index a311ac202..10fd9d794 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -319,6 +319,19 @@ extern "C" {
+         // override key-value pairs of the model meta data
+         const struct llama_model_kv_override * kv_overrides;
+ 
++        // Optional bounded expert streaming. All fields are required when pgrn_path is non-NULL.
++        // The source GGUF identity is verified against the SHA-256 embedded in the PGRN artifact.
++        const char * pgrn_path;
++        uint64_t pgrn_cache_bytes;
++        uint64_t pgrn_headroom_bytes;
++        uint32_t pgrn_hot_percent;
++        uint32_t pgrn_promote_hits;
++        uint64_t pgrn_demote_idle_epochs;
++        uint64_t pgrn_cooldown_epochs;
++        int32_t  pgrn_io_threads; // parallel cold-read threads per layer stream; <=1 = serial
++        const char * pgrn_predict_path; // optional PGCT1 hot-set table for speculative prefetch (NULL = off)
++        const char * pgrn_coupling_path; // optional PGCC1 coupled table; preferred over predict_path when set
++
+         // Keep the booleans together to avoid misalignment during copy-by-value.
+         bool vocab_only;      // only load the vocabulary, no weights
+         bool use_mmap;        // use mmap if possible
+@@ -328,6 +341,7 @@ extern "C" {
+         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
+         bool no_host;         // bypass host buffer allowing extra buffers to be used
+         bool no_alloc;        // only load metadata and simulate memory allocations
++        bool pgrn_compact_slots; // execute single-token MoE directly from pinned arena slots
+     };
+ 
+     struct llama_sampler_seq_config {
+@@ -572,6 +586,9 @@ extern "C" {
+     LLAMA_API int32_t llama_model_n_head_kv    (const struct llama_model * model);
+     LLAMA_API int32_t llama_model_n_swa        (const struct llama_model * model);
+ 
++    // Exact source GGUF identity admitted by the active PGRN runtime, or "".
++    LLAMA_API const char * llama_model_pgrn_sha256(const struct llama_model * model);
++
+     // Get the model's RoPE frequency scaling factor
+     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
+ 
+@@ -1539,6 +1556,26 @@ extern "C" {
+         int32_t n_p_eval;   // number of prompt tokens
+         int32_t n_eval;     // number of generated tokens
+         int32_t n_reused;   // number of times a ggml compute graph had been reused
++
++        // Cumulative bounded PGRN streaming telemetry. Zero when PGRN is disabled.
++        uint64_t pgrn_cache_hits;
++        uint64_t pgrn_cache_misses;
++        uint64_t pgrn_cache_bytes;
++        uint64_t pgrn_cache_high_water_bytes;
++        uint64_t pgrn_hot_hits;
++        uint64_t pgrn_warm_hits;
++        uint64_t pgrn_hot_slots;
++        uint64_t pgrn_warm_slots;
++        uint64_t pgrn_promotions;
++        uint64_t pgrn_demotions;
++        uint64_t pgrn_scratch_bytes;
++        uint64_t pgrn_compact_slots;
++        uint64_t pgrn_experts_staged;
++        uint64_t pgrn_bytes_uploaded;
++        double   pgrn_topk_read_ms;
++        double   pgrn_stage_ms;
++        double   pgrn_fetch_ms;
++        double   pgrn_upload_ms;
+     };
+ 
+     struct llama_perf_sampler_data {
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 320784c3a..4496f25d1 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -19,6 +19,20 @@ add_library(llama
+             llama-cparams.cpp
+             llama-grammar.cpp
+             llama-graph.cpp
++            peregrine_cache.c
++            peregrine_tier.c
++            peregrine_stream.c
++            peregrine_pgrn.c
++            peregrine_predict.c
++            peregrine_admission.c
++            peregrine_runtime.cpp
++            peregrine_arena.cpp
++            peregrine_compact.cpp
++            peregrine_stage.cpp
++            peregrine_scratch.cpp
++            peregrine_system_memory.c
++            peregrine_sha256.c
++            peregrine_observe.c
+             llama-hparams.cpp
+             llama-impl.cpp
+             llama-io.cpp
+@@ -43,6 +57,12 @@ add_library(llama
+             ${LLAMA_MODELS_SOURCES}
+             )
+ 
++if (APPLE)
++    target_sources(llama PRIVATE peregrine_ane.mm)
++    set_source_files_properties(peregrine_ane.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
++    target_link_libraries(llama PRIVATE "-framework CoreML" "-framework Foundation")
++endif()
++
+ set_target_properties(llama PROPERTIES
+     VERSION ${LLAMA_INSTALL_VERSION}
+     SOVERSION 0
+@@ -55,6 +75,12 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
+ 
+ target_link_libraries(llama PUBLIC ggml)
+ 
++if (APPLE)
++    find_package(ZLIB REQUIRED)
++    target_compile_definitions(llama PRIVATE PGR_HAVE_ZLIB=1)
++    target_link_libraries(llama PRIVATE ZLIB::ZLIB)
++endif()
++
+ if (BUILD_SHARED_LIBS)
+     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
+     target_compile_definitions(llama PRIVATE LLAMA_BUILD)
+diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
+index 72968607d..dfc51a0b7 100644
+--- a/src/llama-arch.cpp
++++ b/src/llama-arch.cpp
+@@ -108,6 +108,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+     { LLM_ARCH_DOTS1,            "dots1"            },
+     { LLM_ARCH_ARCEE,            "arcee"            },
+     { LLM_ARCH_AFMOE,            "afmoe"            },
++    { LLM_ARCH_LAGUNA,           "laguna"           },
+     { LLM_ARCH_ERNIE4_5,         "ernie4_5"         },
+     { LLM_ARCH_ERNIE4_5_MOE,     "ernie4_5-moe"     },
+     { LLM_ARCH_HUNYUAN_MOE,      "hunyuan-moe"      },
+@@ -309,6 +310,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+     { LLM_KV_TARGET_LAYERS,         "%s.target_layers"        },
+     { LLM_KV_TARGET_HIDDEN_SIZE,    "%s.target_hidden_size"   },
+     { LLM_KV_NORM_BEFORE_RESIDUAL,  "%s.norm_before_residual" },
++    { LLM_KV_DECODER_ARCH,          "%s.decoder_arch"         },
+ 
+     { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
+     // sentence-transformers dense modules feature dims
+@@ -420,6 +422,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+     { LLM_TENSOR_CLS_OUT,                                "cls.output" },
+     { LLM_TENSOR_CLS_NORM,                               "cls.norm" },
+     { LLM_TENSOR_ENC_OUTPUT_NORM,                        "enc.output_norm" },
++    { LLM_TENSOR_ENC_AUX_NORM,                           "enc.aux_norm" },
+     { LLM_TENSOR_FFN_GATE_INP_SHEXP,                     "blk.%d.ffn_gate_inp_shexp" },
+     { LLM_TENSOR_SSM_A_NOSCAN,                           "blk.%d.ssm_a" },
+     { LLM_TENSOR_SSM_CONV1D,                             "blk.%d.ssm_conv1d" },
+@@ -631,6 +634,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+     {LLM_TENSOR_OUTPUT_NORM_LFM2,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+     {LLM_TENSOR_DEC_OUTPUT_NORM,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+     {LLM_TENSOR_ENC_OUTPUT_NORM,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
++    {LLM_TENSOR_ENC_AUX_NORM,               {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+     {LLM_TENSOR_ROPE_FREQS,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
+     {LLM_TENSOR_ROPE_FACTORS_LONG,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
+     {LLM_TENSOR_ROPE_FACTORS_SHORT,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
+diff --git a/src/llama-arch.h b/src/llama-arch.h
+index b74d53af4..c397c7512 100644
+--- a/src/llama-arch.h
++++ b/src/llama-arch.h
+@@ -113,6 +113,7 @@ enum llm_arch {
+     LLM_ARCH_DOTS1,
+     LLM_ARCH_ARCEE,
+     LLM_ARCH_AFMOE,
++    LLM_ARCH_LAGUNA,
+     LLM_ARCH_ERNIE4_5,
+     LLM_ARCH_ERNIE4_5_MOE,
+     LLM_ARCH_HUNYUAN_MOE,
+@@ -355,6 +356,7 @@ enum llm_kv {
+     LLM_KV_TARGET_LAYERS,
+     LLM_KV_TARGET_HIDDEN_SIZE,
+     LLM_KV_NORM_BEFORE_RESIDUAL,
++    LLM_KV_DECODER_ARCH,
+ 
+     LLM_KV_SHORTCONV_L_CACHE,
+ 
+@@ -564,6 +566,7 @@ enum llm_tensor {
+     LLM_TENSOR_ENC_FFN_DOWN,
+     LLM_TENSOR_ENC_FFN_UP,
+     LLM_TENSOR_ENC_OUTPUT_NORM,
++    LLM_TENSOR_ENC_AUX_NORM,
+     LLM_TENSOR_CLS,
+     LLM_TENSOR_CLS_OUT,
+     LLM_TENSOR_CLS_NORM,
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 3a469bc90..cfd0e1004 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -11,6 +11,8 @@
+ #include "llama-model.h"
+ #include "llama-ext.h"
+ #include "llama.h"
++#include "peregrine_admission.h"
++#include "peregrine_system_memory.h"
+ 
+ #include <cinttypes>
+ #include <cmath>
+@@ -240,6 +242,14 @@ llama_context::llama_context(
+ 
+     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
+ 
++    if (model.pgrn_enabled()) {
++        const size_t top_k = (size_t) model.hparams.n_expert_used;
++        if (top_k == 0 || cparams.n_ubatch > SIZE_MAX / top_k) {
++            throw std::runtime_error("invalid PGRN top-k staging capacity");
++        }
++        pgrn_ids.resize((size_t) cparams.n_ubatch * top_k);
++    }
++
+     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
+ 
+     cparams.op_offload = params.op_offload;
+@@ -1312,7 +1322,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+         res->reset();
+ 
+         ggml_backend_sched_reset(sched.get());
+-        ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
++        if (model.pgrn_enabled()) {
++            ggml_backend_sched_set_eval_callback(sched.get(), pgrn_eval_callback, this);
++        } else {
++            ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
++        }
+ 
+         //const auto t_start_us = ggml_time_us();
+ 
+@@ -1343,7 +1357,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+     }
+ 
++    pgrn_error.clear();
+     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
++    if (!pgrn_error.empty()) {
++        LLAMA_LOG_ERROR("%s: PGRN staging failed: %s\n", __func__, pgrn_error.c_str());
++        ret = GGML_STATUS_FAILED;
++        return nullptr;
++    }
+     if (status != GGML_STATUS_SUCCESS) {
+         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
+         ret = status;
+@@ -2433,6 +2453,122 @@ ggml_status llama_context::graph_compute(
+     return status;
+ }
+ 
++static bool llama_pgrn_tensor_layer(const char * name, uint16_t * layer, bool * compact) {
++    static const char topk_prefix[] = "ffn_moe_topk-";
++    static const char slot_prefix[] = "pgrn_moe_slots-";
++    if (!name || !layer || !compact) return false;
++    const char * start = std::strstr(name, topk_prefix);
++    size_t prefix_size = sizeof(topk_prefix);
++    *compact = false;
++    if (!start) {
++        start = std::strstr(name, slot_prefix);
++        prefix_size = sizeof(slot_prefix);
++        *compact = true;
++    }
++    if (!start) return false;
++    start += prefix_size - 1;
++    if (*start < '0' || *start > '9') return false;
++    uint32_t value = 0;
++    for (const char * cursor = start; *cursor; ++cursor) {
++        if (*cursor < '0' || *cursor > '9') return false;
++        const uint32_t digit = (uint32_t) (*cursor - '0');
++        if (value > (UINT16_MAX - digit) / 10U) return false;
++        value = value * 10U + digit;
++    }
++    *layer = (uint16_t) value;
++    return true;
++}
++
++bool llama_context::pgrn_eval_callback(ggml_tensor * tensor, bool ask, void * user_data) {
++    return user_data ? static_cast<llama_context *>(user_data)->pgrn_eval(tensor, ask) : false;
++}
++
++bool llama_context::pgrn_eval(ggml_tensor * tensor, bool ask) {
++    uint16_t layer = 0;
++    bool compact = false;
++    const bool is_pgrn = tensor && llama_pgrn_tensor_layer(tensor->name, &layer, &compact);
++    if (ask) {
++        const bool user_wants = cparams.cb_eval && cparams.cb_eval(tensor, true, cparams.cb_eval_user_data);
++        const bool wants = is_pgrn || user_wants;
++        if (wants) {
++            pgrn_pending_tensor = tensor;
++            pgrn_pending_user_callback = user_wants;
++        }
++        return wants;
++    }
++
++    if (tensor != pgrn_pending_tensor) {
++        pgrn_error = "scheduler returned an unexpected PGRN callback tensor";
++        return false;
++    }
++    const bool user_wants = pgrn_pending_user_callback;
++    pgrn_pending_tensor = nullptr;
++    pgrn_pending_user_callback = false;
++
++    if (is_pgrn) {
++        if (tensor->type != GGML_TYPE_I32 || tensor->ne[0] != model.hparams.n_expert_used ||
++                tensor->ne[1] <= 0 || tensor->ne[2] != 1 || tensor->ne[3] != 1 ||
++                tensor->nb[0] != sizeof(int32_t)) {
++            pgrn_error = "top-k tensor geometry is incompatible with PGRN staging";
++            return false;
++        }
++        const size_t rows = (size_t) tensor->ne[1];
++        const size_t row_ids = (size_t) tensor->ne[0];
++        if (rows > SIZE_MAX / row_ids || rows * row_ids > pgrn_ids.size() ||
++                row_ids > SIZE_MAX / sizeof(int32_t)) {
++            pgrn_error = "top-k tensor exceeds fixed PGRN callback capacity";
++            return false;
++        }
++        const size_t row_bytes = row_ids * sizeof(int32_t);
++        if (tensor->nb[1] < row_bytes) {
++            pgrn_error = "top-k tensor row stride is truncated";
++            return false;
++        }
++        const int64_t read_start = ggml_time_us();
++        ggml_backend_tensor_get_2d(tensor, pgrn_ids.data(), 0, row_bytes,
++                rows, tensor->nb[1], row_bytes);
++        pgrn_topk_read_us += ggml_time_us() - read_start;
++        size_t copied = 0;
++        size_t uploaded = 0;
++        uint64_t fetch_us = 0;
++        uint64_t upload_us = 0;
++        char error[192] = {};
++        // Join any speculative prefetch aimed at THIS layer before staging it (frees the
++        // stream + means its predicted experts are already warm). No-op without a table.
++        model.pgrn_prefetch_settle(layer);
++        const int64_t stage_start = ggml_time_us();
++        int stage_result = 0;
++        if (compact) {
++            stage_result = model.pgrn_resolve_slots(
++                    layer, pgrn_ids.data(), rows * row_ids, &copied, error, sizeof(error));
++            fetch_us = static_cast<uint64_t>(ggml_time_us() - stage_start);
++            if (stage_result == 0) {
++                ggml_backend_tensor_set_2d(tensor, pgrn_ids.data(), 0, row_bytes,
++                        rows, tensor->nb[1], row_bytes);
++            }
++        } else {
++            stage_result = model.pgrn_stage(layer, pgrn_ids.data(), rows * row_ids,
++                    &copied, &uploaded, &fetch_us, &upload_us, error, sizeof(error));
++        }
++        if (stage_result != 0) {
++            pgrn_error = error[0] ? error : "unknown PGRN staging failure";
++            return false;
++        }
++        // Warm the NEXT layer's predicted experts on a background thread, overlapping this
++        // layer's expert GEMM + the next layer's attention. Cache warm only - parity-neutral,
++        // so the compact path's remapped ids here only ever waste a speculative read.
++        model.pgrn_prefetch_kick(layer, pgrn_ids.data(), rows * row_ids);
++        pgrn_stage_us += ggml_time_us() - stage_start;
++        pgrn_experts_staged += copied;
++        pgrn_bytes_uploaded += uploaded;
++        pgrn_fetch_us += fetch_us;
++        pgrn_upload_us += upload_us;
++    }
++
++    if (user_wants && !cparams.cb_eval(tensor, false, cparams.cb_eval_user_data)) return false;
++    return true;
++}
++
+ llm_graph_cb llama_context::graph_get_cb() const {
+     return [&](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
+         if (il >= 0) {
+@@ -3171,6 +3307,24 @@ llama_perf_context_data llama_context::perf_get_data() const {
+     data.n_p_eval    = std::max(1, n_p_eval);
+     data.n_eval      = std::max(1, n_eval);
+     data.n_reused    = std::max(0, n_reused);
++    data.pgrn_cache_hits             = model.pgrn_cache_hits();
++    data.pgrn_cache_misses           = model.pgrn_cache_misses();
++    data.pgrn_cache_bytes            = model.pgrn_cache_bytes();
++    data.pgrn_cache_high_water_bytes = model.pgrn_cache_high_water_bytes();
++    data.pgrn_hot_hits               = model.pgrn_hot_hits();
++    data.pgrn_warm_hits              = model.pgrn_warm_hits();
++    data.pgrn_hot_slots              = model.pgrn_hot_slots();
++    data.pgrn_warm_slots             = model.pgrn_warm_slots();
++    data.pgrn_promotions             = model.pgrn_promotions();
++    data.pgrn_demotions              = model.pgrn_demotions();
++    data.pgrn_scratch_bytes          = model.pgrn_scratch_bytes();
++    data.pgrn_compact_slots          = model.pgrn_compact_enabled() ? 1 : 0;
++    data.pgrn_experts_staged         = pgrn_experts_staged;
++    data.pgrn_bytes_uploaded         = pgrn_bytes_uploaded;
++    data.pgrn_topk_read_ms           = 1e-3 * pgrn_topk_read_us;
++    data.pgrn_stage_ms               = 1e-3 * pgrn_stage_us;
++    data.pgrn_fetch_ms               = 1e-3 * pgrn_fetch_us;
++    data.pgrn_upload_ms              = 1e-3 * pgrn_upload_us;
+ 
+     return data;
+ }
+@@ -3180,6 +3334,10 @@ void llama_context::perf_reset() {
+     t_eval_us   = n_eval = 0;
+     t_p_eval_us = n_p_eval = 0;
+     n_reused    = 0;
++    pgrn_topk_read_us = 0;
++    pgrn_stage_us = 0;
++    pgrn_fetch_us = 0;
++    pgrn_upload_us = 0;
+ }
+ 
+ llama_memory_breakdown llama_context::memory_breakdown() const {
+@@ -3549,6 +3707,22 @@ llama_context * llama_init_from_model(
+ 
+     try {
+         auto * ctx = new llama_context(*model, params);
++        if (model->pgrn_enabled()) {
++            pgr_system_memory memory{};
++            const uint64_t headroom = model->pgrn_headroom_bytes();
++            if (pgr_system_memory_read(&memory) != 0 ||
++                    pgr_admission_check_live_headroom(
++                        memory.available_known, memory.available_bytes, headroom) != 0) {
++                LLAMA_LOG_ERROR("%s: PGRN live headroom check failed after context allocation "
++                                "(available %.2f MiB, required %.2f MiB)\n",
++                        __func__, memory.available_bytes / 1048576.0, headroom / 1048576.0);
++                delete ctx;
++                return nullptr;
++            }
++            LLAMA_LOG_INFO("%s: PGRN live headroom retained after context allocation = %.2f MiB "
++                           "(required %.2f MiB)\n",
++                    __func__, memory.available_bytes / 1048576.0, headroom / 1048576.0);
++        }
+         return ctx;
+     } catch (const std::exception & err) {
+         LLAMA_LOG_ERROR("%s: failed to initialize the context: %s\n", __func__, err.what());
+@@ -4076,6 +4250,25 @@ void llama_perf_context_print(const llama_context * ctx) {
+             __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
+     LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
+     LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
++    if (data.pgrn_cache_bytes > 0) {
++        const uint64_t accesses = data.pgrn_cache_hits + data.pgrn_cache_misses;
++        const double hit_rate = accesses ? 100.0 * data.pgrn_cache_hits / accesses : 0.0;
++        LLAMA_LOG_INFO("%s: PGRN cache = %.2f MiB, high-water = %.2f MiB, hits = %llu, misses = %llu (%.2f%%)\n",
++                __func__, data.pgrn_cache_bytes / 1048576.0, data.pgrn_cache_high_water_bytes / 1048576.0,
++                (unsigned long long) data.pgrn_cache_hits, (unsigned long long) data.pgrn_cache_misses, hit_rate);
++        LLAMA_LOG_INFO("%s: PGRN tiers HOT/WARM slots = %llu/%llu, hits = %llu/%llu, promotions = %llu, demotions = %llu\n",
++                __func__, (unsigned long long) data.pgrn_hot_slots, (unsigned long long) data.pgrn_warm_slots,
++                (unsigned long long) data.pgrn_hot_hits, (unsigned long long) data.pgrn_warm_hits,
++                (unsigned long long) data.pgrn_promotions, (unsigned long long) data.pgrn_demotions);
++        LLAMA_LOG_INFO("%s: PGRN compact slot compute = %s\n",
++                __func__, data.pgrn_compact_slots ? "enabled" : "disabled");
++        LLAMA_LOG_INFO("%s: PGRN scratch = %.2f MiB, staged experts = %llu, uploaded = %.2f MiB\n",
++                __func__, data.pgrn_scratch_bytes / 1048576.0,
++                (unsigned long long) data.pgrn_experts_staged, data.pgrn_bytes_uploaded / 1048576.0);
++        LLAMA_LOG_INFO("%s: PGRN top-k read = %.2f ms, staging = %.2f ms (fetch %.2f ms, upload %.2f ms)\n",
++                __func__, data.pgrn_topk_read_ms, data.pgrn_stage_ms,
++                data.pgrn_fetch_ms, data.pgrn_upload_ms);
++    }
+ }
+ 
+ void llama_perf_context_reset(llama_context * ctx) {
+diff --git a/src/llama-context.h b/src/llama-context.h
+index bf91daa8b..e0aaef4a2 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -262,6 +262,9 @@ private:
+ 
+     llm_graph_cb graph_get_cb() const;
+ 
++    static bool pgrn_eval_callback(ggml_tensor * tensor, bool ask, void * user_data);
++    bool pgrn_eval(ggml_tensor * tensor, bool ask);
++
+     // disable auto fused ops (Flash Attention, Gated Delta Net) whose op lands on a device
+     // that differs from the layer it belongs to (usually due to missing backend support)
+     void resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs);
+@@ -281,6 +284,17 @@ private:
+ 
+     llama_cparams cparams;
+ 
++    std::vector<int32_t> pgrn_ids;
++    std::string pgrn_error;
++    ggml_tensor * pgrn_pending_tensor = nullptr;
++    bool pgrn_pending_user_callback = false;
++    uint64_t pgrn_experts_staged = 0;
++    uint64_t pgrn_bytes_uploaded = 0;
++    int64_t pgrn_topk_read_us = 0;
++    int64_t pgrn_stage_us = 0;
++    uint64_t pgrn_fetch_us = 0;
++    uint64_t pgrn_upload_us = 0;
++
+     llama_adapter_cvec_ptr  cvec;
+     llama_adapter_loras_ptr loras;
+ 
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index c8ecb0a28..f2ff35b8f 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -1771,7 +1771,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+          ggml_tensor * up_exps_s,
+          ggml_tensor * gate_exps_s,
+          ggml_tensor * down_exps_s,
+-         ggml_tensor * selected_experts_in) const {
++         ggml_tensor * selected_experts_in,
++                    bool compact_slots) const {
+     return build_moe_ffn(
+         cur,
+         gate_inp,  /* gate_inp_b  */ nullptr,
+@@ -1792,7 +1793,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         up_exps_s,
+         gate_exps_s,
+         down_exps_s,
+-        selected_experts_in
++        selected_experts_in,
++        compact_slots
+     );
+ }
+ 
+@@ -1820,7 +1822,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+          ggml_tensor * up_exps_s,
+          ggml_tensor * gate_exps_s,
+          ggml_tensor * down_exps_s,
+-         ggml_tensor * selected_experts_in) const {
++         ggml_tensor * selected_experts_in,
++                    bool compact_slots) const {
+     const int64_t n_embd   = cur->ne[0];
+     const int64_t n_tokens = cur->ne[1];
+     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
+@@ -1915,7 +1918,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         selected_experts = ggml_argsort_top_k(ctx0, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
+         cb(selected_experts->src[0], "ffn_moe_argsort", il);
+     }
+-    cb(selected_experts, "ffn_moe_topk", il);
++    cb(selected_experts, compact_slots ? "ffn_moe_topk_raw" : "ffn_moe_topk", il);
+ 
+     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
+         // TODO: Use scalar div instead when/if implemented
+@@ -1960,6 +1963,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+     //call early so that topk-moe can be used
+     ggml_build_forward_expand(gf, weights);
+ 
++    ggml_tensor * expert_slots = selected_experts;
++    if (compact_slots) {
++        expert_slots = ggml_dup(ctx0, selected_experts);
++        cb(expert_slots, "pgrn_moe_slots", il);
++    }
++
+     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
+ 
+     if (weight_before_ffn) {
+@@ -1974,7 +1983,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+ 
+     if (gate_up_exps) {
+         // merged gate_up path: one mul_mat_id, then split into gate and up views
+-        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
++        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, expert_slots, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
+         cb(gate_up, "ffn_moe_gate_up", il);
+ 
+         if (up_exps_s) {
+@@ -1982,7 +1991,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         }
+ 
+         if (gate_up_exps_b) {
+-            gate_up = ggml_add_id(ctx0, gate_up, gate_up_exps_b, selected_experts);
++            gate_up = ggml_add_id(ctx0, gate_up, gate_up_exps_b, expert_slots);
+             cb(gate_up, "ffn_moe_gate_up_biased", il);
+         }
+ 
+@@ -1993,7 +2002,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         cb(up, "ffn_moe_up", il);
+     } else {
+         // separate gate and up path
+-        up = build_lora_mm_id(up_exps, cur, selected_experts, up_exps_s); // [n_ff, n_expert_used, n_tokens]
++        up = build_lora_mm_id(up_exps, cur, expert_slots, up_exps_s); // [n_ff, n_expert_used, n_tokens]
+         cb(up, "ffn_moe_up", il);
+ 
+         if (up_exps_s) {
+@@ -2001,12 +2010,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         }
+ 
+         if (up_exps_b) {
+-            up = ggml_add_id(ctx0, up, up_exps_b, selected_experts);
++            up = ggml_add_id(ctx0, up, up_exps_b, expert_slots);
+             cb(up, "ffn_moe_up_biased", il);
+         }
+ 
+         if (gate_exps) {
+-            cur = build_lora_mm_id(gate_exps, cur, selected_experts, gate_exps_s); // [n_ff, n_expert_used, n_tokens]
++            cur = build_lora_mm_id(gate_exps, cur, expert_slots, gate_exps_s); // [n_ff, n_expert_used, n_tokens]
+             cb(cur, "ffn_moe_gate", il);
+         } else {
+             cur = up;
+@@ -2017,7 +2026,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         }
+ 
+         if (gate_exps_b) {
+-            cur = ggml_add_id(ctx0, cur, gate_exps_b, selected_experts);
++            cur = ggml_add_id(ctx0, cur, gate_exps_b, expert_slots);
+             cb(cur, "ffn_moe_gate_biased", il);
+         }
+     }
+@@ -2095,7 +2104,19 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+             GGML_ABORT("fatal error");
+     }
+ 
+-    experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s); // [n_embd, n_expert_used, n_tokens]
++    // Metal's MUL_MAT_ID casts src1 (the SwiGLU activation) to f16, which overflows to NaN when a
++    // value exceeds the f16 max of 65504 (some models reach ~1e6 here). ggml has no max-reduce, so
++    // scale each (expert,token) column by its L2 norm: L2 >= the largest element, so the f16 cast
++    // stays in range; when the overflow comes from a single outlier, L2 ~= that element.
++    // Mathematically a per-column identity, so it only shifts the result by ~1 ULP (the rescale
++    // factor is not a power of two).
++    const float f16_safe = 32768.0f; // stay well under the f16 max of 65504
++    ggml_tensor * col_l2 = ggml_sqrt(ctx0, ggml_sum_rows(ctx0, ggml_sqr(ctx0, cur))); // [1, n_expert_used, n_tokens]
++    col_l2 = ggml_clamp(ctx0, col_l2, 1e-8f, 1e30f); // guard empty columns against div-by-zero
++    ggml_tensor * cur_s = ggml_div(ctx0, ggml_scale(ctx0, cur, f16_safe), col_l2);
++    // expert_slots (not selected_experts): PGRN remaps routed experts to arena slots, matching the down_exps_b add below
++    experts = build_lora_mm_id(down_exps, cur_s, expert_slots, down_exps_s); // [n_embd, n_expert_used, n_tokens]
++    experts = ggml_scale(ctx0, ggml_mul(ctx0, experts, col_l2), 1.0f/f16_safe);
+     cb(experts, "ffn_moe_down", il);
+ 
+     if (down_exps_s) {
+@@ -2103,7 +2124,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+     }
+ 
+     if (down_exps_b) {
+-        experts = ggml_add_id(ctx0, experts, down_exps_b, selected_experts);
++        experts = ggml_add_id(ctx0, experts, down_exps_b, expert_slots);
+         cb(experts, "ffn_moe_down_biased", il);
+     }
+ 
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index c84cb6a45..9a49c0e33 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -1014,7 +1014,8 @@ struct llm_graph_context {
+              ggml_tensor * up_exps_s = nullptr,
+              ggml_tensor * gate_exps_s = nullptr,
+              ggml_tensor * down_exps_s = nullptr,
+-             ggml_tensor * selected_experts_in = nullptr) const;
++             ggml_tensor * selected_experts_in = nullptr,
++                    bool   compact_slots = false) const;
+ 
+     ggml_tensor * build_moe_ffn(
+              ggml_tensor * cur,
+@@ -1040,7 +1041,8 @@ struct llm_graph_context {
+              ggml_tensor * up_exps_s = nullptr,
+              ggml_tensor * gate_exps_s = nullptr,
+              ggml_tensor * down_exps_s = nullptr,
+-             ggml_tensor * selected_experts_in = nullptr) const;
++             ggml_tensor * selected_experts_in = nullptr,
++                    bool   compact_slots = false) const;
+ 
+     //
+     // inputs
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+index 28f8bb793..87de3bdac 100644
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -526,6 +526,7 @@ llama_model_loader::llama_model_loader(
+         bool use_direct_io,
+         bool check_tensors,
+         bool no_alloc,
++        bool external_experts,
+         const llama_model_kv_override * param_overrides_p,
+         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
+         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
+@@ -816,6 +817,11 @@ llama_model_loader::llama_model_loader(
+         }
+     }
+ 
++    if (external_experts && use_mmap) {
++        LLAMA_LOG_INFO("%s: external expert streaming disables GGUF mmap\n", __func__);
++        use_mmap = false;
++    }
++
+     if (!llama_mmap::SUPPORTED) {
+         LLAMA_LOG_WARN("%s: mmap is not supported on this platform\n", __func__);
+         use_mmap = false;
+@@ -825,6 +831,7 @@ llama_model_loader::llama_model_loader(
+     this->use_direct_io = use_direct_io;
+     this->check_tensors = check_tensors;
+     this->no_alloc = no_alloc;
++    this->external_experts = external_experts;
+ }
+ 
+ std::string llama_model_loader::get_arch_name() const {
+@@ -1258,6 +1265,40 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+     }
+ 
+     ggml_tensor * t_meta = get_tensor_meta(tn.str().c_str());
++
++    const bool is_streamed_expert = external_experts && tn.suffix != nullptr &&
++            strcmp(tn.suffix, "weight") == 0 &&
++            (tn.tensor == LLM_TENSOR_FFN_GATE_EXPS ||
++             tn.tensor == LLM_TENSOR_FFN_UP_EXPS ||
++             tn.tensor == LLM_TENSOR_FFN_DOWN_EXPS);
++    if (is_streamed_expert) {
++        const struct ggml_tensor * cur = check_tensor_dims(tn.str(), ne, !(flags & TENSOR_NOT_REQUIRED));
++        if (cur == nullptr) {
++            return nullptr;
++        }
++        if (!external_expert_ctx) {
++            const size_t ctx_size = ggml_tensor_overhead() * ((size_t) n_tensors + 1);
++            ggml_init_params params = {
++                /*.mem_size   =*/ ctx_size,
++                /*.mem_buffer =*/ nullptr,
++                /*.no_alloc   =*/ true,
++            };
++            external_expert_ctx.reset(ggml_init(params));
++            if (!external_expert_ctx) {
++                throw std::runtime_error("failed to create external expert metadata context");
++            }
++        }
++
++        ggml_tensor * tensor = ggml_dup_tensor(external_expert_ctx.get(), cur);
++        ggml_set_name(tensor, ggml_get_name(cur));
++        external_expert_names.emplace(ggml_get_name(cur), true);
++        external_expert_bytes += ggml_nbytes(cur);
++        n_created++;
++        LLAMA_LOG_DEBUG("%s: external expert tensor %s (%zu bytes, no allocation)\n",
++                __func__, tn.str().c_str(), ggml_nbytes(cur));
++        return tensor;
++    }
++
+     ggml_backend_buffer_type_t buft = buft_for_tensor(t_meta);
+     if (buft == nullptr) {
+         return nullptr; // return type is ggml_tensor *
+@@ -1293,6 +1334,14 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+     return tensor;
+ }
+ 
++bool llama_model_loader::is_external_expert(const char * name) const {
++    return name != nullptr && external_expert_names.find(name) != external_expert_names.end();
++}
++
++ggml_context_ptr llama_model_loader::take_external_expert_ctx() {
++    return std::move(external_expert_ctx);
++}
++
+ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required) {
+     const struct ggml_tensor * cur = check_tensor_dims(name, ne, required);
+ 
+@@ -1368,7 +1417,9 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
+ 
+     // compute the total size of all tensors for progress reporting
+     for (const auto & it : weights_map) {
+-        size_data += ggml_nbytes(it.second.tensor);
++        if (!is_external_expert(it.first.c_str())) {
++            size_data += ggml_nbytes(it.second.tensor);
++        }
+     }
+ }
+ 
+diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
+index c476026d3..2176c49bf 100644
+--- a/src/llama-model-loader.h
++++ b/src/llama-model-loader.h
+@@ -79,6 +79,11 @@ struct llama_model_loader {
+     bool use_direct_io = false;
+     bool check_tensors;
+     bool no_alloc;
++    bool external_experts = false;
++
++    size_t external_expert_bytes = 0;
++    size_t external_expert_mapped_bytes = 0;
++    size_t external_expert_read_bytes = 0;
+ 
+     llama_files files;
+     llama_ftype ftype;
+@@ -111,6 +116,8 @@ struct llama_model_loader {
+     };
+ 
+     std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> ctx_map;
++    ggml_context_ptr external_expert_ctx;
++    std::unordered_map<std::string, bool> external_expert_names;
+ 
+     // track tensors that had to be moved for debugging:
+     size_t n_tensors_moved = 0;
+@@ -130,6 +137,7 @@ struct llama_model_loader {
+         bool use_direct_io,
+         bool check_tensors,
+         bool no_alloc,
++        bool external_experts,
+         const llama_model_kv_override * param_overrides_p,
+         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+ 
+@@ -186,6 +194,10 @@ struct llama_model_loader {
+ 
+     void done_getting_tensors(bool partial = false) const;
+ 
++    bool is_external_expert(const char * name) const;
++
++    ggml_context_ptr take_external_expert_ctx();
++
+     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
+ 
+     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
+diff --git a/src/llama-model-saver.cpp b/src/llama-model-saver.cpp
+index a3928523b..22061f5ff 100644
+--- a/src/llama-model-saver.cpp
++++ b/src/llama-model-saver.cpp
+@@ -28,6 +28,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
+         case LLM_ARCH_MIMO2:
+         case LLM_ARCH_STEP35:
+         case LLM_ARCH_MELLUM:
++        case LLM_ARCH_LAGUNA:
+             return false;
+         default:
+             return true;
+@@ -280,7 +281,21 @@ void llama_model_saver::add_kv_from_model() {
+     add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,      hparams.indexer_n_head);
+     add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,      hparams.indexer_head_size);
+     add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,           hparams.indexer_top_k);
+-    add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
++    {
++        const size_t n_layers = hparams.n_layer_all;
++        bool all_same = n_layers > 0;
++        for (size_t il = 1; il < n_layers; ++il) {
++            all_same = all_same && hparams.is_recr_impl[il] == hparams.is_recr_impl[0];
++        }
++        if (all_same) {
++            add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS, hparams.is_recr_impl[0] != 0);
++        } else if (n_layers > 0) {
++            std::vector<uint8_t> values(n_layers);
++            for (size_t il = 0; il < n_layers; ++il) values[il] = hparams.is_recr_impl[il] != 0;
++            gguf_set_arr_data(gguf_ctx, llm_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS).c_str(),
++                    GGUF_TYPE_BOOL, values.data(), values.size());
++        }
++    }
+ 
+     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
+ 
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index eaf3f35d2..2ef71682c 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -7,6 +7,11 @@
+ #include "llama-mmap.h"
+ #include "llama-cparams.h"
+ #include "llama-model-loader.h"
++#include "peregrine_pgrn.h"
++#include "peregrine_compact.h"
++#include "peregrine_runtime.h"
++#include "peregrine_scratch.h"
++#include "peregrine_system_memory.h"
+ 
+ #include "llama-kv-cache.h"
+ #include "llama-kv-cache-iswa.h"
+@@ -250,6 +255,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+             return new llama_model_arcee(params);
+         case LLM_ARCH_AFMOE:
+             return new llama_model_afmoe(params);
++        case LLM_ARCH_LAGUNA:
++            return new llama_model_laguna(params);
+         case LLM_ARCH_ERNIE4_5:
+             return new llama_model_ernie4_5(params);
+         case LLM_ARCH_ERNIE4_5_MOE:
+@@ -793,6 +800,7 @@ const char * llm_type_name(llm_type type) {
+         case LLM_TYPE_24B_A2B:       return "24B.A2B";
+         case LLM_TYPE_26B_A4B:       return "26B.A4B";
+         case LLM_TYPE_30B_A3B:       return "30B.A3B";
++        case LLM_TYPE_118B_A8B:      return "118B.A8B";
+         case LLM_TYPE_31B_A3_5B:     return "31B.A3.5B";
+         case LLM_TYPE_35B_A3B:       return "35B.A3B";
+         case LLM_TYPE_48B_A3B:       return "48B.A3B";
+@@ -982,7 +990,11 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode s
+ 
+ struct llama_model::impl {
+     impl() = default;
+-    ~impl() = default;
++    ~impl() {
++        pgr_compact_free(pgrn_compact);
++        pgr_scratch_free(pgrn_scratch);
++        pgr_runtime_free(pgrn_runtime);
++    }
+ 
+     uint64_t n_elements = 0;
+ 
+@@ -1002,6 +1014,14 @@ struct llama_model::impl {
+     // contexts where the model tensors metadata is stored as well as the corresponding buffers:
+     std::vector<std::pair<ggml_context_ptr, std::vector<ggml_backend_buffer_ptr>>> ctxs_bufs;
+ 
++    // PGRN tensors retain metadata for graph construction while all layers share
++    // one fixed backend scratch buffer and one admitted host cache.
++    ggml_context_ptr pgrn_external_ctx;
++    pgr_runtime * pgrn_runtime = nullptr;
++    pgr_scratch * pgrn_scratch = nullptr;
++    pgr_compact * pgrn_compact = nullptr;
++    pgr_admission_plan pgrn_plan = {};
++
+     buft_list_t cpu_buft_list;
+     std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
+ 
+@@ -1491,6 +1511,132 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+     }
+     ml.done_getting_tensors();
+ 
++    if (params.pgrn_path != nullptr) {
++        if (hparams.n_expert <= 0 || hparams.n_expert > UINT16_MAX) {
++            throw std::runtime_error("PGRN mode requires a bounded MoE expert count");
++        }
++        size_t streamed_layers = 0;
++        ggml_backend_buffer_type_t scratch_buft = nullptr;
++        std::array<size_t, 3> role_bytes = {};
++        for (int il = 0; il < n_layer_all; ++il) {
++            auto & layer = layers[il];
++            const bool any = layer.ffn_gate_exps || layer.ffn_up_exps || layer.ffn_down_exps || layer.ffn_gate_up_exps;
++            if (!any) continue;
++            if (layer.ffn_gate_up_exps || !layer.ffn_gate_exps || !layer.ffn_up_exps || !layer.ffn_down_exps) {
++                throw std::runtime_error("PGRN v1 supports only separate gate/up/down expert tensors");
++            }
++            const auto * list = pimpl->dev_layer.at(il).buft_list;
++            if (!list || list->empty()) throw std::runtime_error("PGRN layer has no backend buffer type");
++            const ggml_backend_buffer_type_t layer_buft = list->front().second;
++            if (!scratch_buft) scratch_buft = layer_buft;
++            if (scratch_buft != layer_buft) {
++                throw std::runtime_error("PGRN v1 requires all streamed layers on one backend");
++            }
++            role_bytes[PGR_SCRATCH_GATE] = std::max(role_bytes[PGR_SCRATCH_GATE],
++                    ggml_backend_buft_get_alloc_size(scratch_buft, layer.ffn_gate_exps));
++            role_bytes[PGR_SCRATCH_UP] = std::max(role_bytes[PGR_SCRATCH_UP],
++                    ggml_backend_buft_get_alloc_size(scratch_buft, layer.ffn_up_exps));
++            role_bytes[PGR_SCRATCH_DOWN] = std::max(role_bytes[PGR_SCRATCH_DOWN],
++                    ggml_backend_buft_get_alloc_size(scratch_buft, layer.ffn_down_exps));
++            streamed_layers++;
++        }
++        if (streamed_layers == 0 || !scratch_buft) throw std::runtime_error("PGRN mode found no streamable expert layers");
++
++        const size_t alignment = ggml_backend_buft_get_alignment(scratch_buft);
++        if (alignment == 0 || (alignment & (alignment - 1)) != 0) throw std::runtime_error("invalid PGRN scratch alignment");
++        auto align_checked = [alignment](size_t value) -> size_t {
++            if (value > SIZE_MAX - (alignment - 1)) throw std::runtime_error("PGRN scratch size overflow");
++            return (value + alignment - 1) & ~(alignment - 1);
++        };
++        size_t scratch_reserve = 0;
++        for (size_t bytes : role_bytes) {
++            scratch_reserve = align_checked(scratch_reserve);
++            if (scratch_reserve > SIZE_MAX - bytes) throw std::runtime_error("PGRN scratch size overflow");
++            scratch_reserve += bytes;
++        }
++        scratch_reserve = align_checked(scratch_reserve);
++
++        std::unique_ptr<pgrn_file, decltype(&pgrn_close)> store(
++                pgrn_open(params.pgrn_path, nullptr), pgrn_close);
++        if (!store) throw std::runtime_error("PGRN artifact validation or model identity failed");
++        if (pgrn_layer_count(store.get()) != streamed_layers ||
++                pgrn_experts_per_layer(store.get()) != (uint32_t) hparams.n_expert ||
++                pgrn_total_expert_bytes(store.get()) != ml.external_expert_bytes ||
++                streamed_layers > SIZE_MAX / (size_t) hparams.n_expert ||
++                pgrn_count(store.get()) != streamed_layers * (size_t) hparams.n_expert) {
++            throw std::runtime_error("PGRN directory does not match GGUF expert geometry");
++        }
++        for (int il = 0; il < n_layer_all; ++il) {
++            const auto & layer = layers[il];
++            if (!layer.ffn_gate_exps) continue;
++            if (il > UINT16_MAX) throw std::runtime_error("PGRN layer key exceeds uint16");
++            pgrn_tensor_layout layout{};
++            if (!pgrn_find_layout(store.get(), (uint16_t) il, &layout)) {
++                throw std::runtime_error("PGRN tensor directory is missing a GGUF expert layer");
++            }
++            const std::array<const ggml_tensor *, 3> tensors = {
++                layer.ffn_gate_exps, layer.ffn_up_exps, layer.ffn_down_exps,
++            };
++            for (size_t role = 0; role < tensors.size(); ++role) {
++                const size_t total = ggml_nbytes(tensors[role]);
++                if (total % (size_t) hparams.n_expert != 0 ||
++                        layout.ggml_type[role] != (uint32_t) tensors[role]->type ||
++                        layout.nbytes[role] != total / (size_t) hparams.n_expert) {
++                    throw std::runtime_error("PGRN tensor directory type or slice geometry differs from GGUF");
++                }
++            }
++        }
++
++        pgr_system_memory memory{};
++        if (pgr_system_memory_read(&memory) != 0) throw std::runtime_error("native system memory availability is unknown");
++        constexpr uint64_t PGR_RUNTIME_OVERHEAD = 2ULL * 1024ULL * 1024ULL * 1024ULL;
++        pgr_runtime_params runtime_params{};
++        runtime_params.pgrn_path = params.pgrn_path;
++        runtime_params.model_sha256 = ::pgrn_model_sha256(store.get());
++        runtime_params.clox_k = 4;
++        runtime_params.hot_percent = params.pgrn_hot_percent;
++        runtime_params.promote_hits = (uint8_t) params.pgrn_promote_hits;
++        runtime_params.demote_idle_epochs = params.pgrn_demote_idle_epochs;
++        runtime_params.cooldown_epochs = params.pgrn_cooldown_epochs;
++        runtime_params.io_width = params.pgrn_io_threads;
++        runtime_params.predict_path = params.pgrn_predict_path;
++        runtime_params.coupling_path = params.pgrn_coupling_path;
++        runtime_params.cache_buft = scratch_buft;
++        runtime_params.admission.total_bytes = memory.total_bytes;
++        runtime_params.admission.available_bytes = memory.available_bytes;
++        runtime_params.admission.available_known = memory.available_known;
++        runtime_params.admission.model_bytes = ml.n_bytes;
++        runtime_params.admission.expert_total_bytes = ml.external_expert_bytes;
++        runtime_params.admission.overhead_bytes = PGR_RUNTIME_OVERHEAD;
++        runtime_params.admission.staging_bytes = scratch_reserve;
++        runtime_params.admission.min_headroom_bytes = params.pgrn_headroom_bytes;
++        runtime_params.admission.requested_cache_bytes = params.pgrn_cache_bytes;
++        runtime_params.admission.already_allocated_bytes = ml.n_bytes - ml.external_expert_bytes;
++        char error[192] = {};
++        pimpl->pgrn_runtime = pgr_runtime_new(
++                &runtime_params, &pimpl->pgrn_plan, error, sizeof(error));
++        if (!pimpl->pgrn_runtime) throw std::runtime_error(std::string("PGRN admission failed: ") + error);
++
++        ggml_context_ptr external = ml.take_external_expert_ctx();
++        if (!external) throw std::runtime_error("PGRN external expert metadata is missing");
++        pimpl->pgrn_scratch = pgr_scratch_new(external.get(), scratch_buft, error, sizeof(error));
++        if (!pimpl->pgrn_scratch || pgr_scratch_bytes(pimpl->pgrn_scratch) > scratch_reserve) {
++            throw std::runtime_error(std::string("PGRN fixed scratch allocation failed: ") + error);
++        }
++        if (params.pgrn_compact_slots) {
++            pimpl->pgrn_compact = pgr_compact_new(
++                    external.get(), pimpl->pgrn_runtime, error, sizeof(error));
++            if (!pimpl->pgrn_compact) {
++                throw std::runtime_error(std::string("PGRN compact arena binding failed: ") + error);
++            }
++        }
++        pimpl->pgrn_external_ctx = std::move(external);
++        LLAMA_LOG_INFO("%s: PGRN admitted cache = %.2f MiB, scratch = %.2f MiB, headroom = %.2f MiB\n",
++                __func__, pgr_runtime_cache_bytes(pimpl->pgrn_runtime) / 1048576.0,
++                pgr_scratch_bytes(pimpl->pgrn_scratch) / 1048576.0,
++                params.pgrn_headroom_bytes / 1048576.0);
++    }
++
+     // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
+     // If sidecar scales exist, the output weight must be an actual output tensor.
+     GGML_ASSERT(!(output && tok_embd &&
+@@ -1503,6 +1649,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
+         }
+     }
++    if (pimpl->pgrn_external_ctx) {
++        for (auto * cur = ggml_get_first_tensor(pimpl->pgrn_external_ctx.get()); cur != NULL;
++                cur = ggml_get_next_tensor(pimpl->pgrn_external_ctx.get(), cur)) {
++            tensors_by_name.emplace_back(ggml_get_name(cur), cur);
++        }
++    }
+ 
+     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+     pimpl->mappings.reserve(ml.mappings.size());
+@@ -1991,6 +2143,149 @@ bool llama_model::has_tensor_overrides() const {
+     return pimpl->has_tensor_overrides;
+ }
+ 
++bool llama_model::pgrn_enabled() const {
++    return pimpl->pgrn_runtime != nullptr && pimpl->pgrn_scratch != nullptr;
++}
++
++bool llama_model::pgrn_compact_enabled() const {
++    return pimpl->pgrn_compact != nullptr;
++}
++
++ggml_tensor * llama_model::pgrn_compact_tensor(uint16_t layer, int role) const {
++    return pimpl->pgrn_compact ? pgr_compact_tensor(pimpl->pgrn_compact, layer, role) : nullptr;
++}
++
++size_t llama_model::pgrn_compact_capacity(uint16_t layer) const {
++    ggml_tensor * tensor = pgrn_compact_tensor(layer, PGR_SCRATCH_GATE);
++    return tensor && tensor->ne[2] > 0 ? static_cast<size_t>(tensor->ne[2]) : 0;
++}
++
++int llama_model::pgrn_resolve_slots(
++        uint16_t layer, int32_t * expert_ids, size_t expert_id_count,
++        size_t * fetched, char * error, size_t error_capacity) const {
++    if (fetched) *fetched = 0;
++    if (!pgrn_compact_enabled() || (!expert_ids && expert_id_count != 0)) return -1;
++    pgr_runtime_batch_begin(pimpl->pgrn_runtime, layer);
++    for (size_t i = 0; i < expert_id_count; ++i) {
++        const int32_t original = expert_ids[i];
++        if (original < 0 || original > UINT16_MAX) {
++            if (error && error_capacity) std::snprintf(error, error_capacity, "%s", "selected expert id is outside PGRN keys");
++            return -1;
++        }
++        const void * data = nullptr;
++        size_t data_size = 0;
++        int hit = 0;
++        int slot = -1;
++        uint64_t generation = 0;
++        const pgr_stream_status status = pgr_runtime_get_slot(
++                pimpl->pgrn_runtime, layer, static_cast<uint16_t>(original),
++                &data, &data_size, &hit, &slot, &generation);
++        GGML_UNUSED(data);
++        GGML_UNUSED(data_size);
++        GGML_UNUSED(generation);
++        if (status != PGR_STREAM_OK || slot < 0 || static_cast<size_t>(slot) >= pgrn_compact_capacity(layer)) {
++            if (error && error_capacity) std::snprintf(error, error_capacity, "%s", pgr_runtime_error(pimpl->pgrn_runtime));
++            return -1;
++        }
++        expert_ids[i] = slot;
++        if (!hit && fetched) (*fetched)++;
++    }
++    if (error && error_capacity) error[0] = '\0';
++    return 0;
++}
++
++int llama_model::pgrn_stage(uint16_t layer, const int32_t * expert_ids, size_t expert_id_count,
++        size_t * copied, size_t * uploaded, uint64_t * fetch_us, uint64_t * upload_us,
++        char * error, size_t error_capacity) const {
++    if (copied) *copied = 0;
++    if (uploaded) *uploaded = 0;
++    if (fetch_us) *fetch_us = 0;
++    if (upload_us) *upload_us = 0;
++    if (!pgrn_enabled()) return -1;
++    pgr_stage_stats stats{};
++    const int result = pgr_scratch_stage(pimpl->pgrn_scratch, pimpl->pgrn_runtime,
++            layer, expert_ids, expert_id_count, &stats, error, error_capacity);
++    if (copied) *copied = stats.experts_copied;
++    if (uploaded) *uploaded = stats.bytes_uploaded;
++    if (fetch_us) *fetch_us = stats.fetch_us;
++    if (upload_us) *upload_us = stats.upload_us;
++    return result;
++}
++
++void llama_model::pgrn_prefetch_settle(uint16_t layer) const {
++    if (pgrn_enabled()) pgr_runtime_prefetch_settle(pimpl->pgrn_runtime, layer);
++}
++
++void llama_model::pgrn_prefetch_kick(uint16_t src_layer, const int32_t * fired, size_t n_fired) const {
++    if (!pgrn_enabled()) return;
++    if (pgr_runtime_has_coupling(pimpl->pgrn_runtime)) {
++        pgr_runtime_prefetch_kick_coupled(pimpl->pgrn_runtime, src_layer, fired,
++                n_fired > INT_MAX ? INT_MAX : (int) n_fired);
++    } else {
++        pgr_runtime_prefetch_kick(pimpl->pgrn_runtime, (uint16_t) (src_layer + 1));
++    }
++}
++
++bool llama_model::pgrn_has_coupling() const {
++    return pgrn_enabled() && pgr_runtime_has_coupling(pimpl->pgrn_runtime) != 0;
++}
++
++size_t llama_model::pgrn_cache_bytes() const {
++    return pimpl->pgrn_runtime ? pgr_runtime_cache_bytes(pimpl->pgrn_runtime) : 0;
++}
++
++size_t llama_model::pgrn_cache_high_water_bytes() const {
++    return pimpl->pgrn_runtime ? pgr_runtime_high_water_bytes(pimpl->pgrn_runtime) : 0;
++}
++
++size_t llama_model::pgrn_scratch_bytes() const {
++    return pimpl->pgrn_scratch ? pgr_scratch_bytes(pimpl->pgrn_scratch) : 0;
++}
++
++uint64_t llama_model::pgrn_cache_hits() const {
++    return pimpl->pgrn_runtime ? pgr_runtime_hits(pimpl->pgrn_runtime) : 0;
++}
++
++uint64_t llama_model::pgrn_cache_misses() const {
++    return pimpl->pgrn_runtime ? pgr_runtime_misses(pimpl->pgrn_runtime) : 0;
++}
++
++uint64_t llama_model::pgrn_hot_hits() const {
++    return pimpl->pgrn_runtime ? pgr_runtime_hot_hits(pimpl->pgrn_runtime) : 0;
++}
++
++uint64_t llama_model::pgrn_warm_hits() const {
++    return pimpl->pgrn_runtime ? pgr_runtime_warm_hits(pimpl->pgrn_runtime) : 0;
++}
++
++uint64_t llama_model::pgrn_hot_slots() const {
++    return pimpl->pgrn_runtime ? pgr_runtime_hot_count(pimpl->pgrn_runtime) : 0;
++}
++
++uint64_t llama_model::pgrn_warm_slots() const {
++    return pimpl->pgrn_runtime ? pgr_runtime_warm_count(pimpl->pgrn_runtime) : 0;
++}
++
++uint64_t llama_model::pgrn_promotions() const {
++    return pimpl->pgrn_runtime ? pgr_runtime_promotions(pimpl->pgrn_runtime) : 0;
++}
++
++uint64_t llama_model::pgrn_demotions() const {
++    return pimpl->pgrn_runtime ? pgr_runtime_demotions(pimpl->pgrn_runtime) : 0;
++}
++
++const pgr_admission_plan * llama_model::pgrn_admission() const {
++    return pgrn_enabled() ? &pimpl->pgrn_plan : nullptr;
++}
++
++uint64_t llama_model::pgrn_headroom_bytes() const {
++    return pgrn_enabled() ? pimpl->pgrn_plan.reserved_headroom_bytes : 0;
++}
++
++const char * llama_model::pgrn_model_sha256() const {
++    return pgr_runtime_model_sha256(pimpl->pgrn_runtime);
++}
++
+ const ggml_tensor * llama_model::get_tensor(const char * name) const {
+     auto it = std::find_if(tensors_by_name.begin(), tensors_by_name.end(),
+             [name](const std::pair<std::string, ggml_tensor *> & it) {
+@@ -2310,6 +2605,16 @@ llama_model_params llama_model_default_params() {
+         /*.progress_callback           =*/ nullptr,
+         /*.progress_callback_user_data =*/ nullptr,
+         /*.kv_overrides                =*/ nullptr,
++        /*.pgrn_path                   =*/ nullptr,
++        /*.pgrn_cache_bytes            =*/ 0,
++        /*.pgrn_headroom_bytes         =*/ 0,
++        /*.pgrn_hot_percent            =*/ 0,
++        /*.pgrn_promote_hits           =*/ 3,
++        /*.pgrn_demote_idle_epochs     =*/ 64,
++        /*.pgrn_cooldown_epochs        =*/ 16,
++        /*.pgrn_io_threads             =*/ 1,
++        /*.pgrn_predict_path           =*/ nullptr,
++        /*.pgrn_coupling_path          =*/ nullptr,
+         /*.vocab_only                  =*/ false,
+         /*.use_mmap                    =*/ true,
+         /*.use_direct_io               =*/ false,
+@@ -2318,6 +2623,7 @@ llama_model_params llama_model_default_params() {
+         /*.use_extra_bufts             =*/ true,
+         /*.no_host                     =*/ false,
+         /*.no_alloc                    =*/ false,
++        /*.pgrn_compact_slots          =*/ false,
+     };
+ 
+     return result;
+@@ -2538,6 +2844,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_COGVLM:
+         case LLM_ARCH_PANGU_EMBED:
+         case LLM_ARCH_AFMOE:
++        case LLM_ARCH_LAGUNA:
+         case LLM_ARCH_QWEN3NEXT:
+         case LLM_ARCH_MIMO2:
+         case LLM_ARCH_STEP35:
+@@ -2708,6 +3015,10 @@ int32_t llama_model_n_expert(const struct llama_model * model) {
+     return model->hparams.n_expert;
+ }
+ 
++const char * llama_model_pgrn_sha256(const struct llama_model * model) {
++    return model ? model->pgrn_model_sha256() : "";
++}
++
+ int32_t llama_model_n_devices(const struct llama_model * model) {
+     return (int32_t)model->devices.size();
+ }
+diff --git a/src/llama-model.h b/src/llama-model.h
+index 45b054ced..b22cff9c6 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "llama.h"
++#include "peregrine_admission.h"
+ #include "llama-arch.h"
+ #include "llama-graph.h"
+ #include "llama-hparams.h"
+@@ -123,6 +124,7 @@ enum llm_type {
+     LLM_TYPE_24B_A2B, // lfm2moe
+     LLM_TYPE_26B_A4B, // Gemma4
+     LLM_TYPE_30B_A3B,
++    LLM_TYPE_118B_A8B,
+     LLM_TYPE_31B_A3_5B,
+     LLM_TYPE_35B_A3B, // Qwen3.5
+     LLM_TYPE_48B_A3B, // Kimi Linear
+@@ -661,6 +663,36 @@ struct llama_model {
+ 
+     bool has_tensor_overrides() const;
+ 
++    bool pgrn_enabled() const;
++    bool pgrn_compact_enabled() const;
++    ggml_tensor * pgrn_compact_tensor(uint16_t layer, int role) const;
++    size_t pgrn_compact_capacity(uint16_t layer) const;
++    int pgrn_resolve_slots(uint16_t layer, int32_t * expert_ids, size_t expert_id_count,
++            size_t * fetched, char * error, size_t error_capacity) const;
++    int pgrn_stage(uint16_t layer, const int32_t * expert_ids, size_t expert_id_count,
++            size_t * copied, size_t * uploaded, uint64_t * fetch_us, uint64_t * upload_us,
++            char * error, size_t error_capacity) const;
++    void pgrn_prefetch_settle(uint16_t layer) const;   /* join prefetch aimed at this layer */
++    /* Warm the next layer's predicted set. Uses the coupled table (conditioned on the
++     * experts that fired at src_layer) when one is loaded, else the marginal hot set for
++     * src_layer+1. `fired` are the router's selected expert ids for src_layer. */
++    void pgrn_prefetch_kick(uint16_t src_layer, const int32_t * fired, size_t n_fired) const;
++    bool pgrn_has_coupling() const;                    /* a PGCC1 coupled table is loaded */
++    size_t pgrn_cache_bytes() const;
++    size_t pgrn_cache_high_water_bytes() const;
++    size_t pgrn_scratch_bytes() const;
++    uint64_t pgrn_cache_hits() const;
++    uint64_t pgrn_cache_misses() const;
++    uint64_t pgrn_hot_hits() const;
++    uint64_t pgrn_warm_hits() const;
++    uint64_t pgrn_hot_slots() const;
++    uint64_t pgrn_warm_slots() const;
++    uint64_t pgrn_promotions() const;
++    uint64_t pgrn_demotions() const;
++    const pgr_admission_plan * pgrn_admission() const;
++    uint64_t pgrn_headroom_bytes() const;
++    const char * pgrn_model_sha256() const;
++
+     const struct ggml_tensor * get_tensor(const char * name) const;
+ 
+     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+index b66759b27..818095f4a 100644
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -881,7 +881,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+     const llama_model_kv_override * kv_overrides = params->kv_overrides;
+     std::vector<std::string> splits = {};
+     llama_model_loader ml(/*metadata*/ nullptr, /*set_tensor_data*/ nullptr, /*set_tensor_data_ud*/ nullptr,
+-        fname_inp, splits, /*file*/ nullptr, use_mmap, /*use_direct_io*/ false, /*check_tensors*/ true, /*no_alloc*/ false, kv_overrides, nullptr);
++        fname_inp, splits, /*file*/ nullptr, use_mmap, /*use_direct_io*/ false, /*check_tensors*/ true, /*no_alloc*/ false,
++        /*external_experts*/ false, kv_overrides, nullptr);
+     ml.init_mappings(false); // no prefetching
+ 
+     auto mparams = llama_model_default_params();
+diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
+index fdd447147..d926eee6e 100644
+--- a/src/llama-vocab.cpp
++++ b/src/llama-vocab.cpp
+@@ -496,6 +496,12 @@ struct llm_tokenizer_bpe : llm_tokenizer {
+                     "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\\r\\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                 };
+                 break;
++            case LLAMA_VOCAB_PRE_TYPE_LAGUNA:
++                regex_exprs = {
++                    "[^\\n]+|[\\n]+",
++                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
++                };
++                break;
+             case LLAMA_VOCAB_PRE_TYPE_EXAONE_MOE:
+                 regex_exprs = {
+                     // original regex from tokenizer.json
+@@ -2342,6 +2348,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+                 tokenizer_pre == "afmoe") {
+                 pre_type = LLAMA_VOCAB_PRE_TYPE_AFMOE;
+                 clean_spaces = false;
++            } else if (
++                tokenizer_pre == "laguna") {
++                pre_type = LLAMA_VOCAB_PRE_TYPE_LAGUNA;
++                clean_spaces = false;
+             } else if (
+                 tokenizer_pre == "minimax-m2") {
+                 pre_type = LLAMA_VOCAB_PRE_TYPE_MINIMAX_M2;
+diff --git a/src/llama-vocab.h b/src/llama-vocab.h
+index 707cd4bac..b7c289263 100644
+--- a/src/llama-vocab.h
++++ b/src/llama-vocab.h
+@@ -64,6 +64,7 @@ enum llama_vocab_pre_type {
+     LLAMA_VOCAB_PRE_TYPE_WHITESPACE        = 53,
+     LLAMA_VOCAB_PRE_TYPE_GRANITE_EMB_MULTI = 54,
+     LLAMA_VOCAB_PRE_TYPE_MELLUM2           = 55,
++    LLAMA_VOCAB_PRE_TYPE_LAGUNA            = 56,
+ };
+ 
+ struct LLM_KV;
+diff --git a/src/llama.cpp b/src/llama.cpp
+index 0de6048f2..a969cb62a 100644
+--- a/src/llama.cpp
++++ b/src/llama.cpp
+@@ -9,6 +9,8 @@
+ #include "llama-model-loader.h"
+ #include "llama-model-saver.h"
+ #include "llama-model.h"
++#include "peregrine_pgrn.h"
++#include "peregrine_sha256.h"
+ 
+ #include "ggml.h"
+ #include "ggml-cpp.h"
+@@ -279,8 +281,25 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
+ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
+         const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model_params & params) {
+     try {
++        const bool external_experts = params.pgrn_path != nullptr;
++        if (external_experts && (!params.pgrn_path[0] || params.pgrn_cache_bytes == 0 ||
++                params.pgrn_headroom_bytes == 0 || params.vocab_only || params.no_alloc || fname.empty())) {
++            throw std::runtime_error("PGRN mode requires a file-backed model, cache budget, headroom, and allocated weights");
++        }
++        if (external_experts) {
++            if (splits.size() > 1) throw std::runtime_error("PGRN v1 does not support split GGUF sources");
++            std::unique_ptr<pgrn_file, decltype(&pgrn_close)> store(
++                    pgrn_open(params.pgrn_path, nullptr), pgrn_close);
++            if (!store) throw std::runtime_error("PGRN artifact header, directory, or CRC validation failed");
++            char actual_sha256[65] = {};
++            const bool identity_matches = pgr_sha256_file(fname.c_str(), actual_sha256) == 0 &&
++                    std::strcmp(actual_sha256, pgrn_model_sha256(store.get())) == 0;
++            if (!identity_matches) {
++                throw std::runtime_error("PGRN model identity does not match the source GGUF");
++            }
++        }
+         llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.use_mmap, params.use_direct_io,
+-            params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
++            params.check_tensors, params.no_alloc, external_experts, params.kv_overrides, params.tensor_buft_overrides);
+ 
+         ml.print_info();
+         std::unique_ptr<llama_model> model_ptr(llama_model_create(ml, params));
+@@ -578,4 +597,3 @@ const char * llama_print_system_info(void) {
+ 
+     return s.c_str();
+ }
+-
+diff --git a/src/models/dflash.cpp b/src/models/dflash.cpp
+index a7b4f4435..fca06a124 100644
+--- a/src/models/dflash.cpp
++++ b/src/models/dflash.cpp
+@@ -28,10 +28,16 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
+         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+     }
+ 
++    // Laguna drafters follow the target-architecture decoder contract; see the
++    // decoder_laguna member for the behavioral differences.
++    std::string decoder_arch;
++    ml.get_key(LLM_KV_DECODER_ARCH, decoder_arch, false);
++    decoder_laguna = decoder_arch == "laguna";
++
+     type = LLM_TYPE_UNKNOWN;
+ }
+ 
+-void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
++void llama_model_dflash::load_arch_tensors(llama_model_loader & ml) {
+     LLAMA_LOAD_LOCALS;
+ 
+     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
+@@ -40,6 +46,12 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
+     output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), { n_embd }, 0); // encoder hidden_norm (after fc)
+     output_norm     = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM,    "weight"), { n_embd }, 0); // decoder final norm
+ 
++    // Laguna drafters norm each captured target feature before concat + fc;
++    // the per-aux weights are stacked to [n_embd, n_aux] at conversion time
++    if (decoder_laguna) {
++        aux_norm = create_tensor(tn(LLM_TENSOR_ENC_AUX_NORM, "weight"), { n_embd, (int64_t) target_layer_ids.size() }, 0);
++    }
++
+     for (int i = 0; i < n_layer; ++i) {
+         auto & layer = layers[i];
+ 
+@@ -53,6 +65,22 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
+         layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
+         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
+ 
++        // Optional attention output gate (Laguna drafters). Per-head or
++        // per-element, distinguished by the stored width, same as the Laguna
++        // target arch. Absent on generic DFlash drafters.
++        if (decoder_laguna) {
++            const ggml_tensor * gate_meta = ml.get_tensor_meta(tn(LLM_TENSOR_ATTN_GATE, "weight", i).str().c_str());
++            if (gate_meta != nullptr) {
++                const int64_t n_gate_out = gate_meta->ne[1];
++                if (n_gate_out != n_head && n_gate_out != n_embd_head_k * n_head) {
++                    GGML_ABORT("DFlash: unexpected attention gate width %lld at layer %d "
++                               "(expected %lld per-head or %lld per-element)",
++                               (long long) n_gate_out, i, (long long) n_head, (long long) (n_embd_head_k * n_head));
++                }
++                layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), { n_embd, n_gate_out }, 0);
++            }
++        }
++
+         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, 0);
+         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
+@@ -90,8 +118,24 @@ ggml_tensor * llama_model_dflash::graph<true>::build_inp_embd_enc() const {
+ // DFlash Encoder: processes target model features through feature fusion layer
+ template <>
+ llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
++    const auto & model_df = static_cast<const llama_model_dflash &>(model);
++
+     ggml_tensor * cur = build_inp_embd_enc();
+ 
++    // Laguna drafters RMS-norm each captured feature before concat + fc.
++    // View the concatenated input as [n_feat, n_aux, n_tokens], norm over
++    // n_feat, and multiply by the stacked per-aux weights [n_feat, n_aux].
++    if (model_df.aux_norm != nullptr) {
++        const int64_t n_aux  = model_df.aux_norm->ne[1];
++        const int64_t n_feat = hparams.n_embd_inp_enc() / n_aux;
++
++        cur = ggml_reshape_3d(ctx0, cur, n_feat, n_aux, n_tokens);
++        cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
++        cur = ggml_mul(ctx0, cur, model_df.aux_norm);
++        cur = ggml_reshape_2d(ctx0, cur, n_feat * n_aux, n_tokens);
++        cb(cur, "enc_aux_norm", -1);
++    }
++
+     cur = build_lora_mm(model.fc, cur);
+     cb(cur, "fc_out", -1);
+ 
+@@ -140,11 +184,21 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
+ 
+         res->add_input(std::move(inp));
+ 
++        const auto & model_df = static_cast<const llama_model_dflash &>(model);
++
+         for (int il = 0; il < n_layer; ++il) {
+             const auto & layer = model.layers[il];
+ 
+-            ggml_tensor * Kcur = build_lora_mm(layer.wk, inp_g);
+-            ggml_tensor * Vcur = build_lora_mm(layer.wv, inp_g);
++            // Laguna draft layers project context K/V from the input_layernorm
++            // output, matching the query path (generic DFlash projects raw).
++            ggml_tensor * kv_inp = inp_g;
++            if (model_df.decoder_laguna) {
++                kv_inp = build_norm(inp_g, layer.attn_norm, NULL, LLM_NORM_RMS, il);
++                cb(kv_inp, "kv_inp_normed", il);
++            }
++
++            ggml_tensor * Kcur = build_lora_mm(layer.wk, kv_inp);
++            ggml_tensor * Vcur = build_lora_mm(layer.wv, kv_inp);
+ 
+             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+@@ -229,10 +283,37 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
+         cb(Kcur, "Kcur", il);
+         cb(Vcur, "Vcur", il);
+ 
+-        // cache-aware, non-causal attention
++        // cache-aware attention (non-causal for generic DFlash, causal for
++        // Laguna -- the mask is controlled by the context's causal_attn flag).
++        // With a gate present, o_proj is deferred until after gating.
++        const bool    gated = layer.wqkv_gate != nullptr;
++        ggml_tensor * wo    = gated ? NULL : layer.wo;
++
+         ggml_tensor * cur = use_iswa
+-            ? build_attn(inp_attn_iswa, layer.wo, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il)
+-            : build_attn(inp_attn,      layer.wo, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
++            ? build_attn(inp_attn_iswa, wo, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il)
++            : build_attn(inp_attn,      wo, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
++
++        if (gated) {
++            // Softplus output gate on the pre-attention hidden state, per-head
++            // (broadcast over head_dim) or per-element -- same as the Laguna
++            // target arch.
++            ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, noise_norm);
++            gate = ggml_softplus(ctx0, gate);
++            cb(gate, "attn_gate_softplus", il);
++
++            const int64_t n_tok = cur->ne[1];
++            if (layer.wqkv_gate->ne[1] == n_head) {
++                cur  = ggml_reshape_3d(ctx0, cur,  n_embd_head, n_head, n_tok);
++                gate = ggml_reshape_3d(ctx0, gate, 1,           n_head, n_tok);
++                cur  = ggml_mul(ctx0, cur, gate);
++                cur  = ggml_reshape_2d(ctx0, cur, n_embd_head * n_head, n_tok);
++            } else {
++                cur = ggml_mul(ctx0, cur, gate);
++            }
++            cb(cur, "attn_gated", il);
++
++            cur = build_lora_mm(layer.wo, cur);
++        }
+ 
+         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
+         cb(ffn_inp, "ffn_inp", il);
+diff --git a/src/models/models.h b/src/models/models.h
+index beab9f6bc..b51d4401f 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -1242,6 +1242,15 @@ struct llama_model_dflash : public llama_model_base {
+     void load_arch_hparams(llama_model_loader & ml) override;
+     void load_arch_tensors(llama_model_loader & ml) override;
+ 
++    // set when dflash.decoder_arch == "laguna": draft layers follow the Laguna
++    // decoder contract (softplus attn gate, per-aux feature norms, context K/V
++    // through input_layernorm, causal noise-block attention)
++    bool decoder_laguna = false;
++
++    // per-aux-feature RMSNorm weights stacked to [n_embd, n_aux], applied
++    // before concat + fc (Laguna drafters)
++    ggml_tensor * aux_norm = nullptr;
++
+     template <bool is_enc>
+     struct graph : public llm_graph_context {
+         graph(const llama_model & model, const llm_graph_params & params);
+@@ -1680,6 +1689,19 @@ struct llama_model_afmoe : public llama_model_base {
+ };
+ 
+ 
++struct llama_model_laguna : public llama_model_base {
++    llama_model_laguna(const struct llama_model_params & params) : llama_model_base(params) {}
++    void load_arch_hparams(llama_model_loader & ml) override;
++    void load_arch_tensors(llama_model_loader & ml) override;
++
++    struct graph : public llm_graph_context {
++        graph(const llama_model & model, const llm_graph_params & params);
++    };
++
++    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
++};
++
++
+ struct llama_model_ernie4_5 : public llama_model_base {
+     llama_model_ernie4_5(const struct llama_model_params & params) : llama_model_base(params) {}
+     void load_arch_hparams(llama_model_loader & ml) override;
+diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
+index 7b0876cbb..1a27864c1 100644
+--- a/src/models/qwen35moe.cpp
++++ b/src/models/qwen35moe.cpp
+@@ -497,12 +497,17 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+     // Check if this is an MoE layer
+     GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
+ 
++    const bool compact = model.pgrn_compact_enabled() && n_tokens == 1 &&
++            model.pgrn_compact_capacity(static_cast<uint16_t>(il)) >= static_cast<size_t>(n_expert_used);
++    ggml_tensor * compact_up = compact ? model.pgrn_compact_tensor(static_cast<uint16_t>(il), 1) : nullptr;
++    ggml_tensor * compact_gate = compact ? model.pgrn_compact_tensor(static_cast<uint16_t>(il), 0) : nullptr;
++    ggml_tensor * compact_down = compact ? model.pgrn_compact_tensor(static_cast<uint16_t>(il), 2) : nullptr;
+     ggml_tensor * moe_out =
+         build_moe_ffn(cur,
+             model.layers[il].ffn_gate_inp,
+-            model.layers[il].ffn_up_exps,
+-            model.layers[il].ffn_gate_exps,
+-            model.layers[il].ffn_down_exps,
++            compact ? compact_up : model.layers[il].ffn_up_exps,
++            compact ? compact_gate : model.layers[il].ffn_gate_exps,
++            compact ? compact_down : model.layers[il].ffn_down_exps,
+             nullptr,
+             n_expert, n_expert_used,
+             LLM_FFN_SILU, true,
+@@ -511,7 +516,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+             nullptr, model.layers[il].ffn_gate_up_exps,
+             model.layers[il].ffn_up_exps_s,
+             model.layers[il].ffn_gate_exps_s,
+-            model.layers[il].ffn_down_exps_s);
++            model.layers[il].ffn_down_exps_s,
++            nullptr,
++            compact);
+     cb(moe_out, "ffn_moe_out", il);
+ 
+     // Add shared experts if present - following Qwen3Next reference implementation
+@@ -675,12 +682,14 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
+     cb(cur, "mtp_attn_post_norm", il);
+ 
+     // MoE FFN — routed experts plus gated shared expert (mirrors qwen35moe).
++    const bool compact = model.pgrn_compact_enabled() && n_tokens == 1 &&
++            model.pgrn_compact_capacity(static_cast<uint16_t>(il)) >= static_cast<size_t>(n_expert_used);
+     ggml_tensor * moe_out =
+         build_moe_ffn(cur,
+             layer.ffn_gate_inp,
+-            layer.ffn_up_exps,
+-            layer.ffn_gate_exps,
+-            layer.ffn_down_exps,
++            compact ? model.pgrn_compact_tensor(static_cast<uint16_t>(il), 1) : layer.ffn_up_exps,
++            compact ? model.pgrn_compact_tensor(static_cast<uint16_t>(il), 0) : layer.ffn_gate_exps,
++            compact ? model.pgrn_compact_tensor(static_cast<uint16_t>(il), 2) : layer.ffn_down_exps,
+             nullptr,
+             n_expert, n_expert_used,
+             LLM_FFN_SILU, true,
+@@ -689,7 +698,9 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
+             nullptr, layer.ffn_gate_up_exps,
+             layer.ffn_up_exps_s,
+             layer.ffn_gate_exps_s,
+-            layer.ffn_down_exps_s);
++            layer.ffn_down_exps_s,
++            nullptr,
++            compact);
+     cb(moe_out, "mtp_ffn_moe_out", il);
+ 
+     if (layer.ffn_up_shexp != nullptr) {
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 855295c15..f0ce3485e 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -311,3 +311,162 @@ if (TARGET gguf-model-data)
+     target_link_libraries(test-export-graph-ops PRIVATE gguf-model-data)
+     target_compile_definitions(test-export-graph-ops PRIVATE LLAMA_HF_FETCH)
+ endif()
++
++# Peregrine: test the exact bounded-streaming sources linked into libllama.  Do not
++# compile stale copies from tests/, otherwise CTest can pass while the runtime differs.
++add_executable(test-peregrine-stream
++    test-peregrine-stream.cpp
++    ../src/peregrine_cache.c
++    ../src/peregrine_tier.c
++    ../src/peregrine_stream.c)
++target_include_directories(test-peregrine-stream PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++add_test(NAME test-peregrine-stream COMMAND test-peregrine-stream)
++
++add_executable(test-peregrine-tier
++    test-peregrine-tier.cpp
++    ../src/peregrine_cache.c
++    ../src/peregrine_tier.c)
++target_include_directories(test-peregrine-tier PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++add_test(NAME test-peregrine-tier COMMAND test-peregrine-tier)
++
++add_executable(test-peregrine-predict
++    test-peregrine-predict.cpp
++    ../src/peregrine_predict.c)
++target_include_directories(test-peregrine-predict PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++add_test(NAME test-peregrine-predict COMMAND test-peregrine-predict)
++
++add_executable(test-peregrine-arena
++    test-peregrine-arena.cpp
++    ../src/peregrine_arena.cpp
++    ../src/peregrine_cache.c
++    ../src/peregrine_tier.c
++    ../src/peregrine_stream.c)
++target_compile_features(test-peregrine-arena PRIVATE cxx_std_17)
++target_include_directories(test-peregrine-arena PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++target_link_libraries(test-peregrine-arena PRIVATE ggml)
++add_test(NAME test-peregrine-arena COMMAND test-peregrine-arena)
++
++add_executable(test-peregrine-pgrn
++    test-peregrine-pgrn.cpp
++    ../src/peregrine_pgrn.c)
++target_include_directories(test-peregrine-pgrn PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++add_test(NAME test-peregrine-pgrn COMMAND test-peregrine-pgrn)
++
++add_executable(test-peregrine-admission
++    test-peregrine-admission.cpp
++    ../src/peregrine_admission.c)
++target_include_directories(test-peregrine-admission PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++add_test(NAME test-peregrine-admission COMMAND test-peregrine-admission)
++
++if (APPLE)
++    add_executable(test-peregrine-ane
++        test-peregrine-ane.mm
++        ../src/peregrine_ane.mm)
++    set_source_files_properties(
++        test-peregrine-ane.mm ../src/peregrine_ane.mm
++        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
++    target_include_directories(test-peregrine-ane PRIVATE
++        ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++    target_link_libraries(test-peregrine-ane PRIVATE "-framework CoreML" "-framework Foundation")
++    add_test(NAME test-peregrine-ane COMMAND test-peregrine-ane)
++endif()
++
++add_executable(test-peregrine-runtime
++    test-peregrine-runtime.cpp
++    ../src/peregrine_compact.cpp
++    ../src/peregrine_runtime.cpp
++    ../src/peregrine_predict.c
++    ../src/peregrine_arena.cpp
++    ../src/peregrine_admission.c
++    ../src/peregrine_pgrn.c
++    ../src/peregrine_cache.c
++    ../src/peregrine_tier.c
++    ../src/peregrine_stream.c)
++target_include_directories(test-peregrine-runtime PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++target_link_libraries(test-peregrine-runtime PRIVATE ggml)
++add_test(NAME test-peregrine-runtime COMMAND test-peregrine-runtime)
++
++add_executable(test-peregrine-loader test-peregrine-loader.cpp)
++target_compile_features(test-peregrine-loader PRIVATE cxx_std_17)
++target_include_directories(test-peregrine-loader PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++target_link_libraries(test-peregrine-loader PRIVATE llama)
++add_test(NAME test-peregrine-loader COMMAND test-peregrine-loader)
++
++add_executable(test-peregrine-stage
++    test-peregrine-stage.cpp
++    ../src/peregrine_stage.cpp
++    ../src/peregrine_runtime.cpp
++    ../src/peregrine_predict.c
++    ../src/peregrine_arena.cpp
++    ../src/peregrine_admission.c
++    ../src/peregrine_pgrn.c
++    ../src/peregrine_cache.c
++    ../src/peregrine_tier.c
++    ../src/peregrine_stream.c)
++target_compile_features(test-peregrine-stage PRIVATE cxx_std_17)
++target_include_directories(test-peregrine-stage PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++target_link_libraries(test-peregrine-stage PRIVATE ggml)
++add_test(NAME test-peregrine-stage COMMAND test-peregrine-stage)
++
++add_executable(test-peregrine-scratch
++    test-peregrine-scratch.cpp
++    ../src/peregrine_scratch.cpp
++    ../src/peregrine_stage.cpp
++    ../src/peregrine_runtime.cpp
++    ../src/peregrine_predict.c
++    ../src/peregrine_arena.cpp
++    ../src/peregrine_admission.c
++    ../src/peregrine_pgrn.c
++    ../src/peregrine_cache.c
++    ../src/peregrine_tier.c
++    ../src/peregrine_stream.c)
++target_compile_features(test-peregrine-scratch PRIVATE cxx_std_17)
++target_include_directories(test-peregrine-scratch PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++target_link_libraries(test-peregrine-scratch PRIVATE ggml)
++add_test(NAME test-peregrine-scratch COMMAND test-peregrine-scratch)
++
++if (APPLE)
++    find_package(ZLIB REQUIRED)
++    foreach(pgrn_target test-peregrine-pgrn test-peregrine-runtime test-peregrine-stage test-peregrine-scratch)
++        target_compile_definitions(${pgrn_target} PRIVATE PGR_HAVE_ZLIB=1)
++        target_link_libraries(${pgrn_target} PRIVATE ZLIB::ZLIB)
++    endforeach()
++endif()
++
++add_executable(test-peregrine-system-memory
++    test-peregrine-system-memory.cpp
++    ../src/peregrine_system_memory.c)
++target_include_directories(test-peregrine-system-memory PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++add_test(NAME test-peregrine-system-memory COMMAND test-peregrine-system-memory)
++
++add_executable(test-peregrine-sha256
++    test-peregrine-sha256.cpp
++    ../src/peregrine_sha256.c)
++target_include_directories(test-peregrine-sha256 PRIVATE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++add_test(NAME test-peregrine-sha256 COMMAND test-peregrine-sha256)
++
++# End-to-end parity driver. The Python integration test supplies a generated
++# architecture fixture plus its identity-bound PGRN artifact.
++llama_build(test-peregrine-model.cpp)
++target_include_directories(test-peregrine-model PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++add_dependencies(test-peregrine-model test-llama-archs)
++find_package(Python3 COMPONENTS Interpreter REQUIRED)
++add_test(
++    NAME test-peregrine-model-e2e
++    COMMAND ${Python3_EXECUTABLE}
++        ${CMAKE_CURRENT_SOURCE_DIR}/test-peregrine-model-e2e.py
++        --generator $<TARGET_FILE:test-llama-archs>
++        --driver $<TARGET_FILE:test-peregrine-model>
++        --repo-root ${PROJECT_SOURCE_DIR}/../..)
+diff --git a/tests/test-arg-parser.cpp b/tests/test-arg-parser.cpp
+index e83ee85dd..3f5b225d2 100644
+--- a/tests/test-arg-parser.cpp
++++ b/tests/test-arg-parser.cpp
+@@ -106,6 +106,15 @@ static void test(void) {
+     argv = {"binary_name", "--no-mmap"};
+     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+ 
++    argv = {"binary_name", "--pgrn-cache-gb", "0"};
++    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
++
++    argv = {"binary_name", "--pgrn-hot-percent", "101"};
++    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
++
++    argv = {"binary_name", "--pgrn-promote-hits", "0"};
++    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
++
+ 
+     printf("test-arg-parser: test valid usage\n\n");
+ 
+@@ -127,6 +136,29 @@ static void test(void) {
+     assert(params.n_predict == 6789);
+     assert(params.n_batch == 9090);
+ 
++    argv = {"binary_name", "--pgrn", "experts.pgrn", "--pgrn-cache-gb", "1.5", "--pgrn-headroom-gb", "6",
++            "--pgrn-hot-percent", "25", "--pgrn-promote-hits", "4", "--pgrn-demote-idle", "80",
++            "--pgrn-hot-cooldown", "20", "--pgrn-compact-slots", "--fit", "on"};
++    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
++    assert(params.pgrn_path == "experts.pgrn");
++    assert(params.pgrn_cache_bytes == 3ULL * 512ULL * 1024ULL * 1024ULL);
++    assert(params.pgrn_headroom_bytes == 6ULL * 1024ULL * 1024ULL * 1024ULL);
++    assert(params.pgrn_hot_percent == 25);
++    assert(params.pgrn_promote_hits == 4);
++    assert(params.pgrn_demote_idle_epochs == 80);
++    assert(params.pgrn_cooldown_epochs == 20);
++    assert(params.pgrn_compact_slots);
++    assert(params.use_mmap == false);
++    assert(params.fit_params == false);
++    const llama_model_params pgrn_model_params = common_model_params_to_llama(params);
++    assert(pgrn_model_params.pgrn_path == params.pgrn_path.c_str());
++    assert(pgrn_model_params.pgrn_cache_bytes == params.pgrn_cache_bytes);
++    assert(pgrn_model_params.pgrn_headroom_bytes == params.pgrn_headroom_bytes);
++    assert(pgrn_model_params.pgrn_hot_percent == 25);
++    assert(pgrn_model_params.pgrn_promote_hits == 4);
++    assert(pgrn_model_params.pgrn_compact_slots);
++    assert(pgrn_model_params.use_mmap == false);
++
+     // --draft cannot be used outside llama-speculative
+     argv = {"binary_name", "--spec-draft-n-max", "123"};
+     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index fae0e8eb9..5f647ea9a 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -9316,8 +9316,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+                                 if (nh == 1 && hsk != 320 && hsk != 576) continue;
+                                 for (int nr3 : { 1, 3, }) {
+                                     if (hsk > 64 && nr3 > 1) continue; // skip broadcast for large head sizes
+-                                    for (int nr2 : { 1, 4, 8, 12, 16, 20, 32 }) {
++                                    for (int nr2 : { 1, 4, 6, 8, 9, 12, 16, 20, 32 }) {
++                                        if (nr2 ==  6 && hsk != 128) continue; // non-power-of-2 GQA ratio
+                                         if (nr2 ==  8 && hsk != 192) continue;
++                                        if (nr2 ==  9 && hsk != 128) continue; // non-power-of-2 GQA ratio
+                                         if (nr2 == 12 && hsk != 128) continue;
+                                         if (nr2 == 16 && hsk != 192) continue;
+                                         if (nr2 == 20 && (nh != 1 || hsk != 576)) continue;
+diff --git a/tests/test-chat-auto-parser.cpp b/tests/test-chat-auto-parser.cpp
+index 78e42c65a..4218f8d57 100644
+--- a/tests/test-chat-auto-parser.cpp
++++ b/tests/test-chat-auto-parser.cpp
+@@ -57,6 +57,15 @@ static void test_seed_oss_tool_with_reasoning(testing & t);
+ static void test_nemotron_analysis(testing & t);
+ static void test_nemotron_reasoning_detection(testing & t);
+ static void test_nemotron_tool_format(testing & t);
++static void test_laguna_analysis(testing & t);
++static void test_laguna_reasoning_detection(testing & t);
++static void test_laguna_tool_format(testing & t);
++static void test_laguna_s_analysis(testing & t);
++static void test_laguna_s_reasoning_detection(testing & t);
++static void test_laguna_s_tool_format(testing & t);
++static void test_laguna_xs2_analysis(testing & t);
++static void test_laguna_xs2_reasoning_detection(testing & t);
++static void test_laguna_xs2_tool_format(testing & t);
+ 
+ // CohereForAI template analysis tests
+ static void test_cohere_reasoning_detection(testing & t);
+@@ -101,6 +110,9 @@ int main(int argc, char * argv[]) {
+     t.test("seed_oss_diffs", test_seed_oss_tool_analysis);
+     t.test("cohere", test_cohere_analysis);
+     t.test("nemotron", test_nemotron_analysis);
++    t.test("laguna", test_laguna_analysis);
++    t.test("laguna-s", test_laguna_s_analysis);
++    t.test("laguna-xs2", test_laguna_xs2_analysis);
+     t.test("smollm3", test_smollm3_analysis);
+     t.test("standard_json_tools", test_standard_json_tools_formats);
+     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
+@@ -1378,6 +1390,94 @@ static void test_nemotron_tool_format(testing & t) {
+     t.assert_true("should support tools", analysis.jinja_caps.supports_tools);
+ }
+ 
++// ============================================================================
++// Laguna Template Analysis Tests
++// ============================================================================
++static common_chat_template load_laguna_template(testing & t) {
++    return load_template(t, "models/templates/poolside-Laguna-XS-2.1.jinja");
++}
++
++static void test_laguna_reasoning_detection(testing & t) {
++    common_chat_template tmpl = load_laguna_template(t);
++    struct autoparser analysis;
++    analysis.analyze_template(tmpl);
++    // Laguna's template renders reasoning delimiters with formatting whitespace
++    // ("<think>\n") that the model does not emit; the Laguna patch trims them.
++    t.assert_equal("reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
++    t.assert_equal("reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
++    t.assert_equal("reasoning should be TAG_BASED", reasoning_mode::TAG_BASED, analysis.reasoning.mode);
++}
++
++static void test_laguna_tool_format(testing & t) {
++    common_chat_template tmpl = load_laguna_template(t);
++    struct autoparser analysis;
++    analysis.analyze_template(tmpl);
++    t.assert_equal("arg_value_suffix should be '</arg_value>'", "</arg_value>", analysis.tools.arguments.value_suffix);
++}
++
++static void test_laguna_stop_string(testing & t) {
++    // The </assistant> turn terminator can be emitted as ordinary text tokens
++    // (not the single eot token), so it must also be a literal stop string.
++    common_chat_template tmpl = load_laguna_template(t);
++    struct autoparser analysis;
++    analysis.analyze_template(tmpl);
++    bool has_stop = false;
++    for (const auto & stop : analysis.additional_stops) {
++        if (stop == "</assistant>") { has_stop = true; break; }
++    }
++    t.assert_true("Laguna additional_stops contains </assistant>", has_stop);
++}
++
++static void test_laguna_analysis(testing & t) {
++    t.test("Laguna reasoning detection", test_laguna_reasoning_detection);
++    t.test("Laguna tool format", test_laguna_tool_format);
++    t.test("Laguna stop string", test_laguna_stop_string);
++}
++
++static common_chat_template load_laguna_s_template(testing & t) {
++    return load_template(t, "models/templates/poolside-Laguna-S-2.1.jinja");
++}
++static void test_laguna_s_reasoning_detection(testing & t) {
++    common_chat_template tmpl = load_laguna_s_template(t);
++    struct autoparser analysis;
++    analysis.analyze_template(tmpl);
++    t.assert_equal("Laguna-S(v8) reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
++    t.assert_equal("Laguna-S(v8) reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
++    t.assert_equal("Laguna-S(v8) reasoning should be TAG_BASED", reasoning_mode::TAG_BASED, analysis.reasoning.mode);
++}
++static void test_laguna_s_tool_format(testing & t) {
++    common_chat_template tmpl = load_laguna_s_template(t);
++    struct autoparser analysis;
++    analysis.analyze_template(tmpl);
++    t.assert_equal("Laguna-S(v8) arg_value_suffix should be '</arg_value>'", "</arg_value>", analysis.tools.arguments.value_suffix);
++}
++static void test_laguna_s_analysis(testing & t) {
++    t.test("Laguna-S(v8) reasoning detection", test_laguna_s_reasoning_detection);
++    t.test("Laguna-S(v8) tool format", test_laguna_s_tool_format);
++}
++
++static common_chat_template load_laguna_xs2_template(testing & t) {
++    return load_template(t, "models/templates/poolside-Laguna-XS.2.jinja");
++}
++static void test_laguna_xs2_reasoning_detection(testing & t) {
++    common_chat_template tmpl = load_laguna_xs2_template(t);
++    struct autoparser analysis;
++    analysis.analyze_template(tmpl);
++    t.assert_equal("Laguna-XS.2(v5) reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
++    t.assert_equal("Laguna-XS.2(v5) reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
++    t.assert_equal("Laguna-XS.2(v5) reasoning should be TAG_BASED", reasoning_mode::TAG_BASED, analysis.reasoning.mode);
++}
++static void test_laguna_xs2_tool_format(testing & t) {
++    common_chat_template tmpl = load_laguna_xs2_template(t);
++    struct autoparser analysis;
++    analysis.analyze_template(tmpl);
++    t.assert_equal("Laguna-XS.2(v5) arg_value_suffix should be '</arg_value>'", "</arg_value>", analysis.tools.arguments.value_suffix);
++}
++static void test_laguna_xs2_analysis(testing & t) {
++    t.test("Laguna-XS.2(v5) reasoning detection", test_laguna_xs2_reasoning_detection);
++    t.test("Laguna-XS.2(v5) tool format", test_laguna_xs2_tool_format);
++}
++
+ static common_chat_template load_cohere_template(testing & t) {
+     return load_template(t, "models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja");
+ }
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index 2cdf35739..220db5487 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -9,6 +9,7 @@
+ 
+ // TODO: replace with #include "llama-ext.h" in the future
+ #include "../src/llama-arch.h"
++#include "../src/llama-model.h"
+ #include "../src/llama-model-saver.h"
+ 
+ #include <cinttypes>
+@@ -109,6 +110,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+         n_ff   = 192;
+     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
+         n_layer = 3;
++    } else if (arch == LLM_ARCH_QWEN35MOE) {
++        // Two trunk blocks plus one real NextN/MTP block. Peregrine's model
++        // integration uses this fixture to exercise streaming in both graphs.
++        n_layer = 3;
+     } else if (arch == LLM_ARCH_CHAMELEON) {
+         n_vocab = 10240;
+     }
+@@ -121,6 +126,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+     ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
+     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
+     ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
++    if (arch == LLM_ARCH_QWEN35MOE) {
++        ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, uint32_t(1));
++    }
+     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
+ 
+     if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
+@@ -213,6 +221,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+         ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,         uint32_t(2)); // sigmoid
+         ms.add_kv(LLM_KV_EXPERT_GROUP_SCALE,         1.0f);
+         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
++
+     }
+ 
+     ms.add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,   n_embd);
+@@ -252,6 +261,57 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+     return true;
+ }
+ 
++static void save_qwen35moe_separate(const llama_model * model, const std::string & path) {
++    llama_model_saver saver(model);
++    saver.add_kv_from_model();
++
++    const auto & tensors = llama_internal_get_tensor_map(model);
++    size_t merged_count = 0;
++    for (const auto & [name, tensor] : tensors) {
++        if (name.find(".ffn_gate_up_exps.weight") != std::string::npos) ++merged_count;
++        else saver.add_tensor(tensor);
++    }
++    GGML_ASSERT(merged_count > 0);
++
++    ggml_init_params params = { ggml_tensor_overhead() * merged_count * 2, nullptr, true };
++    ggml_context * ctx = ggml_init(params);
++    GGML_ASSERT(ctx != nullptr);
++    std::vector<std::vector<unsigned char>> payloads;
++    payloads.reserve(merged_count * 2);
++    for (const auto & [name, tensor] : tensors) {
++        if (name.find(".ffn_gate_up_exps.weight") == std::string::npos) continue;
++        GGML_ASSERT(tensor->type == GGML_TYPE_F32 && tensor->ne[1] % 2 == 0 && tensor->ne[2] > 0);
++        const size_t role_bytes = (size_t) tensor->ne[0] * (size_t) (tensor->ne[1] / 2) * sizeof(float);
++        const size_t merged_bytes = role_bytes * 2 * (size_t) tensor->ne[2];
++        std::vector<unsigned char> merged(merged_bytes);
++        ggml_backend_tensor_get(tensor, merged.data(), 0, merged.size());
++        payloads.emplace_back(role_bytes * (size_t) tensor->ne[2]);
++        payloads.emplace_back(role_bytes * (size_t) tensor->ne[2]);
++        auto & gate_data = payloads[payloads.size() - 2];
++        auto & up_data   = payloads[payloads.size() - 1];
++        for (int64_t expert = 0; expert < tensor->ne[2]; ++expert) {
++            std::memcpy(gate_data.data() + (size_t) expert * role_bytes,
++                    merged.data() + (size_t) expert * 2 * role_bytes, role_bytes);
++            std::memcpy(up_data.data() + (size_t) expert * role_bytes,
++                    merged.data() + ((size_t) expert * 2 + 1) * role_bytes, role_bytes);
++        }
++        ggml_tensor * gate = ggml_new_tensor_3d(ctx, tensor->type, tensor->ne[0], tensor->ne[1] / 2, tensor->ne[2]);
++        ggml_tensor * up   = ggml_new_tensor_3d(ctx, tensor->type, tensor->ne[0], tensor->ne[1] / 2, tensor->ne[2]);
++        std::string gate_name = name;
++        std::string up_name = name;
++        gate_name.replace(gate_name.find("gate_up"), 7, "gate");
++        up_name.replace(up_name.find("gate_up"), 7, "up");
++        ggml_set_name(gate, gate_name.c_str());
++        ggml_set_name(up, up_name.c_str());
++        gate->data = gate_data.data();
++        up->data = up_data.data();
++        saver.add_tensor(gate);
++        saver.add_tensor(up);
++    }
++    saver.save(path);
++    ggml_free(ctx);
++}
++
+ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
+         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
+@@ -360,6 +420,7 @@ static bool moe_mandatory(const llm_arch arch) {
+         case LLM_ARCH_STEP35:
+         case LLM_ARCH_MISTRAL4:
+         case LLM_ARCH_MELLUM:
++        case LLM_ARCH_LAGUNA:
+             return true;
+         default:
+             return false;
+@@ -473,7 +534,11 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
+             auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
+             const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
+             LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
+-            llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
++            if (arch == LLM_ARCH_QWEN35MOE) {
++                save_qwen35moe_separate(model_and_ctx.first.get(), path);
++            } else {
++                llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
++            }
+         }
+     }
+     llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
+diff --git a/tools/server/CMakeLists.txt b/tools/server/CMakeLists.txt
+index b5c40884f..1fed5c770 100644
+--- a/tools/server/CMakeLists.txt
++++ b/tools/server/CMakeLists.txt
+@@ -5,6 +5,8 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+ set(TARGET server-context)
+ 
+ add_library(${TARGET} STATIC
++    peregrine-routing.cpp
++    peregrine-routing.h
+     server-chat.cpp
+     server-chat.h
+     server-task.cpp
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 7564ad4e9..007ab01a1 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -2,6 +2,7 @@
+ #include "server-chat.h"
+ #include "server-common.h"
+ #include "server-http.h"
++#include "peregrine-routing.h"
+ #include "server-task.h"
+ #include "server-queue.h"
+ #include "server-schema.h"
+@@ -291,6 +292,18 @@ struct server_slot {
+     int32_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
+     std::vector<int32_t> n_accepted_per_pos; // Accepted tokens per draft position
+ 
++    bool adaptive_draft_enabled = false;
++    bool adaptive_draft_observed = false;
++    common_speculative_adaptive_draft adaptive_draft;
++
++    void observe_adaptive_draft() {
++        if (!adaptive_draft_enabled || adaptive_draft_observed || n_draft_total <= 0) {
++            return;
++        }
++        adaptive_draft.observe(n_draft_total, n_draft_accepted);
++        adaptive_draft_observed = true;
++    }
++
+     void reset() {
+         SLT_DBG(*this, "%s", "\n");
+ 
+@@ -318,6 +331,7 @@ struct server_slot {
+         n_draft_accepted = 0;
+         n_draft_verif_steps = 0;
+         n_accepted_per_pos.clear();
++        adaptive_draft_observed = false;
+ 
+         task_prev = std::move(task);
+         task.reset();
+@@ -433,6 +447,10 @@ struct server_slot {
+             n_draft_max = std::min(n_draft_max, n_remaining - 1);
+         }
+ 
++        if (adaptive_draft_enabled) {
++            n_draft_max = std::min(n_draft_max, adaptive_draft.current);
++        }
++
+         SLT_DBG(*this, "max possible draft: %d\n", n_draft_max);
+ 
+         return n_draft_max;
+@@ -516,6 +534,13 @@ struct server_slot {
+             timings.draft_n_accepted = n_draft_accepted;
+         }
+ 
++        if (adaptive_draft_enabled && adaptive_draft_observed) {
++            timings.draft_adaptive_n       = adaptive_draft.last_used;
++            timings.draft_adaptive_n_next  = adaptive_draft.last_next;
++            timings.draft_acceptance       = adaptive_draft.last_acceptance;
++            timings.draft_acceptance_ewma  = adaptive_draft.ewma;
++        }
++
+         return timings;
+     }
+ 
+@@ -601,9 +626,36 @@ struct server_slot {
+                 "      total time = %10.2f ms / %5d tokens\n",
+                 t_prompt_processing + t_token_generation, n_prompt_tokens_processed + n_decoded);
+ 
++        const llama_perf_context_data perf = llama_perf_context(ctx_tgt);
+         SLT_INF(*this,
+                 "   graphs reused = %10d\n",
+-                llama_perf_context(ctx_tgt).n_reused);
++                perf.n_reused);
++
++        if (perf.pgrn_cache_bytes > 0) {
++            const uint64_t accesses = perf.pgrn_cache_hits + perf.pgrn_cache_misses;
++            const double hit_rate = accesses ? 100.0 * perf.pgrn_cache_hits / accesses : 0.0;
++            SLT_INF(*this,
++                    "   PGRN cache = %.2f MiB, high-water = %.2f MiB, hits = %llu, misses = %llu (%.2f%%)\n",
++                    perf.pgrn_cache_bytes / 1048576.0, perf.pgrn_cache_high_water_bytes / 1048576.0,
++                    (unsigned long long) perf.pgrn_cache_hits,
++                    (unsigned long long) perf.pgrn_cache_misses, hit_rate);
++            SLT_INF(*this,
++                    "   PGRN tiers HOT/WARM slots = %llu/%llu, hits = %llu/%llu, promotions = %llu, demotions = %llu\n",
++                    (unsigned long long) perf.pgrn_hot_slots,
++                    (unsigned long long) perf.pgrn_warm_slots,
++                    (unsigned long long) perf.pgrn_hot_hits,
++                    (unsigned long long) perf.pgrn_warm_hits,
++                    (unsigned long long) perf.pgrn_promotions,
++                    (unsigned long long) perf.pgrn_demotions);
++            SLT_INF(*this,
++                    "   PGRN compact slot compute = %s\n",
++                    perf.pgrn_compact_slots ? "enabled" : "disabled");
++            SLT_INF(*this,
++                    "   PGRN stage = %.2f ms (fetch %.2f ms, upload %.2f ms), experts = %llu, bytes = %.2f MiB\n",
++                    perf.pgrn_stage_ms, perf.pgrn_fetch_ms, perf.pgrn_upload_ms,
++                    (unsigned long long) perf.pgrn_experts_staged,
++                    perf.pgrn_bytes_uploaded / 1048576.0);
++        }
+ 
+         if (n_draft_total > 0) {
+             const float  draft_ratio  = (float) n_draft_accepted / n_draft_total;
+@@ -1086,6 +1138,7 @@ private:
+                 bool measure_model_bytes = has_draft;
+ 
+                 common_params params_dft = common_base_params_to_speculative(params_base);
++                params_dft.pgrn_path.clear(); // draft is resident: must not inherit main model PGRN
+ 
+                 auto mparams_dft = common_model_params_to_llama(params_dft);
+                 auto cparams_dft = common_context_params_to_llama(params_dft);
+@@ -1154,6 +1207,20 @@ private:
+ 
+         vocab = llama_model_get_vocab(model_tgt);
+ 
++        if (!params_base.speculative.ane.manifest_path.empty()) {
++            const char * pgrn_sha = llama_model_pgrn_sha256(model_tgt);
++            char architecture[128] = {};
++            if (!pgrn_sha || std::strlen(pgrn_sha) != 64 ||
++                    llama_model_meta_val_str(model_tgt, "general.architecture",
++                        architecture, sizeof(architecture)) < 1) {
++                SRV_ERR("%s", "ANE draft requires an identity-verified PGRN target model\n");
++                return false;
++            }
++            params_base.speculative.ane.target_model_sha256 = pgrn_sha;
++            params_base.speculative.ane.target_architecture = architecture;
++            params_base.speculative.ane.target_n_vocab = llama_vocab_n_tokens(vocab);
++        }
++
+         n_ctx = llama_n_ctx(ctx_tgt);
+ 
+         add_bos_token = llama_vocab_get_add_bos(vocab);
+@@ -1165,6 +1232,7 @@ private:
+ 
+             {
+                 common_params params_dft = common_base_params_to_speculative(params_base);
++                params_dft.pgrn_path.clear(); // draft is resident: must not inherit main model PGRN
+ 
+                 // progress callback
+                 params_dft.load_progress_callback           = load_progress_callback;
+@@ -1276,6 +1344,10 @@ private:
+                 spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
+             } catch (const std::exception & e) {
+                 SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
++                if (!params_base.speculative.ane.manifest_path.empty()) {
++                    SRV_ERR("%s", "explicit ANE draft request failed closed; server startup aborted\n");
++                    return false;
++                }
+             }
+         }
+ 
+@@ -1299,6 +1371,8 @@ private:
+             slot.ctx_dft = ctx_dft;
+             slot.spec    = spec.get();
+             slot.n_ctx   = n_ctx_slot;
++            slot.adaptive_draft_enabled = params_base.speculative.draft.adaptive;
++            slot.adaptive_draft.reset();
+ 
+             slot.mctx                   = mctx;
+             slot.prompt.tokens.has_mtmd = mctx != nullptr;
+@@ -2066,6 +2140,8 @@ private:
+     void send_final_response(server_slot & slot) {
+         auto res = std::make_unique<server_task_result_cmpl_final>();
+ 
++        slot.observe_adaptive_draft();
++
+         res->id      = slot.task->id;
+         res->id_slot = slot.id;
+ 
+@@ -3582,8 +3658,45 @@ private:
+             n_empty_consecutive = 0;
+         }
+ 
++        auto * routing = pgr_routing_from_callback(
++            params_base.cb_eval,
++            params_base.cb_eval_user_data);
++
++        if (routing != nullptr) {
++            std::vector<pgr_routing_token_meta> token_meta;
++            token_meta.reserve(batch_view.n_tokens);
++            for (int32_t i = 0; i < batch_view.n_tokens; ++i) {
++                GGML_ASSERT(batch_view.n_seq_id[i] == 1);
++                const int32_t sequence_id = batch_view.seq_id[i][0];
++                GGML_ASSERT(sequence_id >= 0 && sequence_id < (int32_t) slots.size());
++                const auto phase = slots[sequence_id].state == SLOT_STATE_GENERATING
++                    ? pgr_routing_phase::decode
++                    : pgr_routing_phase::prompt;
++                token_meta.push_back({
++                    (uint32_t) batch_view.pos[i],
++                    (int32_t) batch_view.token[i],
++                    (uint16_t) sequence_id,
++                    phase,
++                });
++            }
++            routing->begin_batch(token_meta);
++        }
++
++        const bool is_speculative_verify = std::any_of(
++            slots.begin(), slots.end(), [](const server_slot & slot) {
++                return !slot.spec_i_batch.empty();
++            });
++        common_speculative_kernel_scope kernel_scope(is_speculative_verify);
+         const int ret = llama_decode(ctx_tgt, batch_view);
+ 
++        if (routing != nullptr) {
++            if (ret == 0) {
++                routing->commit_batch();
++            } else {
++                routing->abort_batch();
++            }
++        }
++
+         metrics.on_decoded(slots);
+ 
+         if (ret != 0) {
+diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
+index f01780100..416401a9b 100644
+--- a/tools/server/server-task.cpp
++++ b/tools/server/server-task.cpp
+@@ -257,6 +257,13 @@ json result_timings::to_json() const {
+         base["draft_n_accepted"] = draft_n_accepted;
+     }
+ 
++    if (draft_adaptive_n > 0) {
++        base["draft_adaptive_n"] = draft_adaptive_n;
++        base["draft_adaptive_n_next"] = draft_adaptive_n_next;
++        base["draft_acceptance"] = draft_acceptance;
++        base["draft_acceptance_ewma"] = draft_acceptance_ewma;
++    }
++
+     return base;
+ }
+ 
+diff --git a/tools/server/server-task.h b/tools/server/server-task.h
+index c3eea2ecb..9fab8a099 100644
+--- a/tools/server/server-task.h
++++ b/tools/server/server-task.h
+@@ -276,6 +276,12 @@ struct result_timings {
+     int32_t draft_n = 0;
+     int32_t draft_n_accepted = 0;
+ 
++    // Optional response-level adaptive draft metrics.
++    int32_t draft_adaptive_n = 0;
++    int32_t draft_adaptive_n_next = 0;
++    double draft_acceptance = -1.0;
++    double draft_acceptance_ewma = -1.0;
++
+     json to_json() const;
+ };
+ 
+diff --git a/tools/server/server.cpp b/tools/server/server.cpp
+index 20effbb14..5fbfb1104 100644
+--- a/tools/server/server.cpp
++++ b/tools/server/server.cpp
+@@ -1,6 +1,7 @@
+ #include "server-context.h"
+ #include "server-http.h"
+ #include "server-models.h"
++#include "peregrine-routing.h"
+ #include "server-cors-proxy.h"
+ #include "server-stream.h"
+ #include "server-tools.h"
+@@ -101,6 +102,19 @@ int llama_server(int argc, char ** argv) {
+         return 1;
+     }
+ 
++    std::unique_ptr<pgr_routing_logger> routing_logger;
++    if (pgr_routing_requested()) {
++        try {
++            routing_logger = pgr_routing_logger::from_environment();
++            params.cb_eval = pgr_routing_eval;
++            params.cb_eval_user_data = routing_logger.get();
++            params.warmup = false;
++        } catch (const std::exception & error) {
++            SRV_ERR("routing logger configuration failed: %s\n", error.what());
++            return 2;
++        }
++    }
++
+     llama_backend_init();
+     llama_numa_init(params.numa);
+ 

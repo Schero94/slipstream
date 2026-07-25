@@ -1,0 +1,13 @@
+# build artifacts
+app/src-tauri/target/
+app/src-tauri/gen/
+app/src-tauri/resources/llama-server
+llama.cpp-slipstream/
+build-static/
+# os / editor
+.DS_Store
+__pycache__/
+*.py[cod]
+# models / large data
+*.gguf
+*.pgrn

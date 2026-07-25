@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "opencode": {
+    "installed_version": "1.3.15",
+    "resolved_config_valid": true,
+    "profile_sha256": "27579706b96eb144b322230d45cab12a9a5e3be4a5308bba8a3f04b05734d25f",
+    "permission_precedence": "last_matching_rule_wins"
+  },
+  "codex": {
+    "installed_package_version": "0.128.0",
+    "cli_launch_valid": false,
+    "cli_launch_error": "arm64 vendor executable missing (ENOENT)",
+    "config_sha256": "bd8617424b666970a9d93630b62d368449cec73f037c0abec7d3381e7023b03c",
+    "rss_monitor_sha256": "dda4565b05ca59f2154f1ca1c536bbc112207e03fac120f8a2aeb36f01f1381b",
+    "darwin_rss_sample_valid": true
+  },
+  "readme_sha256": "1f7cc81ee978f7cd3d6df2573eb3b670497a5ef9d5af0fec29cb1ee259c8e6eb",
+  "global_configuration_modified": false
+}
