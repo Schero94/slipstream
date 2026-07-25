@@ -1,5 +1,5 @@
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 7bc770ab4..7fe5077c1 100644
+index 7bc770ab4..975459a87 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -24,6 +24,7 @@
@@ -162,7 +162,30 @@ index 7bc770ab4..7fe5077c1 100644
      add_opt(common_arg(
          {"-dio", "--direct-io"},
          {"-ndio", "--no-direct-io"},
-@@ -3807,6 +3939,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -3631,6 +3763,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.speculative.draft.mparams.hf_repo = value;
+         }
+     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_HF_REPO"));
++    add_opt(common_arg(
++        {"--spec-grammar-draft"}, "<0|1>",
++        "Slipstream: on grammar/json_schema requests, inject the structurally-forced byte span as "
++        "pre-accepted, target-verified draft tokens (lossless; adaptive-guarded so it only engages when it "
++        "beats the draft model; no-op without a grammar). (default: 1, on)",
++        [](common_params & params, const std::string & value) {
++            params.speculative.grammar_draft = (value == "1" || value == "true" || value == "on");
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_GRAMMAR_DRAFT"));
++    add_opt(common_arg(
++        {"--spec-grammar-draft-max"}, "N",
++        "Slipstream: max forced chars walked per step for grammar drafts (default: 32)",
++        [](common_params & params, int value) {
++            params.speculative.grammar_draft_max = value;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+     add_opt(common_arg(
+         {"--spec-draft-threads", "-td", "--threads-draft"}, "N",
+         "number of threads to use during generation (default: same as --threads)",
+@@ -3807,6 +3955,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.speculative.draft.n_min = value;
          }
      ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MIN"));
@@ -176,7 +199,7 @@ index 7bc770ab4..7fe5077c1 100644
  
      add_opt(common_arg(
          {"--spec-draft-p-split", "--draft-p-split"}, "P",
-@@ -3877,6 +4016,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -3877,6 +4032,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
          }
      ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
@@ -310,7 +333,7 @@ index 8f13217ab..987bc5c52 100644
      mparams.use_extra_bufts = !params.no_extra_bufts;
      mparams.no_host         = params.no_host;
 diff --git a/common/common.h b/common/common.h
-index bffc1767a..cf7e43c0e 100644
+index bffc1767a..28c208e3a 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -172,6 +172,7 @@ enum common_speculative_type {
@@ -345,15 +368,22 @@ index bffc1767a..cf7e43c0e 100644
  struct common_params_speculative {
      std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
  
-@@ -380,6 +391,7 @@ struct common_params_speculative {
+@@ -380,6 +391,14 @@ struct common_params_speculative {
      common_params_speculative_ngram_map ngram_map_k4v;
  
      common_params_speculative_ngram_cache ngram_cache;
 +    common_params_speculative_ane ane;
++
++    // Slipstream — grammar-forced speculative drafts. When a request carries a grammar/json_schema,
++    // inject the structurally-forced byte span (JSON/tool-call scaffolding) as pre-accepted,
++    // target-verified draft tokens. Lossless; benefits our fetch-bound decode (fewer target
++    // forwards -> fewer expert fetches on structured output). See --spec-grammar-draft.
++    bool    grammar_draft     = true;  // grammar-forced drafts (default on; adaptive-guarded, no-op without a grammar)
++    int32_t grammar_draft_max = 32;    // cap on forced chars walked per step
  
      bool has_dft() const {
          return !draft.mparams.empty();
-@@ -575,6 +587,17 @@ struct common_params {
+@@ -575,6 +594,17 @@ struct common_params {
      bool use_mmap          = true;  // enable mmap to use filesystem cache
      bool use_direct_io     = false; // read from disk without buffering
      bool use_mlock         = false; // use mlock to keep model in memory
@@ -371,6 +401,58 @@ index bffc1767a..cf7e43c0e 100644
      bool verbose_prompt    = false; // print prompt tokens before generation
      bool display_prompt    = true;  // print prompt before generation
      bool no_kv_offload     = false; // disable KV offloading
+diff --git a/common/sampling.cpp b/common/sampling.cpp
+index 75a299e23..88cac1616 100644
+--- a/common/sampling.cpp
++++ b/common/sampling.cpp
+@@ -537,6 +537,31 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl) {
+     return gsmpl->chain;
+ }
+ 
++int common_sampler_forced_draft(
++        struct common_sampler    * gsmpl,
++        const struct llama_vocab * vocab,
++        llama_token              * out,
++        int                        out_cap,
++        int                        max_chars) {
++    if (!gsmpl || !gsmpl->grmr || !vocab || !out || out_cap <= 0 || max_chars <= 0) {
++        return 0;
++    }
++    // Walk the currently-forced structural span (non-mutating; operates on a grammar clone).
++    char bytes[512];
++    if (max_chars > (int) sizeof(bytes)) {
++        max_chars = (int) sizeof(bytes);
++    }
++    const size_t n_bytes = llama_sampler_grammar_forced_span(gsmpl->grmr, bytes, sizeof(bytes), max_chars);
++    if (n_bytes == 0) {
++        return 0;
++    }
++    // Tokenize the forced bytes. The byte/token boundary need not match the model's — the target
++    // verifies every draft, so a tail mismatch only costs a rejected draft, never wrong output.
++    const int n_tok = llama_tokenize(vocab, bytes, (int) n_bytes, out, out_cap,
++                                     /* add_special */ false, /* parse_special */ false);
++    return n_tok > 0 ? n_tok : 0;
++}
++
+ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
+     llama_synchronize(ctx);
+ 
+diff --git a/common/sampling.h b/common/sampling.h
+index 4191988bb..fca64f119 100644
+--- a/common/sampling.h
++++ b/common/sampling.h
+@@ -64,6 +64,11 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl);
+ //
+ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first = false);
+ 
++// Slipstream — grammar-forced speculative drafts. Fills `out` with tokens for the currently
++// grammar-forced structural span (JSON/tool-call scaffolding), returns the count (0 if nothing is
++// forced). Lossless draft source for structured output; non-mutating (walks a grammar clone).
++int common_sampler_forced_draft(struct common_sampler * gsmpl, const struct llama_vocab * vocab, llama_token * out, int out_cap, int max_chars);
++
+ // generalized version of common_sampler_sample
+ //
+ // will cross-reference the sampled tokens with a batch of draft tokens and accept those that match
 diff --git a/common/speculative.cpp b/common/speculative.cpp
 index 3cb08767b..e3044717b 100644
 --- a/common/speculative.cpp
@@ -1657,7 +1739,7 @@ index 9efb36f8a..b5707f11f 100644
  
          # Feed-forward up
 diff --git a/include/llama.h b/include/llama.h
-index a311ac202..10fd9d794 100644
+index a311ac202..b65f5131e 100644
 --- a/include/llama.h
 +++ b/include/llama.h
 @@ -319,6 +319,19 @@ extern "C" {
@@ -1698,7 +1780,24 @@ index a311ac202..10fd9d794 100644
      // Get the model's RoPE frequency scaling factor
      LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
  
-@@ -1539,6 +1556,26 @@ extern "C" {
+@@ -1408,6 +1425,16 @@ extern "C" {
+                const llama_token * trigger_tokens,
+                             size_t num_trigger_tokens);
+ 
++    // Slipstream — grammar-forced draft support. If `smpl` is a grammar sampler with an active
++    // grammar, writes the UTF-8 bytes of the currently-forced span (structural literals where
++    // exactly one next code point is admissible) to `out` and returns the byte count; else 0.
++    // Non-mutating — safe to call to source lossless speculative drafts.
++    LLAMA_API size_t llama_sampler_grammar_forced_span(
++            const struct llama_sampler * smpl,
++                                  char * out,
++                                  size_t out_cap,
++                                     int max_chars);
++
+ 
+     /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
+     LLAMA_API struct llama_sampler * llama_sampler_init_penalties(
+@@ -1539,6 +1566,26 @@ extern "C" {
          int32_t n_p_eval;   // number of prompt tokens
          int32_t n_eval;     // number of generated tokens
          int32_t n_reused;   // number of times a ggml compute graph had been reused
@@ -2135,6 +2234,86 @@ index bf91daa8b..e0aaef4a2 100644
      llama_adapter_cvec_ptr  cvec;
      llama_adapter_loras_ptr loras;
  
+diff --git a/src/llama-grammar.cpp b/src/llama-grammar.cpp
+index badcbfd0f..a9695d232 100644
+--- a/src/llama-grammar.cpp
++++ b/src/llama-grammar.cpp
+@@ -1050,6 +1050,58 @@ void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr) {
+     grammar->stacks = std::move(stacks_new);
+ }
+ 
++// Slipstream — grammar-forced speculative drafts (jump-forward).
++// Byte-level UTF-8 encode of a code point; returns bytes written (1..4), 0 if invalid.
++static size_t llama_grammar_utf8_encode(uint32_t cp, char out[4]) {
++    if (cp <= 0x7F)     { out[0] = (char) cp; return 1; }
++    if (cp <= 0x7FF)    { out[0] = (char)(0xC0 | (cp >>  6)); out[1] = (char)(0x80 | (cp & 0x3F)); return 2; }
++    if (cp <= 0xFFFF)   { out[0] = (char)(0xE0 | (cp >> 12)); out[1] = (char)(0x80 | ((cp >>  6) & 0x3F)); out[2] = (char)(0x80 | (cp & 0x3F)); return 3; }
++    if (cp <= 0x10FFFF) { out[0] = (char)(0xF0 | (cp >> 18)); out[1] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[3] = (char)(0x80 | (cp & 0x3F)); return 4; }
++    return 0;
++}
++
++// Walk the run of code points where the grammar admits EXACTLY ONE next code point
++// (structural literals: braces, quotes, key names, separators, enum bodies). Works on a
++// CLONE so the live grammar is never mutated. Returns UTF-8 bytes written to `out`.
++// A byte class / negation / "any" / token rule, disagreement between stacks, or an allowed
++// completion (an empty stack) all stop the walk. Intended as a lossless *draft* source: the
++// caller feeds these to the speculative verifier, which still checks them against the target,
++// so a wrong result only wastes drafts and can never change the output.
++size_t llama_grammar_forced_span(const struct llama_grammar * grammar,
++                                 char * out, size_t out_cap, int max_chars) {
++    if (!grammar || !out || out_cap == 0 || max_chars <= 0) return 0;
++    if (grammar->awaiting_trigger)      return 0;  // lazy grammar not yet armed
++    if (grammar->partial_utf8.n_remain) return 0;  // mid multi-byte sequence -> can't force a whole cp
++    struct llama_grammar * g = llama_grammar_clone_impl(*grammar);
++    if (!g) return 0;
++    size_t n = 0;
++    for (int step = 0; step < max_chars; ++step) {
++        const llama_grammar_stacks & stacks = g->stacks;
++        if (stacks.empty()) break;
++        bool     forced = false, unique = true;
++        uint32_t chr = 0;
++        for (const auto & stack : stacks) {
++            if (stack.empty()) { unique = false; break; }                    // completion allowed
++            const llama_grammar_element * pos = stack.back();
++            if (pos->type != LLAMA_GRETYPE_CHAR) { unique = false; break; }   // NOT/ANY/TOKEN -> many
++            const llama_grammar_element * nx = pos + 1;
++            if (nx->type == LLAMA_GRETYPE_CHAR_RNG_UPPER ||
++                nx->type == LLAMA_GRETYPE_CHAR_ALT) { unique = false; break; } // range/alt -> many
++            if (!forced) { chr = pos->value; forced = true; }
++            else if (pos->value != chr) { unique = false; break; }           // stacks disagree
++        }
++        if (!forced || !unique) break;
++        char buf[4];
++        const size_t enc = llama_grammar_utf8_encode(chr, buf);
++        if (enc == 0 || n + enc > out_cap) break;
++        memcpy(out + n, buf, enc);
++        n += enc;
++        llama_grammar_accept(g, chr);
++    }
++    llama_grammar_free_impl(g);
++    return n;
++}
++
+ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
+         const llama_grammar_rules      & rules,
+         const llama_grammar_stack      & stack,
+diff --git a/src/llama-grammar.h b/src/llama-grammar.h
+index b5a0e588e..dc3a85c23 100644
+--- a/src/llama-grammar.h
++++ b/src/llama-grammar.h
+@@ -78,6 +78,12 @@ const llama_grammar_rules  & llama_grammar_get_rules (const struct llama_grammar
+ // positions
+ void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr);
+ 
++// Slipstream — grammar-forced draft support. Returns the UTF-8 bytes of the run where the
++// grammar admits exactly one next code point (structural literals). Non-mutating (walks a
++// clone); returns 0 when nothing is forced. Lossless: intended as a speculative draft source.
++size_t llama_grammar_forced_span(const struct llama_grammar * grammar,
++                                 char * out, size_t out_cap, int max_chars);
++
+ std::vector<llama_grammar_candidate> llama_grammar_reject_candidates_for_stack(
+         const llama_grammar_rules      & rules,
+         const llama_grammar_stack      & stack,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
 index c8ecb0a28..f2ff35b8f 100644
 --- a/src/llama-graph.cpp
@@ -2946,6 +3125,30 @@ index b66759b27..818095f4a 100644
      ml.init_mappings(false); // no prefetching
  
      auto mparams = llama_model_default_params();
+diff --git a/src/llama-sampler.cpp b/src/llama-sampler.cpp
+index 2370e91a1..3a655a4a2 100644
+--- a/src/llama-sampler.cpp
++++ b/src/llama-sampler.cpp
+@@ -2452,6 +2452,19 @@ static void llama_sampler_grammar_apply(struct llama_sampler * smpl, llama_token
+     }
+ }
+ 
++// Slipstream — grammar-forced draft support. If `smpl` is a grammar sampler with an active
++// grammar, return the UTF-8 bytes of the currently-forced span (else 0). Non-mutating.
++size_t llama_sampler_grammar_forced_span(const struct llama_sampler * smpl, char * out, size_t out_cap, int max_chars) {
++    if (!smpl || !smpl->iface || smpl->iface->name != llama_sampler_grammar_name) {
++        return 0;
++    }
++    const auto * ctx = (const llama_sampler_grammar *) smpl->ctx;
++    if (!ctx || !ctx->grammar) {
++        return 0;
++    }
++    return llama_grammar_forced_span(ctx->grammar, out, out_cap, max_chars);
++}
++
+ // Fwd declare to break reset --> init_impl --> llama_sampler_grammar_i --> reset cycle.
+ static struct llama_sampler * llama_sampler_init_grammar_impl(
+         const struct llama_vocab * vocab,
 diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
 index fdd447147..d926eee6e 100644
 --- a/src/llama-vocab.cpp
@@ -3776,7 +3979,7 @@ index b5c40884f..1fed5c770 100644
      server-chat.h
      server-task.cpp
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 7564ad4e9..75831c4d4 100644
+index 7564ad4e9..1843a4e15 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -2,6 +2,7 @@
@@ -3877,7 +4080,15 @@ index 7564ad4e9..75831c4d4 100644
  
          if (n_draft_total > 0) {
              const float  draft_ratio  = (float) n_draft_accepted / n_draft_total;
-@@ -1154,6 +1206,20 @@ private:
+@@ -1086,6 +1138,7 @@ private:
+                 bool measure_model_bytes = has_draft;
+ 
+                 common_params params_dft = common_base_params_to_speculative(params_base);
++                params_dft.pgrn_path.clear(); // draft is resident: must not inherit main model PGRN
+ 
+                 auto mparams_dft = common_model_params_to_llama(params_dft);
+                 auto cparams_dft = common_context_params_to_llama(params_dft);
+@@ -1154,6 +1207,20 @@ private:
  
          vocab = llama_model_get_vocab(model_tgt);
  
@@ -3898,7 +4109,15 @@ index 7564ad4e9..75831c4d4 100644
          n_ctx = llama_n_ctx(ctx_tgt);
  
          add_bos_token = llama_vocab_get_add_bos(vocab);
-@@ -1276,6 +1342,10 @@ private:
+@@ -1165,6 +1232,7 @@ private:
+ 
+             {
+                 common_params params_dft = common_base_params_to_speculative(params_base);
++                params_dft.pgrn_path.clear(); // draft is resident: must not inherit main model PGRN
+ 
+                 // progress callback
+                 params_dft.load_progress_callback           = load_progress_callback;
+@@ -1276,6 +1344,10 @@ private:
                  spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
              } catch (const std::exception & e) {
                  SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
@@ -3909,7 +4128,7 @@ index 7564ad4e9..75831c4d4 100644
              }
          }
  
-@@ -1299,6 +1369,8 @@ private:
+@@ -1299,6 +1371,8 @@ private:
              slot.ctx_dft = ctx_dft;
              slot.spec    = spec.get();
              slot.n_ctx   = n_ctx_slot;
@@ -3918,7 +4137,7 @@ index 7564ad4e9..75831c4d4 100644
  
              slot.mctx                   = mctx;
              slot.prompt.tokens.has_mtmd = mctx != nullptr;
-@@ -2066,6 +2138,8 @@ private:
+@@ -2066,6 +2140,8 @@ private:
      void send_final_response(server_slot & slot) {
          auto res = std::make_unique<server_task_result_cmpl_final>();
  
@@ -3927,7 +4146,51 @@ index 7564ad4e9..75831c4d4 100644
          res->id      = slot.task->id;
          res->id_slot = slot.id;
  
-@@ -3582,8 +3656,45 @@ private:
+@@ -2976,6 +3052,43 @@ private:
+             common_speculative_draft(spec.get());
+         }
+ 
++        // Slipstream — grammar-forced drafts. Where the request's grammar/json_schema forces a
++        // structural span (JSON/tool-call scaffolding: exactly one admissible next code point),
++        // replace this step's draft with the forced tokens. Done BEFORE checkpointing so the target
++        // checkpoint, batch positions and rollback all size to the final draft. Lossless: the target
++        // verifies every token via the same rejection step as MTP, so a stale grammar can only cost
++        // rejected drafts, never wrong output. On our fetch-bound decode a forced span means fewer
++        // target forwards -> fewer expert fetches. Composes with MTP (MTP still drafts free text).
++        if (spec && params_base.speculative.grammar_draft) {
++            iterate(drafting, [&](server_slot & slot) {
++                const int n_max = slot.get_n_draft_max();
++                if (n_max <= 0) {
++                    return;
++                }
++                llama_token gbuf[64];
++                const int cap = std::min<int>(n_max, (int) (sizeof(gbuf) / sizeof(gbuf[0])));
++                const int n_g = common_sampler_forced_draft(
++                        slot.smpl.get(), vocab, gbuf, cap, params_base.speculative.grammar_draft_max);
++                if (n_g <= 0) {
++                    return;
++                }
++                // Adaptive guard — only replace the draft model's draft when the forced span is at
++                // least as long as the draft model's recent mean accepted run. This makes grammar
++                // engage on rigid scaffolding the draft mispredicts (big fetch-bound win) but stand
++                // down on easy structure the draft already nails (no regression). Uses the slot's
++                // running accept stats (bootstraps to a floor of 2 before any verify step). Lossless
++                // either way — the swap only changes which draft the target verifies.
++                const double mean_acc_len = slot.n_draft_verif_steps > 0
++                    ? 1.0 + (double) slot.n_draft_accepted / (double) slot.n_draft_verif_steps
++                    : 2.0;
++                const int threshold = std::max(2, (int) (mean_acc_len + 0.5));
++                if (n_g < threshold) {
++                    return; // forced span won't beat the draft model's typical yield -> keep the draft
++                }
++                slot.spec_draft.assign(gbuf, gbuf + n_g);
++            });
++        }
++
+         // make checkpoints if needed
+         iterate(drafting, [&](server_slot & slot) {
+             auto & draft = slot.spec_draft;
+@@ -3582,8 +3695,45 @@ private:
              n_empty_consecutive = 0;
          }
  

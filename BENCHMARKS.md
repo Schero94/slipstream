@@ -79,6 +79,37 @@ Swap growth: **0 MB** at every point. Parity: exact logits on CPU + Metal. **The
 
 ---
 
+## Structured output — grammar-forced drafts (lossless, default-on)
+
+When a request carries a `grammar` / `json_schema` (tool calls, structured extraction), the grammar
+*itself* is a draft source: wherever it admits exactly one legal next character (braces, quotes, key
+names, separators), I inject that forced span as **pre-accepted draft tokens** into the same verify
+step as the draft model. It never constrains sampling — the target verifies every token, so the output
+is **byte-identical** with the feature off (I parity-gate it on real models). On a fetch-bound decode,
+fewer target forwards means **fewer expert fetches off the SSD** — so this saves the scarce resource,
+not just compute.
+
+Measured with an interleaved A/B, greedy. `tok/forward` is the regime-independent metric; `tok/s` is the payoff:
+
+| Model / regime | Workload | forwards | tok/forward | Decode | Δ |
+|---|---:|---:|---:|---:|---:|
+| Qwen3.6-35B, fits in RAM (not fetch-bound) | easy JSON (draft already nails it) | 17 → 17 | 4.1 → 4.1 | 38.1 → 38.0 | **neutral** |
+| Qwen3.6-35B, in RAM | rigid schema (long, unusual keys) | 48 → 34 | 2.9 → 4.1 | 25.2 → 33.2 | **+32 %** |
+| **Laguna 118B, streamed, ~97 % fetch-bound** | rigid schema | **54 → 37** | 2.1 → 3.0 | 0.37 → 0.53 | **+45 %** |
+
+The win **tracks structural rigidity × how weak the draft model is there**: on easy JSON the speculative
+draft (MTP) already predicts the scaffolding, so there is nothing to add; on rigid or unusual schemas the
+draft mispredicts (DFlash on Laguna accepted only 27 %), so the grammar's *certain* tokens cut forwards by
+a third — and because Laguna decode is ~97 % fetch-bound, that −31 % forwards becomes **+45 % tok/s**.
+
+An **adaptive guard** only engages the grammar draft when its forced span beats the draft model's recent
+mean accepted length — that's why the easy-JSON row is *neutral, not negative*: the guard stands the
+feature down where it wouldn't help. So it's **on by default** and safe (`--spec-grammar-draft`; a no-op
+when there's no grammar). This is a *targeted* win for the real coding-agent case — tool calls and
+schema-constrained output — not a universal speedup, and I'd rather say that plainly than oversell it.
+
+---
+
 ## What did *not* work (recorded honestly)
 
 - **OS page-cache instead of our bounded arena** — ~75 % faster, but 1000+ swapouts: it breaks "the Mac stays usable." Rejected.

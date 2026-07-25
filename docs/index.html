@@ -325,6 +325,9 @@
     <div class="rv" style="margin-top:30px;padding:20px 24px;border:1px solid var(--line2);border-radius:14px;background:linear-gradient(180deg,rgba(255,157,47,.07),transparent)">
       <b class="amber">One verdict flipped.</b> I rejected the compact / zero-copy expert path at a 2 GiB cache, which is a size almost nobody runs and where there's nothing to save. Re-measured across the cache sizes the app actually recommends, it's <b>+13–24% faster</b> (peak +24% at 6 GiB), swap-safe, and bit-exact. It's <b>on by default</b> now. The lesson I kept: re-measure a rejection at the size it was meant for before believing it.
     </div>
+    <div class="rv" style="margin-top:16px;padding:20px 24px;border:1px solid var(--line2);border-radius:14px;background:linear-gradient(180deg,rgba(255,157,47,.07),transparent)">
+      <b class="amber">A win, but only where it earns it.</b> For structured output (JSON / tool calls) the grammar itself is a draft source: wherever it forces the next character, I feed that in as a pre-accepted, target-verified token — fewer model forwards, so fewer expert fetches off the SSD. It's <b>lossless</b> (byte-identical output) and, on a streamed 118B with rigid schemas, <b>+45% tok/s</b>. An adaptive guard keeps it <b>neutral</b> on easy JSON the draft model already predicts well, so it's <b>on by default</b>. Honest scope: it helps grammar-constrained output, not free-form code — a targeted win, not a universal one.
+    </div>
     <ul class="fail rv">
       <li>
         <h4>OS page-cache instead of the bounded arena <span class="verdict">unsafe</span></h4>
