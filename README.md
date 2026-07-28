@@ -104,6 +104,8 @@ The app's dropdown is seeded with these, but you can point it at any compatible 
 
 A converter pulls the stacked expert tensors out of the GGUF into a streamable binary that sits next to it, the PGRN sidecar. Reads go through `pread` with `F_NOCACHE`, which keeps the OS page cache from ballooning and fighting the RAM budget.
 
+The converter is native (`llama-pgrn-convert`) and ships inside the app, so converting a model is a button rather than a Python setup. It reports progress as JSONL and takes about 2¼ minutes for a 22.8 GB source on this Mac. Because that is long enough for a laptop lid or a Ctrl-C to interfere, it is resumable: a cancelled run keeps its `.partial` next to a journal recording the directory entry of every chunk it finished, and `--resume` re-reads that prefix against the journalled CRCs before continuing. The payload is `fsync`ed *before* its records are journalled, so the journal can only ever lag the data — which is what makes the boundary trustworthy. Two runs of the 22.8 GB model, each interrupted twice and resumed, came out byte-identical to an uninterrupted one.
+
 The cache is partitioned by layer, one bounded CLOCK-LRU-K tier each. Cross-layer eviction is impossible by construction, so streaming behaviour stays predictable. Above that sits the memory-health gate, which rejects any cache size that would push the Mac into swap. "The Mac stays usable" is a hard invariant here, not an aspiration.
 
 Compact slots let single-token MoE layers execute straight out of the pinned arena, with no copy between cache and compute buffer. I measured this at a 2 GiB cache, saw nothing and shelved it. Re-measured at the cache sizes the app actually recommends it's worth +13-24%, peaking around +24% at 6 GiB, and the output stays bit-exact. The app enables it by default; on the command line it's `--pgrn-compact-slots`.
@@ -126,7 +128,7 @@ Big agentic prompts are prefill-heavy. A 30k-token first request against a strea
 
 118B on 36 GB runs at about 2.8 tok/s. That's batch work. It is not chat, and I'd rather say so here than have you find out after the download. The 35B at ~13-19 tok/s, depending on cache size, is the interactive one.
 
-The GGUF to PGRN converter still needs the Python tooling in `bench/`. Bundling it into the app is on the list; the engine itself is already fully bundled.
+Converting an XL model is minutes of work, and the app has to be open for it. It survives interruption without losing that work (see below), but it does not run in the background after you quit.
 
 The app isn't notarized, so the first launch needs right-click → Open, or `xattr -dr com.apple.quarantine Slipstream.app`.
 
@@ -156,11 +158,12 @@ cd llama.cpp-slipstream
 cmake -B build-static -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
       -DLLAMA_OPENSSL=OFF -DLLAMA_CURL=OFF -DGGML_METAL_EMBED_LIBRARY=ON \
       -DCMAKE_OSX_ARCHITECTURES=arm64
-cmake --build build-static --target llama-server -j
+cmake --build build-static --target llama-server llama-pgrn-convert -j
 cd ..
 
-# 3. Bundle it into the app and build the .dmg
-cp llama.cpp-slipstream/build-static/bin/llama-server app/src-tauri/resources/llama-server
+# 3. Bundle both into the app and build the .dmg
+cp llama.cpp-slipstream/build-static/bin/llama-server     app/src-tauri/resources/llama-server
+cp llama.cpp-slipstream/build-static/bin/llama-pgrn-convert app/src-tauri/resources/pgrn-convert
 cd app/src-tauri && cargo tauri build   # -> the self-contained .dmg
 ```
 
@@ -203,6 +206,21 @@ Two environment variables cover the multi-disk case:
 | `PGRN_BUFFERED=1` | Skip `F_NOCACHE` and let the OS page cache back the reads. Faster per read, but the cache is then unbounded. See BENCHMARKS.md before using it. |
 
 Striping is a capacity feature first. On an internal NVMe paired with a slow USB drive it comes out slower, because they share a bus.
+
+## Converting a model by hand
+
+The app does this for you. On the command line:
+
+```bash
+./llama-pgrn-convert --input model.gguf --output model.pgrn --io-threads 4
+
+# if it was interrupted (exit code 2 means "resumable"):
+./llama-pgrn-convert --input model.gguf --output model.pgrn --io-threads 4 --resume
+```
+
+Multi-part GGUFs are converted in one pass — point `--input` at the first shard. `--progress jsonl` emits one line per percent for the phases `resume`, `sha256`, `write` and `verify`; `--dry-run` reports the space and time it would need without writing. `--no-verify` skips the closing CRC sweep, and `--no-journal` opts out of resumability, in which case a cancelled run deletes its own `.partial` again.
+
+`--io-threads` is worth setting: it drives the parallel reads in the write phase *and* the CRC sweep. On this Mac, going from 1 to 4 took a 22.8 GB conversion from 191 s to 133 s, and the sweep itself from 318 to 1188 MB/s. Output is identical either way.
 
 ---
 

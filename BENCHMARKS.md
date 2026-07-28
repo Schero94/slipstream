@@ -110,6 +110,48 @@ schema-constrained output — not a universal speedup, and I'd rather say that p
 
 ---
 
+## Conversion: two bottlenecks that were not the SSD
+
+Converting a GGUF to a PGRN sidecar is a one-off cost, but it is minutes long, so I
+finally measured its phases instead of assuming. Qwen3.6-35B-A3B Q4_K_XL, 22.85 GB
+source on an external SSD, 20.13 GB output on internal NVMe, M3 Pro / 36 GB:
+
+| Phase | Was | Now | Why |
+|---|---|---|---|
+| `sha256` (hash the source) | 262 MB/s | **726 MB/s** | portable SHA-256 replaced by CommonCrypto (ARMv8 SHA-2) |
+| `verify` (CRC sweep) | 318 MB/s | **1188 MB/s** | the sweep now runs on `--io-threads`, like the write phase already did |
+| whole conversion | 3 min 43 s | **2 min 13 s** | −40 % |
+
+The hash was the surprise: it took 87 s of a 223 s run at 262 MB/s, while the *write*
+phase was reading the same file at over 500 MB/s. So the limit was the CPU, not the
+disk — isolated in RAM, the vendored portable SHA-256 does 366 MB/s against
+CommonCrypto's 3073 MB/s on this chip. Same algorithm, so the digest and the
+byte-parity gate are untouched; the portable path stays as the fallback for non-Apple
+targets.
+
+The CRC sweep was the same kind of oversight in the opposite direction: it re-read
+every record single-threaded on a device the write phase was already pulling 1.2 GB/s
+from. Records are independent, so it parallelises for free — the only care needed is
+reporting the *lowest* mismatch rather than the first one noticed, because the resume
+path rolls back to exactly what it is told.
+
+| `--io-threads` | sha256 | write | verify | total |
+|---|---|---|---|---|
+| 1 | 691 MB/s | 212 MB/s | 318 MB/s | 191.3 s |
+| 4 | 687 MB/s | 245 MB/s | 1188 MB/s | 132.6 s |
+
+`sha256` staying flat at 687 vs 691 MB/s is the control: it is single-threaded by
+design, so the thread count should not move it, and it doesn't. Output SHA is
+identical at both settings.
+
+**Resumability, verified on the same model:** two runs, each interrupted twice with
+SIGTERM and resumed, produced byte-identical output to an uninterrupted run — and to
+the digest recorded when the native converter was first proved byte-equal to the
+Python reference. 16/16 converter tests, including one that corrupts two records at
+once and checks the rollback lands on the earlier one.
+
+---
+
 ## What did *not* work (recorded honestly)
 
 - **OS page-cache instead of our bounded arena** — ~75 % faster, but 1000+ swapouts: it breaks "the Mac stays usable." Rejected.

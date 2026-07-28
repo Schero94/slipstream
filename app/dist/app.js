@@ -5,20 +5,40 @@ const dialog = T.dialog;
 const $ = (id) => document.getElementById(id);
 const PORT = 8080;
 const EXPERT_MIB = 1.83; // avg bytes per streamed expert (35B geometry)
-const EXT_BASE = "/Volumes/Crucial X10/Modelle"; // external SSD (big, slow) - editable in UI
+
 // Storage split (measured 2.7x on Laguna): PGRN is streamed continuously -> fastest
 // disk (internal NVMe); GGUF is read once at load -> can live on the slow external.
+// Empty means "no second disk": GGUFs then live next to the PGRN, which is the only
+// assumption that holds on a Mac we know nothing about.
+let extBase = localStorage.getItem("pgrn.extBase") || "";
+function ggufBase() { return extBase || (state.def ? state.def.model_dir : ""); }
 
 // ---- compatible models (seed the dropdown) --------------------------------
 // url: HF repo "owner/name" -> resolve URL is built; or a full https URL.
 const MODELS = [
+  // kv: "f16" — Qwen3.6 ist hybrid (Linear-Attention, Mini-KV): S1 maß q8-KV mit
+  // −12…−28 % Decode am residenten 35B; q8 kauft hier nichts. Full-Attention-Modelle
+  // bleiben beim q8_0-Default (KV-RAM wird Cache-Headroom).
+  // quants: Qualität↔Speed-Stufen (unsloth UD-Namensschema). Q4 = Default (Speed),
+  // Q5/Q6 = mehr Qualität, mehr Disk/RAM, etwas langsamer. Der Nutzer kann jederzeit
+  // Speed für Qualität tauschen (ausdrücklich erlaubt).
   { id: "qwen3.6-35b", name: "Qwen3.6-35B-A3B (MTP)", subdir: "qwen3.6-35b-a3b-q4",
     repo: "unsloth/Qwen3.6-35B-A3B-Instruct-GGUF", file: "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
-    gb: 21, mtp: true, activeB: 3, spec: "draft-mtp", draft: "", extGguf: true,
+    gb: 21, mtp: true, activeB: 3, spec: "draft-mtp", draft: "", extGguf: true, kv: "f16",
+    quants: [
+      { label: "Q4_K_XL", tier: "qual.fast", file: "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf", gb: 21 },
+      { label: "Q5_K_XL", tier: "qual.more", file: "Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf", gb: 25 },
+      { label: "Q6_K_XL", tier: "qual.best", file: "Qwen3.6-35B-A3B-UD-Q6_K_XL.gguf", gb: 29 },
+    ],
     note: "note.qwen36" },
   { id: "qwen3-30b", name: "Qwen3-30B-A3B", subdir: "qwen3-30b-a3b-q4",
     repo: "unsloth/Qwen3-30B-A3B-GGUF", file: "Qwen3-30B-A3B-UD-Q4_K_XL.gguf",
     gb: 18, mtp: false, activeB: 3, spec: "none", draft: "",
+    quants: [
+      { label: "Q4_K_XL", tier: "qual.fast", file: "Qwen3-30B-A3B-UD-Q4_K_XL.gguf", gb: 18 },
+      { label: "Q5_K_XL", tier: "qual.more", file: "Qwen3-30B-A3B-UD-Q5_K_XL.gguf", gb: 22 },
+      { label: "Q6_K_XL", tier: "qual.best", file: "Qwen3-30B-A3B-UD-Q6_K_XL.gguf", gb: 25 },
+    ],
     note: "note.qwen30" },
   { id: "deepseek-v2-lite", name: "DeepSeek-V2-Lite (16B-A2.4B)", subdir: "deepseek-v2-lite-q4",
     repo: "unsloth/DeepSeek-V2-Lite-GGUF", file: "DeepSeek-V2-Lite.Q4_K_M.gguf",
@@ -70,39 +90,64 @@ const state = {
   lastMisses: null, lastT: null,
   ssd: [], hit: [], tps: [],  // rolling buffers
   remoteBytes: 0,
+  kvMiB: null,        // KV allocation as reported by the engine at load
+  bench: null,        // last benchmark result set
 };
 
 // ---- i18n ------------------------------------------------------------------
 const I18N = {
   en: {
     "header.sub": "Large coding models, local on your Mac — streamed from SSD",
-    "nav.dashboard": "Dashboard", "nav.models": "Models", "nav.agent": "Coding Agent", "nav.debug": "Debug",
+    "nav.chat": "Chat", "nav.models": "Models", "nav.downloads": "Downloads", "nav.benchmarks": "Benchmarks",
+    "nav.memory": "Memory", "nav.experts": "Experts", "nav.streaming": "Streaming", "nav.cluster": "Cluster",
+    "nav.logs": "Logs", "nav.settings": "Settings",
+    "chat.empty": "Start a conversation with the local model.", "chat.placeholder": "Message the local model…",
+    "chat.stop": "Stop", "chat.clear": "Clear history", "chat.thinking": "Thinking",
+    "chat.serverHint": "The server must be running (top right → Start).",
+    "lbl.quality": "Quality ↔ speed", "tip.quality": "Higher quant = better answers, more disk + RAM, a little slower. Q4 is the fast default; trade speed for quality anytime.",
     "btn.selectModel": "Select model…", "pill.stopped": "○ Stopped", "pill.starting": "◐ Starting…", "pill.running": "● Running",
     "btn.start": "Start", "btn.stop": "Stop",
     "tile.ram": "Free RAM", "tile.usability": "Usability", "tile.decode": "Decode", "tile.server": "Server",
-    "amp.smooth": "Flüssig", "amp.borderline": "Grenzwertig", "amp.pressure": "Druck", "srv.ready": "bereit", "srv.loading": "lädt Modell…", "srv.stopped": "gestoppt", "srv.noModel": "kein Modell", "ram.of": "von", "ram.total": "gesamt", "tile.decodeNote": "aus letztem Request", "reco.for": "Für deinen Mac", "reco.free": "frei", "reco.with": "mit", "reco.pgrnFast": "PGRN auf schnellste SSD (gestreamt)",
     "amp.smooth": "Smooth", "amp.borderline": "Borderline", "amp.pressure": "Pressure", "srv.ready": "ready", "srv.loading": "loading model…", "srv.stopped": "stopped", "srv.noModel": "no model", "ram.of": "of", "ram.total": "total", "tile.decodeNote": "from last request", "reco.for": "For your Mac", "reco.free": "free", "reco.with": "with", "reco.pgrnFast": "PGRN on fastest SSD (streamed)",
     "sec.liveMonitor": "Live monitor", "sec.settings": "Settings", "sec.selectModel": "Choose model",
     "sec.connectAgent": "Connect coding agent", "sec.indexing": "Indexing", "sec.test": "Test", "sec.logs": "Logs & diagnostics",
     "reco.title": "Best settings for your Mac", "btn.applyBest": "Apply best",
-    "lbl.cache": "Cache size", "lbl.context": "Context", "lbl.io": "I/O threads", "lbl.thinking": "Thinking", "lbl.mtp": "MTP speed", "lbl.compact": "Compact (faster)", "lbl.model": "Model",
+    "lbl.cache": "Cache size", "lbl.context": "Context", "lbl.io": "I/O threads", "lbl.thinking": "Thinking", "lbl.mtp": "MTP speed", "lbl.compact": "Compact (faster)", "lbl.grammar": "Grammar drafts (JSON/tools)", "lbl.model": "Model",
+    "lbl.extBase": "GGUF folder (second SSD, optional)",
+    "hint.extBase": "Leave empty if everything lives on one disk.",
+    "lang.partial": "{pct}% translated — the rest falls back to English.",
     "btn.download": "Download", "btn.convert": "Convert", "btn.cancel": "Cancel", "btn.send": "Send", "btn.setupStart": "Set up & start",
   },
   de: {
     "header.sub": "Große Coding-Modelle lokal auf dem Mac — von SSD gestreamt",
-    "nav.dashboard": "Dashboard", "nav.models": "Modelle", "nav.agent": "Coding-Agent", "nav.debug": "Debug",
+    "nav.chat": "Chat", "nav.models": "Modelle", "nav.downloads": "Downloads", "nav.benchmarks": "Benchmarks",
+    "nav.memory": "Memory", "nav.experts": "Experten", "nav.streaming": "Streaming", "nav.cluster": "Cluster",
+    "nav.logs": "Logs", "nav.settings": "Einstellungen",
+    "chat.empty": "Starte eine Unterhaltung mit dem lokalen Modell.", "chat.placeholder": "Nachricht an das lokale Modell…",
+    "chat.stop": "Stopp", "chat.clear": "Verlauf löschen", "chat.thinking": "Thinking",
+    "chat.serverHint": "Server muss laufen (oben rechts → Start).",
+    "lbl.quality": "Qualität ↔ Speed", "tip.quality": "Höherer Quant = bessere Antworten, mehr Disk + RAM, etwas langsamer. Q4 ist der schnelle Standard; Speed jederzeit für Qualität tauschbar.",
     "btn.selectModel": "Modell wählen…", "pill.stopped": "○ Gestoppt", "pill.starting": "◐ Startet…", "pill.running": "● Läuft",
     "btn.start": "Start", "btn.stop": "Stop",
     "tile.ram": "Freier RAM", "tile.usability": "Usability", "tile.decode": "Decode", "tile.server": "Server",
+    "amp.smooth": "Flüssig", "amp.borderline": "Grenzwertig", "amp.pressure": "Druck",
+    "srv.ready": "bereit", "srv.loading": "lädt Modell…", "srv.stopped": "gestoppt", "srv.noModel": "kein Modell",
+    "ram.of": "von", "ram.total": "gesamt", "tile.decodeNote": "aus letztem Request",
+    "reco.for": "Für deinen Mac", "reco.free": "frei", "reco.with": "mit", "reco.pgrnFast": "PGRN auf die schnellste SSD (gestreamt)",
     "sec.liveMonitor": "Live-Monitor", "sec.settings": "Einstellungen", "sec.selectModel": "Modell wählen",
     "sec.connectAgent": "Coding-Agent verbinden", "sec.indexing": "Indexierung", "sec.test": "Test", "sec.logs": "Logs & Diagnose",
     "reco.title": "Auto-Empfehlung für deinen Mac", "btn.applyBest": "Beste anwenden",
-    "lbl.cache": "Cache-Größe", "lbl.context": "Kontext", "lbl.io": "I/O-Threads", "lbl.thinking": "Thinking", "lbl.mtp": "MTP-Speed", "lbl.compact": "Compact (schneller)", "lbl.model": "Modell",
+    "lbl.cache": "Cache-Größe", "lbl.context": "Kontext", "lbl.io": "I/O-Threads", "lbl.thinking": "Thinking", "lbl.mtp": "MTP-Speed", "lbl.compact": "Compact (schneller)", "lbl.grammar": "Grammar-Drafts (JSON/Tools)", "lbl.model": "Modell",
+    "lbl.extBase": "GGUF-Verzeichnis (zweite SSD, optional)",
+    "hint.extBase": "Leer lassen, wenn alles auf einer Platte liegt.",
+    "lang.partial": "{pct}% übersetzt — der Rest fällt auf Englisch zurück.",
     "btn.download": "Herunterladen", "btn.convert": "Konvertieren", "btn.cancel": "Abbrechen", "btn.send": "Senden", "btn.setupStart": "Einrichten & starten",
   },
   zh: {
     "header.sub": "在 Mac 上本地运行大型编程模型 — 从 SSD 流式加载",
-    "nav.dashboard": "仪表盘", "nav.models": "模型", "nav.agent": "编程助手", "nav.debug": "调试",
+    "nav.chat": "聊天", "nav.models": "模型", "nav.downloads": "下载", "nav.benchmarks": "基准测试",
+    "nav.memory": "内存", "nav.experts": "专家", "nav.streaming": "流式", "nav.cluster": "集群",
+    "nav.logs": "日志", "nav.settings": "设置",
     "btn.selectModel": "选择模型…", "pill.stopped": "○ 已停止", "pill.starting": "◐ 启动中…", "pill.running": "● 运行中",
     "btn.start": "启动", "btn.stop": "停止",
     "tile.ram": "可用内存", "tile.usability": "可用性", "tile.decode": "解码", "tile.server": "服务",
@@ -114,7 +159,9 @@ const I18N = {
   },
   es: {
     "header.sub": "Modelos de código grandes, locales en tu Mac — transmitidos desde el SSD",
-    "nav.dashboard": "Panel", "nav.models": "Modelos", "nav.agent": "Agente", "nav.debug": "Depurar",
+    "nav.chat": "Chat", "nav.models": "Modelos", "nav.downloads": "Descargas", "nav.benchmarks": "Benchmarks",
+    "nav.memory": "Memoria", "nav.experts": "Expertos", "nav.streaming": "Streaming", "nav.cluster": "Clúster",
+    "nav.logs": "Registros", "nav.settings": "Ajustes",
     "btn.selectModel": "Elegir modelo…", "pill.stopped": "○ Detenido", "pill.starting": "◐ Iniciando…", "pill.running": "● En marcha",
     "btn.start": "Iniciar", "btn.stop": "Parar",
     "tile.ram": "RAM libre", "tile.usability": "Usabilidad", "tile.decode": "Decodif.", "tile.server": "Servidor",
@@ -150,12 +197,22 @@ const I18N_EXT = {
     "test.placeholder": "Prompt, e.g.: Write a Python function is_prime(n).", "test.noThink": "without thinking (faster)", "test.reasoning": "Reasoning",
     "logs.autoscroll": "Auto-scroll", "logs.diag": "Copy diagnostics",
     "logs.server": "Server", "logs.download": "Download", "logs.convert": "Conversion",
+    "logs.none": "(no log)", "logs.empty": "(empty)",
+    "btn.copy": "Copy", "toast.copyFail": "Copy failed",
+    "qual.fast": "fast (default)", "qual.more": "more quality", "qual.best": "best quality",
+    "conv.sha256": "Checksum", "conv.write": "Writing experts", "conv.verify": "Verifying",
+    "conv.done": "done", "conv.error": "failed",
+    "conv.resume": "Re-checking what's done", "conv.cancelled": "paused",
+    "resume.title": "Conversion paused", "resume.of": "of", "resume.experts": "experts",
+    "resume.orphan": "An unusable leftover file is in the way — start over to clear it.",
+    "btn.resume": "Continue", "btn.restart": "Start over",
+    "toast.resumed": "Conversion continued", "toast.discarded": "Paused conversion discarded",
     "badge.ready": "ready", "badge.partial": "partial", "badge.missing": "not set up", "badge.notLoaded": "not loaded",
     "st.ready": "Ready — can be started.", "st.loaded": "loaded — ready", "st.needConvert": "convert needed",
     "st.notThere": "not present — download it.", "st.dlRunning": "Download running…", "st.convRunning": "Converting… (GGUF -> PGRN)",
     "reco.cons": "Conservative — runs on 16 GiB Macs, more SSD reads.", "reco.rec": "<b>Recommended</b> for interactive coding on 36 GiB — Mac stays smooth.",
     "reco.fast": "Fast — needs lots of free RAM; close apps first.", "reco.aggr": "Aggressive — only with lots of free RAM, else swapping.",
-    "act.prefill": "Prefill — reading the prompt", "act.decode": "Generating answer", "act.idleReady": "Ready — waiting for a request", "act.stopped": "Server stopped", "act.running": "running…",
+    "act.prefill": "Prefill — reading the prompt", "act.decode": "Generating answer", "act.idleReady": "Ready — waiting for a request", "act.stopped": "Server stopped", "act.running": "running…", "act.tokens": "tokens",
     "note.qwen36": "Strongest compatible coder with MTP speed.", "note.qwen30": "Smaller, no MTP — good for weaker Macs.",
     "note.deepseek": "Small & fast, lowest RAM need.", "note.glm": "Large, lots of disk — strong quality.",
     "note.laguna": "Strongest model. Tip: PGRN on the fastest SSD (streamed), GGUF anywhere (load only).",
@@ -164,6 +221,29 @@ const I18N_EXT = {
     "note.glm52": "Top-tier quality, 466 GB — needs a large SSD or a lower quant.", "note.minimax": "23B active, 264 GB — arrives once merged into llama.cpp.", "note.v4flash": "Ideal fit (13B active, 146 GB) — arrives with mainline llama.cpp.",
     "badge.soon": "soon", "btn.send": "Send",
     "installed.title": "Installed models", "speed.title": "Expected speed", "speed.external": "external SSD - slower",
+    "sec.downloads": "Download & conversion",
+    "dl.intro": "Fetch the GGUF, then convert it into the streamable PGRN format. Multi-part (XL) models are downloaded shard by shard and converted in one pass.",
+    "sec.bench": "Benchmark",
+    "bench.intro": "One click: measures prefill (reading the prompt) and decode (writing the answer) against the running server — real numbers, not an estimate.",
+    "bench.tokens": "Tokens per run", "bench.runs": "Runs", "bench.run": "Run benchmark", "bench.running": "Benchmarking…",
+    "bench.col.run": "Run", "bench.col.prefill": "Prefill", "bench.col.decode": "Decode", "bench.col.hit": "Hit-rate", "bench.col.tokens": "Tokens",
+    "bench.mean": "Mean", "bench.needServer": "Start the server first — the benchmark measures the live process.",
+    "bench.note": "Run 1 fills the expert cache (cold), later runs show the warm state — that is where a coding session lives. Hit-rate comes from the engine log.",
+    "bench.failed": "Benchmark failed", "bench.hint": "Temperature 0, seed 42, prompt cache off — comparable between runs.",
+    "sec.memPlan": "Memory plan",
+    "mem.resident": "Model resident (attention + embeddings)", "mem.cache": "Expert cache (configured)",
+    "mem.kv": "KV cache", "mem.kvPending": "after start", "mem.reserve": "Reserve for macOS",
+    "mem.sum": "Total / free RAM",
+    "mem.fits": "Fits — the Mac stays usable.",
+    "mem.tight": "Tight — close a few apps or shrink the cache by 2 GiB.",
+    "mem.over": "Too big for the free RAM — shrink the cache in Settings, otherwise macOS starts swapping.",
+    "mem.note": "<b>Why this matters:</b> expert cache + KV cache + a reserve for macOS must fit in RAM. Slipstream keeps a <b>3 GiB reserve</b> — measured: 1.5 GiB leads to Metal residency stalls. If the traffic light goes yellow or red, shrink the cache in Settings.",
+    "experts.note": "<b>What you see:</b> each cell is a slot of the bounded expert arena. Green = the expert was already resident (no SSD read), amber = it was streamed in from SSD. The engine partitions the arena per layer — <b>width-weighted</b> when a <code>partition-weights.txt</code> sits next to the PGRN, which measured +11% decode on a warm cache.",
+    "sec.arena": "Expert arena", "sec.streaming": "SSD streaming", "lbl.partition": "Cache partition", "adv.summary": "Advanced: I/O levers",
+    "partition.weighted": "width-weighted (sidecar found)", "partition.equal": "equal split (no sidecar)", "partition.unknown": "–",
+    "streaming.note": "<b>Rule of thumb:</b> the PGRN belongs on the fastest SSD — it is read during every single token. The GGUF is only touched at load time and may live on a slow external drive. More I/O threads mainly speed up prefill of long agent prompts.",
+    "tip.cluster": "Planned for a later release (R3): distributing experts across several Macs. Not built yet — shown here so the roadmap stays honest.",
+    "sec.test": "Single test",
   },
   de: {
     "chart.ssd": "SSD-Durchsatz", "chart.ssdNote": "Experten von SSD gestreamt",
@@ -188,12 +268,22 @@ const I18N_EXT = {
     "test.placeholder": "Prompt, z. B.: Schreibe eine Python-Funktion is_prime(n).", "test.noThink": "ohne Thinking (schneller)", "test.reasoning": "Reasoning",
     "logs.autoscroll": "Auto-Scroll", "logs.diag": "Diagnose kopieren",
     "logs.server": "Server", "logs.download": "Download", "logs.convert": "Konvertierung",
+    "logs.none": "(kein Log)", "logs.empty": "(leer)",
+    "btn.copy": "Kopieren", "toast.copyFail": "Kopieren fehlgeschlagen",
+    "qual.fast": "schnell (Standard)", "qual.more": "mehr Qualität", "qual.best": "beste Qualität",
+    "conv.sha256": "Prüfsumme", "conv.write": "Schreibe Experten", "conv.verify": "Verifiziere",
+    "conv.done": "fertig", "conv.error": "fehlgeschlagen",
+    "conv.resume": "Prüfe Bisheriges", "conv.cancelled": "angehalten",
+    "resume.title": "Konvertierung angehalten", "resume.of": "von", "resume.experts": "Experten",
+    "resume.orphan": "Eine unbrauchbare Restdatei blockiert — mit „Neu beginnen\" wegräumen.",
+    "btn.resume": "Fortsetzen", "btn.restart": "Neu beginnen",
+    "toast.resumed": "Konvertierung fortgesetzt", "toast.discarded": "Angehaltene Konvertierung verworfen",
     "badge.ready": "bereit", "badge.partial": "teilweise", "badge.missing": "nicht eingerichtet", "badge.notLoaded": "nicht geladen",
     "st.ready": "Bereit — kann gestartet werden.", "st.loaded": "geladen — bereit", "st.needConvert": "konvertieren nötig",
     "st.notThere": "nicht vorhanden — herunterladen.", "st.dlRunning": "Download läuft…", "st.convRunning": "Konvertierung läuft… (GGUF -> PGRN)",
     "reco.cons": "Konservativ — läuft auf 16 GiB Macs, mehr SSD-Reads.", "reco.rec": "<b>Empfohlen</b> für interaktives Coding auf 36 GiB — Mac bleibt flüssig.",
     "reco.fast": "Schnell — braucht viel freien RAM; erst Apps schließen.", "reco.aggr": "Aggressiv — nur bei viel freiem RAM, sonst Swapping.",
-    "act.prefill": "Prefill — Prompt wird gelesen", "act.decode": "Antwort wird generiert", "act.idleReady": "Bereit — wartet auf Anfrage", "act.stopped": "Server gestoppt", "act.running": "läuft…",
+    "act.prefill": "Prefill — Prompt wird gelesen", "act.decode": "Antwort wird generiert", "act.idleReady": "Bereit — wartet auf Anfrage", "act.stopped": "Server gestoppt", "act.running": "läuft…", "act.tokens": "Tokens",
     "note.qwen36": "Stärkster kompatibler Coder mit MTP-Speed.", "note.qwen30": "Kleiner, ohne MTP — gut für schwächere Macs.",
     "note.deepseek": "Klein & schnell, geringster RAM-Bedarf.", "note.glm": "Groß, viel Disk — starke Qualität.",
     "note.laguna": "Stärkstes Modell. Tipp: PGRN auf die schnellste SSD (gestreamt), GGUF egal (nur Load).",
@@ -202,6 +292,29 @@ const I18N_EXT = {
     "note.glm52": "Top-Qualität, 466 GB — braucht große SSD oder kleineren Quant.", "note.minimax": "23B aktiv, 264 GB — kommt, sobald in llama.cpp gemerged.", "note.v4flash": "Idealer Fit (13B aktiv, 146 GB) — kommt mit Mainline-llama.cpp.",
     "badge.soon": "bald", "btn.send": "Senden",
     "installed.title": "Installierte Modelle", "speed.title": "Erwartete Geschwindigkeit", "speed.external": "externe SSD - langsamer",
+    "sec.downloads": "Download & Konvertierung",
+    "dl.intro": "GGUF laden, dann in das gestreamte PGRN-Format konvertieren. Mehrteilige (XL-)Modelle werden Shard für Shard geladen und in einem Durchgang konvertiert.",
+    "sec.bench": "Benchmark",
+    "bench.intro": "Ein Klick: misst Prefill (Prompt lesen) und Decode (Antwort schreiben) am laufenden Server — echte Zahlen, keine Schätzung.",
+    "bench.tokens": "Tokens je Lauf", "bench.runs": "Durchläufe", "bench.run": "Benchmark starten", "bench.running": "Messe…",
+    "bench.col.run": "Lauf", "bench.col.prefill": "Prefill", "bench.col.decode": "Decode", "bench.col.hit": "Hit-Rate", "bench.col.tokens": "Tokens",
+    "bench.mean": "Mittel", "bench.needServer": "Erst den Server starten — der Benchmark misst den laufenden Prozess.",
+    "bench.note": "Lauf 1 füllt den Experten-Cache (kalt), spätere Läufe zeigen den warmen Zustand — dort lebt eine echte Coding-Session. Die Hit-Rate kommt aus dem Engine-Log.",
+    "bench.failed": "Benchmark fehlgeschlagen", "bench.hint": "Temperatur 0, Seed 42, Prompt-Cache aus — vergleichbar zwischen Läufen.",
+    "sec.memPlan": "Speicherplan",
+    "mem.resident": "Modell resident (Attention + Embeddings)", "mem.cache": "Experten-Cache (konfiguriert)",
+    "mem.kv": "KV-Cache", "mem.kvPending": "nach dem Start", "mem.reserve": "Reserve für macOS",
+    "mem.sum": "Summe / freier RAM",
+    "mem.fits": "Passt — der Mac bleibt bedienbar.",
+    "mem.tight": "Knapp — ein paar Apps schließen oder den Cache um 2 GiB verkleinern.",
+    "mem.over": "Zu groß für den freien RAM — Cache in den Einstellungen verkleinern, sonst swappt macOS.",
+    "mem.note": "<b>Warum das zählt:</b> Experten-Cache + KV-Cache + eine Reserve für macOS müssen in den RAM passen. Slipstream hält <b>3 GiB Reserve</b> — gemessen: 1,5 GiB führen zu Metal-Residency-Stalls. Wird die Ampel gelb oder rot, den Cache in den Einstellungen verkleinern.",
+    "experts.note": "<b>Was du siehst:</b> jede Zelle ist ein Slot der begrenzten Experten-Arena. Grün = der Experte war schon resident (kein SSD-Read), Orange = er wurde von der SSD gestreamt. Die Engine partitioniert die Arena pro Layer — <b>width-gewichtet</b>, wenn eine <code>partition-weights.txt</code> neben der PGRN liegt (gemessen +11 % Decode bei warmem Cache).",
+    "sec.arena": "Experten-Arena", "sec.streaming": "SSD-Streaming", "lbl.partition": "Cache-Partition", "adv.summary": "Advanced: I/O-Hebel",
+    "partition.weighted": "width-gewichtet (Sidecar gefunden)", "partition.equal": "Equal-Split (kein Sidecar)", "partition.unknown": "–",
+    "streaming.note": "<b>Daumenregel:</b> die PGRN gehört auf die schnellste SSD — sie wird bei jedem einzelnen Token gelesen. Das GGUF wird nur beim Laden angefasst und darf auf einer langsamen externen Disk liegen. Mehr I/O-Threads beschleunigen vor allem den Prefill langer Agenten-Prompts.",
+    "tip.cluster": "Für ein späteres Release geplant (R3): Experten über mehrere Macs verteilen. Noch nicht gebaut — hier sichtbar, damit die Roadmap ehrlich bleibt.",
+    "sec.test": "Einzel-Test",
   },
   zh: {}, es: {},
 };
@@ -221,6 +334,8 @@ const TIPS = {
     "tip.predict": "Learns which experts co-fire between layers, live, and prefetches the next layer's likely experts during compute. Experimental — verify with an A/B; parity-safe (warms cache only).",
     "tip.mtp": "Speculative decoding via multi-token prediction. Only for models with an MTP/DFlash draft; off otherwise.",
     "tip.compact": "Zero-copy expert slots: the GPU reads experts straight from the cache — no re-upload copy. Measured +13–24% decode at moderate cache, neutral at high, swap-safe. On by default.",
+    "tip.extBase": "Where the large GGUF files live, if that is a different disk than the streamed PGRN. The PGRN belongs on the fastest disk because it is read continuously; a GGUF is read once at load, so it can sit on a slower external drive (measured 2.7× on Laguna). Empty means both live in the model folder.",
+    "tip.grammar": "For structured output (JSON / tool calls): where the grammar forces the next character, inject it as a pre-accepted, target-verified draft — fewer forwards, fewer SSD expert fetches. Lossless (output byte-identical). Adaptive-guarded: only engages when it beats the draft model, so easy JSON never regresses. Measured +45% tok/s on rigid schemas (fetch-bound), neutral on simple JSON. On by default.",
     "tip.thinking": "The model's reasoning mode. Leave OFF for agentic coding: otherwise it loops in endless thinking and burns the token budget before answering. ON only for hard single questions.",
     "tip.model": "Compatible = MoE architecture + Q4_K/Q5_K/Q6_K experts + known to llama.cpp.",
     "tip.gguf": "The GGUF is read only at load — it may live on the slow external SSD.",
@@ -242,6 +357,8 @@ const TIPS = {
     "tip.predict": "Lernt live, welche Experten zwischen Layern gemeinsam feuern, und lädt die wahrscheinlichen nächsten Experten während des Rechnens vor. Experimentell — per A/B prüfen; parity-safe (wärmt nur den Cache).",
     "tip.mtp": "Spekulatives Decoding via Multi-Token-Prediction. Nur bei Modellen mit MTP/DFlash-Draft; sonst automatisch aus.",
     "tip.compact": "Zero-Copy-Experten-Slots: die GPU liest Experten direkt aus dem Cache — keine Re-Upload-Kopie. Gemessen +13–24% Decode bei moderatem Cache, neutral bei hohem, swap-safe. Standardmäßig an.",
+    "tip.extBase": "Wo die großen GGUF-Dateien liegen, falls das eine andere Platte ist als die gestreamte PGRN. Die PGRN gehört auf die schnellste Platte, weil sie laufend gelesen wird; eine GGUF wird nur einmal beim Laden gelesen und darf auf einer langsameren externen liegen (gemessen 2,7× bei Laguna). Leer heißt: beides im Modellordner.",
+    "tip.grammar": "Für strukturierte Ausgabe (JSON / Tool-Calls): wo die Grammatik das nächste Zeichen erzwingt, wird es als vorab-akzeptierter, vom Target verifizierter Draft injiziert — weniger Forwards, weniger SSD-Experten-Fetches. Verlustfrei (Output byte-identisch). Adaptiv abgesichert: greift nur, wenn es das Draft-Model schlägt, einfaches JSON regressiert also nie. Gemessen +45% tok/s bei rigiden Schemas (fetch-bound), neutral bei einfachem JSON. Standardmäßig an.",
     "tip.thinking": "Reasoning-Modus des Modells. Für Agenten-Coding AUS lassen: sonst verheddert es sich im Endlos-Denken und verbraucht das Token-Budget, bevor es antwortet. AN nur für schwere Einzelfragen.",
     "tip.model": "Kompatibel = MoE-Architektur + Q4_K/Q5_K/Q6_K-Experten + von llama.cpp unterstützt.",
     "tip.gguf": "Das GGUF wird nur beim Laden gelesen — darf auf der langsamen externen SSD liegen.",
@@ -259,6 +376,7 @@ const MISC = {
   en: {
     "toast.canceled": "Canceled", "toast.pickCanceled": "Selection canceled", "toast.noDialog": "File dialog unavailable",
     "toast.diagCopied": "Diagnostics copied", "toast.dlStarted": "Download started", "toast.convStarted": "Conversion started",
+    "toast.convDone": "Conversion finished — PGRN ready",
     "toast.idxStopped": "Indexing stopped", "toast.serverStopped": "Server stopped",
     "toast.noUrl": "No URL for this model — place it manually.", "toast.embDl": "Downloading embed model (~100 MB)",
     "toast.qInstall": "Installing Qdrant (~30 MB)", "toast.embStarted": "Embedder started", "toast.embStopped": "Embedder stopped",
@@ -280,6 +398,7 @@ const MISC = {
   de: {
     "toast.canceled": "Abgebrochen", "toast.pickCanceled": "Auswahl abgebrochen", "toast.noDialog": "Datei-Dialog nicht verfügbar",
     "toast.diagCopied": "Diagnose kopiert", "toast.dlStarted": "Download gestartet", "toast.convStarted": "Konvertierung gestartet",
+    "toast.convDone": "Konvertierung fertig — PGRN bereit",
     "toast.idxStopped": "Indexierung gestoppt", "toast.serverStopped": "Server gestoppt",
     "toast.noUrl": "Für dieses Modell keine URL — manuell ablegen.", "toast.embDl": "Embed-Modell wird geladen (~100 MB)",
     "toast.qInstall": "Qdrant wird installiert (~30 MB)", "toast.embStarted": "Embedder gestartet", "toast.embStopped": "Embedder gestoppt",
@@ -305,6 +424,25 @@ let LANG = localStorage.getItem("slipstream.lang") ||
   (navigator.language || "en").slice(0, 2);
 if (!I18N[LANG]) LANG = "en";
 function t(key) { return (I18N[LANG] && I18N[LANG][key]) || I18N.en[key] || key; }
+
+// Offering a language the app only half speaks is the same dishonesty as a fake
+// panel, so the selector says how far each one gets. Measured, not asserted: a
+// language that gets completed loses its marker without anyone editing this.
+function langCoverage(lang) {
+  const total = Object.keys(I18N.en).length;
+  if (!total || !I18N[lang]) return 0;
+  return Object.keys(I18N[lang]).length / total;
+}
+function markLangCoverage() {
+  const sel = $("lang");
+  if (!sel) return;
+  for (const opt of sel.options) {
+    const pct = Math.round(langCoverage(opt.value) * 100);
+    const base = opt.dataset.label || (opt.dataset.label = opt.textContent);
+    opt.textContent = pct >= 95 ? base : `${base} · ${pct}%`;
+    opt.title = pct >= 95 ? "" : t("lang.partial").replace("{pct}", String(pct));
+  }
+}
 function applyLang(lang) {
   if (I18N[lang]) LANG = lang;
   localStorage.setItem("slipstream.lang", LANG);
@@ -314,12 +452,25 @@ function applyLang(lang) {
   document.querySelectorAll("[data-i18n-html]").forEach((el) => { el.innerHTML = t(el.dataset.i18nHtml); });
   document.querySelectorAll("[data-i18n-ph]").forEach((el) => { el.setAttribute("placeholder", t(el.dataset.i18nPh)); });
   const ls = $("lang"); if (ls) ls.value = LANG;
+  try { markLangCoverage(); } catch {}
   try { renderModelNote(); } catch {}
   try { updateReco(); } catch {}
   try { renderAgents(); } catch {}
   try { updateCacheRec(); } catch {}
   try { renderSpeed(); } catch {}
   try { renderInstalled(); } catch {}
+  try { renderMemPlan(); } catch {}
+  try { renderPartitionNote(); } catch {}
+  try { if (state.mstatus) renderResume(state.mstatus); } catch {}
+  try { renderQualitySelector(); } catch {}
+  try { fillModels(); } catch {}   // options carry a translated "soon" suffix
+  // The pill and the power button carry live text set by setPill() — repaint them
+  // in whatever mode we're currently in, otherwise they keep the old language.
+  try { setPill(state.pillMode || "off"); } catch {}
+  // Same for the indexing button, whose label depends on the live setup state.
+  const idxBtn = $("idxSetup");
+  if (idxBtn) idxBtn.textContent = t(idxBtn.dataset.mode === "stop" ? "idx.stop" : "idx.setup");
+  if (state.bench) { try { $("benchOut").innerHTML = renderBenchTable(state.bench, state.bench.length) + `<div class="bench-note">${t("bench.note")}</div>`; } catch {} }
 }
 
 // ---- tiny helpers ----------------------------------------------------------
@@ -331,23 +482,35 @@ function toast(msg, err) {
   t._h = setTimeout(() => (t.className = "toast"), 2600);
 }
 const fmtGiB = (b) => (b / 1073741824).toFixed(1);
+function fmtEta(s) {
+  s = Math.round(s);
+  return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+}
 function pgrnOf(gguf) { return gguf.replace(/\.gguf$/i, ".pgrn"); }
 function modelDir() { return $("pDir").value.trim(); }
-function ggufPath() { return modelDir() + "/" + state.model.file; }
+function ggufPath() { return modelDir() + "/" + currentFile(); }
 function urlFor(m) {
   if (!m.repo) return "";
   return `https://huggingface.co/${m.repo}/resolve/main/${m.file}`;
 }
 
 // ---- tabs ------------------------------------------------------------------
-document.querySelectorAll(".tab").forEach((tab) => {
-  tab.onclick = () => {
-    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("tab-active"));
-    tab.classList.add("tab-active");
-    const name = tab.dataset.tab;
-    document.querySelectorAll(".panel").forEach((p) => (p.hidden = p.dataset.panel !== name));
-  };
+function showTab(name) {
+  const btn = document.querySelector(`.tab[data-tab="${name}"]`);
+  if (!btn) return false;
+  document.querySelectorAll(".tab").forEach((t) => t.classList.remove("tab-active"));
+  btn.classList.add("tab-active");
+  document.querySelectorAll(".panel").forEach((p) => (p.hidden = p.dataset.panel !== name));
+  localStorage.setItem("slipstream.tab", name);
+  // Canvases have no width while their panel is hidden — repaint on reveal.
+  try { drawAll(); } catch {}
+  try { sizeChat(); } catch {}
+  return true;
+}
+document.querySelectorAll(".tab[data-tab]").forEach((tab) => {
+  tab.onclick = () => showTab(tab.dataset.tab);
 });
+showTab(localStorage.getItem("slipstream.tab") || "chat");
 
 // ---- info tooltips ---------------------------------------------------------
 const tip = $("tooltip");
@@ -390,25 +553,62 @@ function fillModels() {
 }
 function selectModel(id) {
   state.model = MODELS.find((m) => m.id === id) || MODELS[0];
+  state.quantIdx = 0;
+  renderQualitySelector();
+  applyModelPaths();
+  localStorage.setItem("pgrn.model", id);
+}
+// The streamed file depends on the chosen quant; keep paths/url/note in sync.
+function applyModelPaths() {
   const m = state.model;
   const base = state.def ? state.def.model_dir : "/Users/Modelle";
-  // GGUF (load-only) can sit on the slow external; PGRN (streamed) on fast internal.
-  $("pDir").value = (m.extGguf ? `${EXT_BASE}/${m.subdir}` : `${base}/${m.subdir}`);
-  $("pPgrn").value = `${base}/${m.subdir}/${m.file.replace(/\.gguf$/i, ".pgrn")}`;
-  $("pUrl").value = urlFor(state.model);
+  const file = currentFile();
+  $("pDir").value = `${m.extGguf ? ggufBase() : base}/${m.subdir}`;
+  $("pPgrn").value = `${base}/${m.subdir}/${file.replace(/\.gguf$/i, ".pgrn")}`;
+  $("pUrl").value = m.repo ? `https://huggingface.co/${m.repo}/resolve/main/${file}` : "";
   renderModelNote();
   state.remoteBytes = 0;
-  localStorage.setItem("pgrn.model", id);
   refreshModel();
+}
+function currentFile() {
+  const m = state.model;
+  if (m.quants && m.quants[state.quantIdx || 0]) return m.quants[state.quantIdx || 0].file;
+  return m.file;
+}
+function renderQualitySelector() {
+  const wrap = $("qualityWrap"), sel = $("qualitySel");
+  const m = state.model;
+  if (!wrap || !sel) return;
+  if (!m.quants || m.quants.length < 2) { wrap.style.display = "none"; return; }
+  wrap.style.display = "";
+  sel.innerHTML = "";
+  m.quants.forEach((q, i) => {
+    const o = document.createElement("option");
+    o.value = String(i); o.textContent = `${q.label} · ${t(q.tier)} (~${q.gb} GiB)`;
+    sel.appendChild(o);
+  });
+  sel.value = String(state.quantIdx || 0);
 }
 function renderModelNote() {
   try { renderSpeed(); } catch {}
   const m = state.model, el = $("modelNote");
   if (!el) return;
-  el.innerHTML = `${t(m.note)} &nbsp;&middot;&nbsp; ~${m.gb} GiB Download` +
+  const gb = (m.quants && m.quants[state.quantIdx || 0]) ? m.quants[state.quantIdx || 0].gb : m.gb;
+  el.innerHTML = `${t(m.note)} &nbsp;&middot;&nbsp; ~${gb} GiB Download` +
     (m.mtp ? " &nbsp;&middot;&nbsp; MTP/DFlash-Speed" : "");
+  // The Downloads tab acts on this selection — name it there too.
+  const dn = $("dlModelName");
+  if (dn) dn.textContent = m.quants ? `${m.name} · ${m.quants[state.quantIdx || 0].label}` : m.name;
+  // Models without an MTP head or draft file can't speculate — don't offer it.
+  const sp = $("specMtp");
+  if (sp) {
+    const canSpec = !!(m.spec && m.spec !== "none");
+    sp.disabled = !canSpec;
+    if (sp.parentElement) sp.parentElement.style.opacity = canSpec ? "" : ".45";
+  }
 }
 $("modelSel").onchange = (e) => selectModel(e.target.value);
+if ($("qualitySel")) $("qualitySel").onchange = (e) => { state.quantIdx = +e.target.value || 0; applyModelPaths(); };
 
 // ---- file pickers ----------------------------------------------------------
 async function pickInto(inputId, opts) {
@@ -416,25 +616,63 @@ async function pickInto(inputId, opts) {
   try {
     const cur = $(inputId).value.trim();
     const picked = await dialog.open(Object.assign({ defaultPath: cur || undefined }, opts));
-    if (picked) $(inputId).value = picked;
+    if (picked) {
+      $(inputId).value = picked;
+      // A programmatic assignment fires nothing, so inputs that persist their
+      // value would silently miss a pick.
+      $(inputId).dispatchEvent(new Event("change", { bubbles: true }));
+    }
   } catch (e) { toast(t("toast.pickCanceled"), true); }
 }
-function addPicker(inputId, opts, label) {
+function addPicker(inputId, opts, key) {
   const inp = $(inputId);
   const btn = document.createElement("button");
-  btn.className = "btn btn-ghost"; btn.textContent = label || "Waehlen…";
+  // data-i18n, not a baked-in label: applyLang() has to be able to re-label it.
+  btn.className = "btn btn-ghost"; btn.dataset.i18n = key; btn.textContent = t(key);
   btn.style.marginTop = "6px";
   btn.onclick = () => pickInto(inputId, opts);
   inp.insertAdjacentElement("afterend", btn);
 }
 
 // ---- model status / download / convert -------------------------------------
+/// Interrupted conversion (R1.5). The strip only exists while there is work to
+/// pick up, and it hides while a conversion is running so the two progress bars
+/// can never contradict each other.
+function renderResume(st) {
+  const row = $("resumeRow");
+  if (!row) return;
+  const r = st.resume || {};
+  const show = !st.converting && !st.downloading && (r.resumable || r.orphan_partial);
+  row.hidden = !show;
+  if (!show) return;
+  const pct = r.records_total ? Math.min(100, (r.records_done / r.records_total) * 100) : 0;
+  $("resumeBar").style.width = pct.toFixed(0) + "%";
+  $("resumeBtn").disabled = !r.resumable;
+  $("resumeNote").textContent = r.resumable
+    ? `${pct.toFixed(0)} % · ${r.records_done.toLocaleString(LANG)} ${t("resume.of")} `
+      + `${r.records_total.toLocaleString(LANG)} ${t("resume.experts")} · ${fmtGiB(r.partial_bytes)} GiB`
+    : t("resume.orphan");
+}
+
 async function refreshModel() {
   const gguf = ggufPath(), pgrn = ($("pPgrn").value.trim() || pgrnOf(gguf)), dir = modelDir();
   let st;
   try { st = await invoke("model_status", { gguf, pgrn, dir }); }
   catch { return; }
   state.mstatus = st;
+  renderPartitionNote();
+  renderResume(st);
+
+  // Conversion just ended: surface the converter's final JSONL verdict once.
+  if (state.wasConverting && !st.converting) {
+    state.wasConverting = false;
+    try {
+      const cp = await invoke("convert_progress");
+      if (cp.phase === "error") toast(t("err.prefix") + cp.message, true);
+      else if (cp.phase === "done") toast(t("toast.convDone"));
+      else if (cp.phase === "cancelled") toast(t("resume.title"));
+    } catch {}
+  }
 
   const badge = $("modelBadge");
   const dlStatus = $("dlStatus"), dlBar = $("dlBar"), dlNote = $("dlNote");
@@ -447,29 +685,42 @@ async function refreshModel() {
     badge.className = "badge partial"; badge.textContent = t("badge.loading") + " " + pct.toFixed(0) + "%";
     dlStatus.textContent = t("st.dlRunning");
     dlBar.style.width = pct + "%";
-    dlNote.textContent = `${fmtGiB(st.gguf_bytes)} / ${state.remoteBytes ? fmtGiB(state.remoteBytes) : "?"} GiB · frei: ${st.disk_free_gib.toFixed(0)} GiB`;
+    dlNote.textContent = `${fmtGiB(st.gguf_bytes)} / ${state.remoteBytes ? fmtGiB(state.remoteBytes) : "?"} GiB · ${t("reco.free")}: ${st.disk_free_gib.toFixed(0)} GiB`;
   } else if (st.converting) {
-    const est = st.gguf_bytes * 0.9;
-    const pct = est ? Math.min(100, (st.pgrn_bytes / est) * 100) : 0;
-    badge.className = "badge partial"; badge.textContent = "konvertiert " + pct.toFixed(0) + "%";
-    dlStatus.textContent = t("st.convRunning");
-    dlBar.style.width = pct + "%";
-    dlNote.textContent = `PGRN: ${fmtGiB(st.pgrn_bytes)} GiB`;
+    state.wasConverting = true;
+    let cp = null;
+    try { cp = await invoke("convert_progress"); } catch {}
+    if (cp && cp.total_bytes > 0 && cp.phase && cp.phase !== "error") {
+      // Real progress from the native converter's JSONL protocol.
+      const pct = Math.min(100, (cp.done_bytes / cp.total_bytes) * 100);
+      const phase = t("conv." + cp.phase);
+      badge.className = "badge partial"; badge.textContent = phase + " " + pct.toFixed(0) + "%";
+      dlStatus.textContent = t("st.convRunning") + " — " + phase;
+      dlBar.style.width = pct + "%";
+      const speed = cp.mb_s > 0 ? ` · ${Math.round(cp.mb_s)} MB/s` : "";
+      const eta = cp.eta_s >= 1 ? ` · ETA ${fmtEta(cp.eta_s)}` : "";
+      dlNote.textContent = `${fmtGiB(cp.done_bytes)} / ${fmtGiB(cp.total_bytes)} GiB${speed}${eta}`;
+    } else {
+      badge.className = "badge partial"; badge.textContent = t("st.convRunning");
+      dlStatus.textContent = t("st.convRunning");
+      dlBar.style.width = "2%";
+      dlNote.textContent = `PGRN: ${fmtGiB(st.pgrn_bytes)} GiB`;
+    }
   } else if (st.pgrn_bytes > 0 && st.gguf_bytes > 0) {
     badge.className = "badge ready"; badge.textContent = t("badge.ready");
     dlStatus.textContent = t("st.ready");
     dlBar.style.width = "100%";
-    dlNote.textContent = `GGUF ${fmtGiB(st.gguf_bytes)} GiB · PGRN ${fmtGiB(st.pgrn_bytes)} GiB · frei ${st.disk_free_gib.toFixed(0)} GiB`;
+    dlNote.textContent = `GGUF ${fmtGiB(st.gguf_bytes)} GiB · PGRN ${fmtGiB(st.pgrn_bytes)} GiB · ${t("reco.free")} ${st.disk_free_gib.toFixed(0)} GiB`;
   } else if (st.gguf_bytes > 0) {
     badge.className = "badge partial"; badge.textContent = t("st.needConvert");
     dlStatus.textContent = t("st.notConverted");
     dlBar.style.width = "50%";
-    dlNote.textContent = `GGUF ${fmtGiB(st.gguf_bytes)} GiB · frei ${st.disk_free_gib.toFixed(0)} GiB`;
+    dlNote.textContent = `GGUF ${fmtGiB(st.gguf_bytes)} GiB · ${t("reco.free")} ${st.disk_free_gib.toFixed(0)} GiB`;
   } else {
     badge.className = "badge missing"; badge.textContent = t("badge.notLoaded");
     dlStatus.textContent = t("st.notThere");
     dlBar.style.width = "0%";
-    dlNote.textContent = `frei: ${st.disk_free_gib.toFixed(0)} GiB`;
+    dlNote.textContent = `${t("reco.free")}: ${st.disk_free_gib.toFixed(0)} GiB`;
   }
 
   // power button reflects readiness when server is stopped
@@ -489,9 +740,27 @@ $("dlBtn").onclick = async () => {
   } catch (e) { toast(e, true); }
 };
 $("convBtn").onclick = async () => {
+  // Same PGRN resolution as status/start: the streamed sidecar belongs on the
+  // fast internal SSD (pPgrn), not necessarily next to the (external) GGUF.
+  const gguf = ggufPath();
+  const pgrn = $("pPgrn").value.trim() || pgrnOf(gguf);
   try {
-    await invoke("start_convert", { repo: state.def ? state.def.repo : "", gguf: ggufPath(), pgrn: pgrnOf(ggufPath()) });
+    await invoke("start_convert", { gguf, pgrn, ioThreads: +$("io").value || 8, resume: false });
     toast(t("toast.convStarted")); refreshModel();
+  } catch (e) { toast(e, true); }
+};
+$("resumeBtn").onclick = async () => {
+  const pgrn = $("pPgrn").value.trim() || pgrnOf(ggufPath());
+  try {
+    await invoke("start_convert", { gguf: ggufPath(), pgrn, ioThreads: +$("io").value || 8, resume: true });
+    toast(t("toast.resumed")); refreshModel();
+  } catch (e) { toast(e, true); }
+};
+$("resumeDiscard").onclick = async () => {
+  const pgrn = $("pPgrn").value.trim() || pgrnOf(ggufPath());
+  try {
+    await invoke("discard_convert", { pgrn });
+    toast(t("toast.discarded")); refreshModel();
   } catch (e) { toast(e, true); }
 };
 $("dlCancel").onclick = async () => {
@@ -512,12 +781,15 @@ async function startServer() {
     io_threads: +$("io").value,
     port: PORT,
     thinking: $("thinking").checked,
-    spec_type: state.model.spec || "none",
+    // The MTP toggle has to actually gate speculation — it was decorative before.
+    spec_type: ($("specMtp") && !$("specMtp").checked) ? "none" : (state.model.spec || "none"),
     draft_model: draft,
     pgrn_mirror: ($("pMirror") && $("pMirror").value.trim()) || "",
     pgrn_buffered: !!($("bufferedReads") && $("bufferedReads").checked),
     pgrn_online: !!($("onlinePredict") && $("onlinePredict").checked),
     pgrn_compact: $("compactSlots") ? $("compactSlots").checked : true,
+    grammar_draft: $("grammarDraft") ? $("grammarDraft").checked : true,
+    kv_quant: state.model.kv || "q8_0",
   };
   try {
     const msg = await invoke("start_server", { cfg }); toast(t("srv.startedLoading"));
@@ -533,6 +805,7 @@ $("powerBtn").onclick = () => (state.running ? stopServer() : startServer());
 
 function setPill(mode) {
   const p = $("statusPill"), b = $("powerBtn");
+  state.pillMode = mode;
   if (mode === "on") { p.className = "pill pill-on"; p.textContent = t("pill.running"); b.textContent = t("btn.stop"); b.className = "btn btn-danger"; b.disabled = false; }
   else if (mode === "loading") { p.className = "pill pill-loading"; p.textContent = t("pill.starting"); b.textContent = t("btn.stop"); b.className = "btn btn-danger"; b.disabled = false; }
   else { p.className = "pill pill-off"; p.textContent = t("pill.stopped"); b.className = "btn btn-primary"; }
@@ -586,6 +859,43 @@ function updateReco() {
     (state.model.draft ? ` &middot; <b>DFlash</b>` : (state.model.spec === "draft-mtp" ? ` &middot; <b>MTP</b>` : ""));
   state.reco = r;
 }
+// Memory panel: what actually has to fit in RAM. Every line is either measured
+// (resident share from the real file sizes, KV from the engine's own log) or a
+// configured value — no invented KV formula.
+function renderMemPlan() {
+  const el = $("memPlan"); if (!el) return;
+  const s = state.sys, r = computeReco();
+  if (!s || !r) { el.textContent = t("reco.computing"); return; }
+  const cache = +$("cache").value || 10;
+  const kvGb = state.kvMiB ? state.kvMiB / 1024 : null;
+  const reserve = 3;
+  const sum = r.resident + cache + (kvGb || 0) + reserve;
+  const free = s.free_gib;
+  const kvType = state.model.kv || "q8_0";
+  const row = (label, val) => `<tr><td>${label}</td><td>${val}</td></tr>`;
+  el.innerHTML =
+    `<table class="bench-table">` +
+    row(t("mem.resident"), `${r.resident.toFixed(1)} GiB`) +
+    row(t("mem.cache"), `${cache} GiB`) +
+    row(`${t("mem.kv")} (${(+$("ctx").value || 40960) / 1024}k · ${kvType})`,
+        kvGb != null ? `${kvGb.toFixed(1)} GiB` : t("mem.kvPending")) +
+    row(t("mem.reserve"), `${reserve} GiB`) +
+    `<tr class="bench-mean"><td>${t("mem.sum")}</td><td>${sum.toFixed(1)} / ${free.toFixed(1)} GiB</td></tr>` +
+    `</table>` +
+    `<div class="bench-note">${sum <= free ? t("mem.fits") : sum <= free + 2 ? t("mem.tight") : t("mem.over")}</div>`;
+}
+
+// Streaming panel: does the engine get a width-weighted partition or the equal
+// split? Driven by the sidecar that start_server auto-detects — not a guess.
+function renderPartitionNote() {
+  const el = $("partitionNote"); if (!el) return;
+  const st = state.mstatus;
+  if (!st) { el.textContent = t("partition.unknown"); return; }
+  el.innerHTML = st.weights
+    ? `<b style="color:var(--green)">${t("partition.weighted")}</b>`
+    : t("partition.equal");
+}
+
 function applyReco() {
   const r = state.reco || computeReco();
   if (!r) { toast(t("toast.noSys"), true); return; }
@@ -622,7 +932,7 @@ async function renderInstalled() {
   const base = state.def.model_dir;
   const rows = await Promise.all(MODELS.map(async (m) => {
     if (m.soon) return { m, cls: "soon", txt: `~${m.gb} GiB · ${m.activeB}B active` };
-    const ggufDir = m.extGguf ? `${EXT_BASE}/${m.subdir}` : `${base}/${m.subdir}`;
+    const ggufDir = `${m.extGguf ? ggufBase() : base}/${m.subdir}`;
     const gguf = `${ggufDir}/${m.file}`;
     const pgrn = `${base}/${m.subdir}/${m.file.replace(/\.gguf$/i, ".pgrn")}`;
     let st; try { st = await invoke("model_status", { gguf, pgrn, dir: ggufDir }); } catch { st = null; }
@@ -644,10 +954,14 @@ async function renderInstalled() {
 function parseLog(text) {
   const lines = text.split("\n");
   let hitPct = null, hits = null, misses = null, tps = null, loaded = false;
-  let lastPrompt = null, lastComp = null, sumComp = 0;
+  let lastPrompt = null, lastComp = null, sumComp = 0, kvMiB = null;
   for (const l of lines) {
     let m = l.match(/hits = (\d+), misses = (\d+) \(([\d.]+)%\)/);
     if (m) { hits = +m[1]; misses = +m[2]; hitPct = +m[3]; }
+    // The engine reports its own KV allocation at load ("KV self size = N MiB" /
+    // "Metal KV buffer size = N MiB") — the only honest KV number we have.
+    m = l.match(/KV (?:self size|buffer size)\s*=\s*([\d.]+)\s*MiB/);
+    if (m) kvMiB = Math.max(kvMiB || 0, +m[1]);
     // Format: "eval time = ... ( 73.44 ms per token, 13.62 tokens per second)"
     // so match the number right before "tokens per second" (not right after "(").
     // Last "eval time" line per request block is the decode speed.
@@ -659,7 +973,7 @@ function parseLog(text) {
     else { m = l.match(/[ |]eval time =\s*[\d.]+ ms \/\s*(\d+) tokens/); if (m) { lastComp = +m[1]; sumComp += +m[1]; } }
     if (l.includes("HTTP server listening") || l.includes("server is listening") || l.includes("main loop")) loaded = true;
   }
-  return { hitPct, hits, misses, tps, loaded, lastPrompt, lastComp, sumComp };
+  return { hitPct, hits, misses, tps, loaded, lastPrompt, lastComp, sumComp, kvMiB };
 }
 
 // Detect the server's current request phase from the log tail so we can show
@@ -693,14 +1007,25 @@ function updateActivity(a) {
   } else if (a.phase === "decode") {
     el.className = "activity decode";
     $("actTitle").textContent = t("act.decode");
-    $("actSub").textContent = a.dec ? `${a.dec.tokens} Tokens · ${a.dec.tps.toFixed(1)} tok/s` : "läuft…";
+    $("actSub").textContent = a.dec ? `${a.dec.tokens} ${t("act.tokens")} · ${a.dec.tps.toFixed(1)} tok/s` : t("act.running");
     $("actBar").style.width = "100%"; $("actPct").textContent = "";
   } else {
     el.className = "activity idle";
     $("actTitle").textContent = state.running ? t("act.idleReady") : t("act.stopped");
     $("actSub").textContent = ""; $("actBar").style.width = "0%"; $("actPct").textContent = "";
   }
+  sizeChat();
 }
+
+// The chat pane fills whatever is left below the header + activity strip. That
+// strip changes height when a request starts, so measure instead of guessing.
+function sizeChat() {
+  const w = document.querySelector(".chat-wrap");
+  if (!w || w.closest(".panel").hidden) return;
+  const top = w.getBoundingClientRect().top;
+  w.style.height = Math.max(320, window.innerHeight - top - 52) + "px";
+}
+window.addEventListener("resize", sizeChat);
 
 function push(buf, v) { buf.push(v); if (buf.length > 60) buf.shift(); }
 
@@ -725,6 +1050,12 @@ function drawSpark(id, buf, color, max) {
   buf.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
   ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.stroke();
   ctx.beginPath(); ctx.arc(x(buf.length - 1), y(buf[buf.length - 1]), 2.5, 0, 7); ctx.fillStyle = color; ctx.fill();
+}
+// The sparklines live on three different tabs now — repaint them together.
+function drawAll() {
+  drawSpark("ssdChart", state.ssd, "#ff9d2f");
+  drawSpark("hitChart", state.hit, "#35d07f", 100);
+  drawSpark("tpsChart", state.tps, "#4aa8ff");
 }
 
 // ---- polling loop ----------------------------------------------------------
@@ -782,6 +1113,7 @@ async function poll() {
     $("ampel").className = "ampel ampel-" + amp;
     $("ampelText").textContent = txt;
     updateReco();
+    renderMemPlan();
   } catch {}
 
   if (state.running) {
@@ -797,6 +1129,8 @@ async function poll() {
         const dM = p.misses - state.lastMisses, dT = now - state.lastT;
         if (dM >= 0 && dT > 0) ssd = (dM * EXPERT_MIB) / dT;
       }
+      // Load-time line: keep it, the 400-line tail window scrolls past it later.
+      if (p.kvMiB) state.kvMiB = p.kvMiB;
       state.lastMisses = p.misses; state.lastT = now;
       push(state.ssd, Math.max(0, ssd));
       if (p.hitPct != null) push(state.hit, p.hitPct);
@@ -820,13 +1154,11 @@ async function poll() {
     $("healthText").textContent = t("srv.stopped");
     $("activeModelNote").textContent = t("srv.noModel");
     state.lastMisses = null;
+    state.kvMiB = null;
     ARENA.active = false;
   }
 
-  drawSpark("ssdChart", state.ssd, "#ff9d2f");
-  drawSpark("hitChart", state.hit, "#35d07f", 100);
-  drawSpark("tpsChart", state.tps, "#4aa8ff");
-
+  drawAll();
   refreshModel();
 }
 
@@ -883,7 +1215,7 @@ async function doAgent(a) {
       await navigator.clipboard.writeText(a.snippet());
       $("agentNote").innerHTML = `<b>${a.name}</b>: ${t("toast.copied")}. ${t(a.how)}`;
       toast(`${a.name}-Config kopiert`);
-    } catch { toast("Kopieren fehlgeschlagen", true); }
+    } catch { toast(t("toast.copyFail"), true); }
   }
 }
 
@@ -913,8 +1245,8 @@ async function refreshIndex() {
 
   const b = $("idxBadge"), both = embUp && st.qdrant_running;
   if (both) { b.className = "badge ready"; b.textContent = t("badge.ready"); }
-  else if (st.emb_bytes > 0 || st.qdrant_installed) { b.className = "badge partial"; b.textContent = "teilweise"; }
-  else { b.className = "badge missing"; b.textContent = "nicht eingerichtet"; }
+  else if (st.emb_bytes > 0 || st.qdrant_installed) { b.className = "badge partial"; b.textContent = t("badge.partial"); }
+  else { b.className = "badge missing"; b.textContent = t("badge.missing"); }
 
   if (!idxBusy) {
     const setup = $("idxSetup");
@@ -1011,6 +1343,87 @@ $("sendBtn").onclick = async () => {
   btn.disabled = false; btn.textContent = t("btn.send");
 };
 
+// ---- benchmark -------------------------------------------------------------
+// Measures the running server through llama.cpp's own /completion timings
+// (prompt_per_second = prefill, predicted_per_second = decode) instead of
+// wall-clock guessing. Prompt cache is disabled and each run gets a distinct
+// prompt, so prefill is really re-done every time. Run 1 is the cold one — the
+// expert cache fills during it; the warm runs are what a coding session feels.
+const BENCH_UNIT =
+  "Note %n: fn fetch_expert(layer: usize, idx: usize) -> Result<Slot, Error> { " +
+  "let slot = arena.reserve(layer)?; io.read_at(slot.buf_mut(), dir.offset(layer, idx))?; Ok(slot) } ";
+function benchPrompt(run) {
+  let s = `Benchmark run ${run}. Read these review notes and summarise them in three sentences.\n`;
+  for (let i = 0; i < 90; i++) s += BENCH_UNIT.replace("%n", String(run * 1000 + i));
+  return s;
+}
+async function runBenchmark() {
+  const btn = $("benchRun"), out = $("benchOut"), badge = $("benchBadge");
+  if (!btn || !out) return;
+  if (!state.running) { toast(t("bench.needServer"), true); return; }
+  const nTok = +$("benchTokens").value || 300;
+  const runs = +$("benchRuns").value || 2;
+  btn.disabled = true; btn.textContent = t("bench.running");
+  const rows = [];
+  try {
+    for (let i = 1; i <= runs; i++) {
+      badge.className = "badge partial"; badge.textContent = `${i}/${runs}`;
+      out.innerHTML = `<div class="bench-note bench-run">${t("bench.running")} ${i}/${runs}</div>`
+        + renderBenchTable(rows, runs);
+      const res = await fetch(`http://127.0.0.1:${PORT}/completion`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: benchPrompt(i), n_predict: nTok, temperature: 0, seed: 42,
+          cache_prompt: false, stream: false,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const j = await res.json();
+      const tm = j.timings || {};
+      rows.push({
+        run: i,
+        prefill: tm.prompt_per_second || null,
+        decode: tm.predicted_per_second || null,
+        pTok: tm.prompt_n || 0,
+        dTok: tm.predicted_n || 0,
+        hit: state.hit.length ? state.hit[state.hit.length - 1] : null,
+      });
+      out.innerHTML = renderBenchTable(rows, runs);
+    }
+    state.bench = rows;
+    badge.className = "badge ready"; badge.textContent = t("badge.ready");
+    out.innerHTML = renderBenchTable(rows, runs) + `<div class="bench-note">${t("bench.note")}</div>`;
+  } catch (e) {
+    badge.className = "badge missing"; badge.textContent = t("conv.error");
+    out.innerHTML = renderBenchTable(rows, runs)
+      + `<div class="bench-note" style="color:#ff9d92">${t("bench.failed")}: ${String(e)}</div>`;
+  }
+  btn.disabled = false; btn.textContent = t("bench.run");
+}
+function renderBenchTable(rows, runs) {
+  if (!rows.length) return "";
+  const num = (v, d) => (v == null ? "–" : v.toFixed(d));
+  let html = `<table class="bench-table"><tr>` +
+    `<th>${t("bench.col.run")}</th><th>${t("bench.col.prefill")}</th>` +
+    `<th>${t("bench.col.decode")}</th><th>${t("bench.col.hit")}</th><th>${t("bench.col.tokens")}</th></tr>`;
+  rows.forEach((r) => {
+    html += `<tr><td>${r.run}${r.run === 1 && runs > 1 ? " (cold)" : ""}</td>` +
+      `<td>${num(r.prefill, 0)} tok/s</td><td>${num(r.decode, 2)} tok/s</td>` +
+      `<td>${r.hit == null ? "–" : r.hit.toFixed(1) + " %"}</td>` +
+      `<td>${r.pTok} + ${r.dTok}</td></tr>`;
+  });
+  // Mean over the warm runs only — averaging the cold run in would understate it.
+  const warm = runs > 1 && rows.length > 1 ? rows.slice(1) : rows;
+  const mean = (k) => {
+    const vals = warm.map((r) => r[k]).filter((v) => v != null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+  html += `<tr class="bench-mean"><td>${t("bench.mean")}${warm.length !== rows.length ? " (warm)" : ""}</td>` +
+    `<td>${num(mean("prefill"), 0)} tok/s</td><td>${num(mean("decode"), 2)} tok/s</td><td></td><td></td></tr>`;
+  return html + `</table>`;
+}
+if ($("benchRun")) $("benchRun").onclick = runBenchmark;
+
 // ---- logs ------------------------------------------------------------------
 const LOG_FILES = {
   download: "/tmp/peregrine-download.log",
@@ -1022,10 +1435,10 @@ async function refreshLogs() {
   try {
     if (src === "server") txt = await invoke("read_log", { maxLines: 300 });
     else txt = await invoke("tail_file", { path: LOG_FILES[src], maxLines: 300 });
-  } catch { txt = "(kein Log)"; }
+  } catch { txt = t("logs.none"); }
   const el = $("logs");
   const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
-  el.textContent = txt || "(leer)";
+  el.textContent = txt || t("logs.empty");
   if ($("autoscroll").checked && atBottom) el.scrollTop = el.scrollHeight;
 }
 $("diagBtn").onclick = async () => {
@@ -1046,6 +1459,111 @@ ${log}`;
   } catch (e) { toast(e, true); }
 };
 
+// ---- chat (streaming against the local OpenAI-compatible server) -----------
+const chat = { history: [], streaming: false, abort: null };
+
+function chatAddBubble(role, text) {
+  const empty = $("chatEmpty"); if (empty) empty.style.display = "none";
+  const wrap = document.createElement("div");
+  wrap.className = `chat-msg chat-${role}`;
+  const body = document.createElement("div");
+  body.className = "chat-bubble";
+  body.textContent = text;
+  wrap.appendChild(body);
+  $("chatMessages").appendChild(wrap);
+  $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
+  return body;
+}
+
+function setChatBusy(busy) {
+  chat.streaming = busy;
+  $("chatSend").style.display = busy ? "none" : "";
+  $("chatStop").style.display = busy ? "" : "none";
+  $("chatInput").disabled = busy;
+}
+
+async function sendChat() {
+  const input = $("chatInput");
+  const text = input.value.trim();
+  if (!text || chat.streaming) return;
+  if (!state.running) { toast(t("chat.serverHint"), true); return; }
+  input.value = ""; input.style.height = "auto";
+  chatAddBubble("user", text);
+  chat.history.push({ role: "user", content: text });
+
+  const bubble = chatAddBubble("assistant", "");
+  bubble.classList.add("streaming");
+  setChatBusy(true);
+  const meta = $("chatMeta"); meta.textContent = "";
+  const t0 = performance.now();
+  let tokens = 0, answer = "";
+  chat.abort = new AbortController();
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "slipstream",
+        messages: chat.history,
+        stream: true,
+        temperature: $("chatThink").checked ? 0.6 : 0,
+        chat_template_kwargs: { enable_thinking: !!$("chatThink").checked },
+      }),
+      signal: chat.abort.signal,
+    });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() || "";
+      for (const line of lines) {
+        const s = line.trim();
+        if (!s.startsWith("data:")) continue;
+        const payload = s.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        try {
+          const j = JSON.parse(payload);
+          const delta = j.choices?.[0]?.delta?.content || "";
+          if (delta) { answer += delta; tokens++; bubble.textContent = answer;
+            $("chatMessages").scrollTop = $("chatMessages").scrollHeight; }
+        } catch {}
+      }
+    }
+    chat.history.push({ role: "assistant", content: answer });
+    const secs = (performance.now() - t0) / 1000;
+    if (secs > 0 && tokens > 0) meta.textContent = `${(tokens / secs).toFixed(1)} tok/s · ${tokens} tokens`;
+  } catch (e) {
+    if (e.name !== "AbortError") { bubble.textContent = answer || (t("err.prefix") + e.message); bubble.classList.add("chat-err"); }
+  } finally {
+    bubble.classList.remove("streaming");
+    setChatBusy(false);
+    chat.abort = null;
+  }
+}
+
+function initChat() {
+  const send = $("chatSend"); if (!send) return;
+  send.onclick = sendChat;
+  $("chatStop").onclick = () => { if (chat.abort) chat.abort.abort(); };
+  $("chatClear").onclick = () => {
+    chat.history = [];
+    $("chatMessages").innerHTML = '<div class="chat-empty" id="chatEmpty">' + t("chat.empty") + "</div>";
+  };
+  const input = $("chatInput");
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(160, input.scrollHeight) + "px";
+  });
+}
+
 // ---- boot ------------------------------------------------------------------
 async function boot() {
   try { state.def = await invoke("defaults"); } catch {}
@@ -1057,16 +1575,25 @@ async function boot() {
   updateCacheRec();
 
   // file pickers under the path inputs
-  addPicker("pDir", { directory: true }, t("picker.folder"));
-  addPicker("pPgrn", { directory: false }, t("picker.pgrn"));
-  addPicker("pServer", { directory: false }, t("picker.binary"));
-  addPicker("pMirror", { directory: false }, t("picker.pgrn"));
+  addPicker("pDir", { directory: true }, "picker.folder");
+  addPicker("pPgrn", { directory: false }, "picker.pgrn");
+  addPicker("pServer", { directory: false }, "picker.binary");
+  addPicker("pMirror", { directory: false }, "picker.pgrn");
+  addPicker("extBase", { directory: true }, "picker.folder");
+  $("extBase").value = extBase;
+  $("extBase").onchange = (e) => {
+    extBase = e.target.value.trim().replace(/\/+$/, "");
+    localStorage.setItem("pgrn.extBase", extBase);
+    applyModelPaths();
+    renderInstalled();
+  };
   renderAgents();
   $("lang").onchange = (e) => { applyLang(e.target.value); setPill(state.running ? "loading" : "off"); };
   applyLang(LANG);
   renderSpeed();
   renderInstalled();
   initArena();
+  initChat();
 
   setInterval(poll, 1000);
   setInterval(refreshLogs, 1500);

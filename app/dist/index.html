@@ -27,257 +27,386 @@
     </div>
   </header>
 
-  <nav class="tabs">
-    <button class="tab tab-active" data-tab="dashboard" data-i18n="nav.dashboard">Dashboard</button>
-    <button class="tab" data-tab="models" data-i18n="nav.models">Modelle</button>
-    <button class="tab" data-tab="kilo" data-i18n="nav.agent">Coding-Agent</button>
-    <button class="tab" data-tab="debug" data-i18n="nav.debug">Debug</button>
-  </nav>
+  <!-- Global activity strip: visible on every tab, collapses when idle. -->
+  <div id="activity" class="activity idle">
+    <div class="act-dot"></div>
+    <div class="act-body">
+      <div class="act-title" id="actTitle">–</div>
+      <div class="act-sub" id="actSub"></div>
+      <div class="meter act-meter"><div id="actBar" class="meter-fill"></div></div>
+    </div>
+    <div class="act-pct" id="actPct"></div>
+  </div>
 
-  <main>
-    <!-- ============ DASHBOARD ============ -->
-    <section class="panel" data-panel="dashboard">
-      <div id="activity" class="activity idle">
-        <div class="act-dot"></div>
-        <div class="act-body">
-          <div class="act-title" id="actTitle">–</div>
-          <div class="act-sub" id="actSub"></div>
-          <div class="meter act-meter"><div id="actBar" class="meter-fill"></div></div>
-        </div>
-        <div class="act-pct" id="actPct"></div>
-      </div>
+  <div class="shell">
+    <nav class="sidenav">
+      <button class="tab tab-active" data-tab="chat"><span class="nav-ico">◆</span><span data-i18n="nav.chat">Chat</span></button>
+      <button class="tab" data-tab="models"><span class="nav-ico">◇</span><span data-i18n="nav.models">Modelle</span></button>
+      <button class="tab" data-tab="downloads"><span class="nav-ico">↓</span><span data-i18n="nav.downloads">Downloads</span></button>
+      <button class="tab" data-tab="benchmarks"><span class="nav-ico">▲</span><span data-i18n="nav.benchmarks">Benchmarks</span></button>
+      <div class="nav-sep"></div>
+      <button class="tab" data-tab="memory"><span class="nav-ico">▤</span><span data-i18n="nav.memory">Memory</span></button>
+      <button class="tab" data-tab="experts"><span class="nav-ico">◫</span><span data-i18n="nav.experts">Experts</span></button>
+      <button class="tab" data-tab="streaming"><span class="nav-ico">≋</span><span data-i18n="nav.streaming">Streaming</span></button>
+      <button class="tab nav-disabled" disabled data-i18n-tip="tip.cluster"><span class="nav-ico">⌗</span><span data-i18n="nav.cluster">Cluster</span></button>
+      <div class="nav-sep"></div>
+      <button class="tab" data-tab="logs"><span class="nav-ico">≡</span><span data-i18n="nav.logs">Logs</span></button>
+      <button class="tab" data-tab="settings"><span class="nav-ico">⚙</span><span data-i18n="nav.settings">Settings</span></button>
+    </nav>
 
-      <div class="tiles">
-        <div class="tile">
-          <div class="tile-label"><span data-i18n="tile.ram">Freier RAM</span> <span class="info" data-i18n-tip="tip.ram">ⓘ</span></div>
-          <div class="tile-value"><span id="ramValue">–</span> <span class="unit">GiB</span></div>
-          <div class="meter"><div id="ramBar" class="meter-fill"></div></div>
-          <div id="ramNote" class="tile-note">–</div>
+    <main>
+      <!-- ============ CHAT ============ -->
+      <section class="panel" data-panel="chat">
+        <div class="chat-wrap">
+          <div id="chatMessages" class="chat-messages">
+            <div class="chat-empty" id="chatEmpty" data-i18n="chat.empty">Starte eine Unterhaltung mit dem lokalen Modell.</div>
+          </div>
+          <div class="chat-inputbar">
+            <div class="chat-meta" id="chatMeta"></div>
+            <div class="chat-inputrow">
+              <textarea id="chatInput" rows="1" data-i18n-ph="chat.placeholder" placeholder="Nachricht an das lokale Modell…"></textarea>
+              <button id="chatSend" class="btn btn-primary" data-i18n="btn.send">Senden</button>
+              <button id="chatStop" class="btn btn-danger" style="display:none" data-i18n="chat.stop">Stopp</button>
+            </div>
+            <div class="chat-hints">
+              <label class="chk"><input type="checkbox" id="chatThink" /> <span data-i18n="chat.thinking">Thinking</span></label>
+              <button id="chatClear" class="btn btn-ghost" data-i18n="chat.clear">Verlauf löschen</button>
+              <span class="chat-hintnote" id="chatServerNote" data-i18n="chat.serverHint">Server muss laufen (oben rechts → Start).</span>
+            </div>
+          </div>
         </div>
-        <div class="tile">
-          <div class="tile-label"><span data-i18n="tile.usability">Usability</span> <span class="info" data-i18n-tip="tip.usability">ⓘ</span></div>
-          <div class="tile-value"><span id="ampel" class="ampel ampel-green">●</span> <span id="ampelText">–</span></div>
-          <div class="tile-note">Swap: <span id="swapValue">–</span> MB</div>
-        </div>
-        <div class="tile">
-          <div class="tile-label"><span data-i18n="tile.decode">Decode</span> <span class="info" data-i18n-tip="tip.decode">ⓘ</span></div>
-          <div class="tile-value"><span id="tokValue">–</span> <span class="unit">tok/s</span></div>
-          <div class="tile-note" id="tokNote" data-i18n="tile.decodeNote">aus letztem Request</div>
-        </div>
-        <div class="tile">
-          <div class="tile-label" data-i18n="tile.server">Server</div>
-          <div class="tile-value" style="font-size:15px"><span id="healthText">–</span></div>
-          <div class="tile-note"><span id="activeModelNote" data-i18n="srv.noModel">kein Modell</span></div>
-        </div>
-      </div>
+      </section>
 
-      <div class="card">
-        <div class="card-head">
-          <h2><span data-i18n="sec.liveMonitor">Live-Monitor</span> <span class="info" data-i18n-tip="tip.liveMonitor">ⓘ</span></h2>
-        </div>
-        <div class="arena">
-          <div class="arena-head">
-            <span class="chart-label" data-i18n="chart.arena">Expert cache — live</span>
-            <span class="arena-legend"><i class="lg lg-hot"></i><span data-i18n="arena.resident">resident hit</span> <i class="lg lg-stream"></i><span data-i18n="arena.stream">streaming from SSD</span></span>
-          </div>
-          <canvas id="expertGrid" class="expert-grid"></canvas>
-        </div>
-        <div class="charts">
-          <div class="chart">
-            <div class="chart-head"><span class="chart-label" data-i18n="chart.ssd">SSD-Durchsatz</span><span class="chart-now"><span id="ssdNow">0</span> <span class="unit">MB/s</span></span></div>
-            <canvas id="ssdChart" class="spark"></canvas>
-            <div class="chart-note" data-i18n="chart.ssdNote">Experten von SSD gestreamt</div>
-          </div>
-          <div class="chart">
-            <div class="chart-head"><span class="chart-label" data-i18n="chart.hit">Cache-Hit-Rate</span><span class="chart-now"><span id="hitNow">0</span> <span class="unit">%</span></span></div>
-            <canvas id="hitChart" class="spark"></canvas>
-            <div class="chart-note" data-i18n="chart.hitNote">resident bedient</div>
-          </div>
-          <div class="chart">
-            <div class="chart-head"><span class="chart-label" data-i18n="chart.tokens">Tokens</span><span class="chart-now"><span id="tpsNow">0</span> <span class="unit">tok/s</span></span></div>
-            <canvas id="tpsChart" class="spark"></canvas>
-            <div class="chart-note" data-i18n="chart.tokensNote">Prefill + Decode</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card">
-        <h2 data-i18n="sec.settings">Einstellungen</h2>
-        <div class="reco">
-          <div class="reco-icon">✨</div>
-          <div class="reco-body">
-            <div class="reco-title" data-i18n="reco.title">Auto-Empfehlung für deinen Mac</div>
-            <div id="recoText" class="hint">Ermittle Werte…</div>
-          </div>
-          <button id="applyReco" class="btn btn-primary" data-i18n="btn.applyBest">Beste anwenden</button>
-        </div>
-        <div class="ctrl">
-          <div class="ctrl-head">
-            <label for="cache"><span data-i18n="lbl.cache">Cache-Größe</span> <span class="info" data-i18n-tip="tip.cache">ⓘ</span></label>
-            <span class="val"><span id="cacheVal">10</span> GiB</span>
-          </div>
-          <input type="range" id="cache" min="2" max="24" step="1" value="10" />
-          <p class="hint"><span id="cacheRec"></span></p>
-        </div>
-        <div class="ctrl-grid">
-          <div class="ctrl">
-            <div class="ctrl-head"><label for="ctx"><span data-i18n="lbl.context">Kontext</span> <span class="info" data-i18n-tip="tip.ctx">ⓘ</span></label></div>
-            <select id="ctx">
-              <option value="16384">16k</option>
-              <option value="32768">32k</option>
-              <option value="40960" selected>40k</option>
-              <option value="65536">64k</option>
-            </select>
+      <!-- ============ MODELLE ============ -->
+      <section class="panel" data-panel="models" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="sec.selectModel">Modell wählen</h2>
+            <span id="modelBadge" class="badge">–</span>
           </div>
           <div class="ctrl">
-            <div class="ctrl-head"><label for="io"><span data-i18n="lbl.io">I/O-Threads</span> <span class="info" data-i18n-tip="tip.io">ⓘ</span></label></div>
-            <select id="io">
-              <option value="1">1</option>
-              <option value="4">4</option>
-              <option value="8" selected>8</option>
-              <option value="16">16</option>
-            </select>
+            <div class="ctrl-head"><label for="modelSel"><span data-i18n="lbl.model">Modell</span> <span class="info" data-i18n-tip="tip.model">ⓘ</span></label></div>
+            <select id="modelSel"></select>
+            <div id="qualityWrap" style="margin-top:12px;display:none">
+              <div class="ctrl-head"><label for="qualitySel"><span data-i18n="lbl.quality">Qualität ↔ Speed</span> <span class="info" data-i18n-tip="tip.quality">ⓘ</span></label></div>
+              <select id="qualitySel"></select>
+            </div>
+            <p class="hint" id="modelNote"></p>
+            <p class="hint"><span data-i18n="speed.title">Erwartete Geschwindigkeit</span>: <span id="speedText">–</span></p>
+          </div>
+          <details class="paths">
+            <summary data-i18n="path.summary">Quelle &amp; Speicherort</summary>
+            <label><span data-i18n="path.gguf">GGUF-Ordner</span> <span class="info" data-i18n-tip="tip.gguf">ⓘ</span></label>
+            <input type="text" id="pDir" spellcheck="false" />
+            <label><span data-i18n="path.pgrn">PGRN-Pfad (gestreamt)</span> <span class="info" data-i18n-tip="tip.pgrn">ⓘ</span></label>
+            <input type="text" id="pPgrn" spellcheck="false" />
+            <label data-i18n="path.source">Download-Quelle (HuggingFace-Repo/URL)</label>
+            <input type="text" id="pUrl" spellcheck="false" />
+            <label data-i18n="path.binary">Server-Binary (unsere llama.cpp-Engine)</label>
+            <input type="text" id="pServer" spellcheck="false" />
+          </details>
+        </div>
+        <div class="card note-card" data-i18n-html="compat.text"></div>
+      </section>
+
+      <!-- ============ DOWNLOADS ============ -->
+      <section class="panel" data-panel="downloads" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="sec.downloads">Download &amp; Konvertierung</h2>
+            <span id="dlModelName" class="badge">–</span>
+          </div>
+          <p class="hint" style="margin-top:0" data-i18n="dl.intro">GGUF laden, dann in das gestreamte PGRN-Format konvertieren. Mehrteilige (XL-)Modelle werden Shard für Shard geladen und in einem Durchgang konvertiert.</p>
+          <div class="dl-row">
+            <div class="dl-info">
+              <div id="dlStatus" class="dl-status">–</div>
+              <div class="meter"><div id="dlBar" class="meter-fill dl"></div></div>
+              <div id="dlNote" class="tile-note"></div>
+            </div>
+            <div class="dl-btns">
+              <button id="dlBtn" class="btn btn-primary" data-i18n="btn.download">Herunterladen</button>
+              <button id="convBtn" class="btn" data-i18n="btn.convert">Konvertieren</button>
+              <button id="dlCancel" class="btn btn-ghost" data-i18n="btn.cancel">Abbrechen</button>
+            </div>
+          </div>
+          <div id="resumeRow" class="resume-row" hidden>
+            <div class="dl-info">
+              <div class="dl-status"><span data-i18n="resume.title">Konvertierung angehalten</span></div>
+              <div class="meter"><div id="resumeBar" class="meter-fill dl"></div></div>
+              <div id="resumeNote" class="tile-note"></div>
+            </div>
+            <div class="dl-btns">
+              <button id="resumeBtn" class="btn btn-primary" data-i18n="btn.resume">Fortsetzen</button>
+              <button id="resumeDiscard" class="btn btn-ghost" data-i18n="btn.restart">Neu beginnen</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2 data-i18n="installed.title">Installierte Modelle</h2></div>
+          <div id="installedList" class="agents"></div>
+        </div>
+      </section>
+
+      <!-- ============ BENCHMARKS ============ -->
+      <section class="panel" data-panel="benchmarks" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="sec.bench">Benchmark</h2>
+            <span id="benchBadge" class="badge">–</span>
+          </div>
+          <p class="hint" style="margin-top:0" data-i18n="bench.intro">Ein Klick: misst Prefill (Prompt lesen) und Decode (Antwort schreiben) am laufenden Server — echte Zahlen, keine Schätzung.</p>
+          <div class="ctrl-grid bench-grid">
+            <div class="ctrl">
+              <div class="ctrl-head"><label for="benchTokens" data-i18n="bench.tokens">Tokens je Lauf</label></div>
+              <select id="benchTokens">
+                <option value="128">128</option>
+                <option value="300" selected>300</option>
+                <option value="600">600</option>
+              </select>
+            </div>
+            <div class="ctrl">
+              <div class="ctrl-head"><label for="benchRuns" data-i18n="bench.runs">Durchläufe</label></div>
+              <select id="benchRuns">
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+              </select>
+            </div>
+          </div>
+          <div class="test-row">
+            <span class="hint" data-i18n="bench.hint">Temperatur 0, Seed 42, Prompt-Cache aus — vergleichbar zwischen Läufen.</span>
+            <button id="benchRun" class="btn btn-primary" data-i18n="bench.run">Benchmark starten</button>
+          </div>
+          <div id="benchOut" class="bench-out"></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2><span data-i18n="sec.test">Einzel-Test</span> <span class="info" data-i18n-tip="tip.test">ⓘ</span></h2>
+          </div>
+          <textarea id="prompt" rows="3" data-i18n-ph="test.placeholder" placeholder="Prompt…"></textarea>
+          <div class="test-row">
+            <label class="chk"><input type="checkbox" id="noThink" /> <span data-i18n="test.noThink">ohne Thinking</span></label>
+            <button id="sendBtn" class="btn btn-primary" data-i18n="btn.send">Senden</button>
+          </div>
+          <div id="testMeta" class="test-meta"></div>
+          <details id="reasoningWrap" style="display:none"><summary data-i18n="test.reasoning">Reasoning</summary><pre id="reasoning" class="out"></pre></details>
+          <pre id="answer" class="out"></pre>
+        </div>
+      </section>
+
+      <!-- ============ MEMORY ============ -->
+      <section class="panel" data-panel="memory" hidden>
+        <div class="tiles">
+          <div class="tile">
+            <div class="tile-label"><span data-i18n="tile.ram">Freier RAM</span> <span class="info" data-i18n-tip="tip.ram">ⓘ</span></div>
+            <div class="tile-value"><span id="ramValue">–</span> <span class="unit">GiB</span></div>
+            <div class="meter"><div id="ramBar" class="meter-fill"></div></div>
+            <div id="ramNote" class="tile-note">–</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label"><span data-i18n="tile.usability">Usability</span> <span class="info" data-i18n-tip="tip.usability">ⓘ</span></div>
+            <div class="tile-value"><span id="ampel" class="ampel ampel-green">●</span> <span id="ampelText">–</span></div>
+            <div class="tile-note">Swap: <span id="swapValue">–</span> MB</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label"><span data-i18n="tile.decode">Decode</span> <span class="info" data-i18n-tip="tip.decode">ⓘ</span></div>
+            <div class="tile-value"><span id="tokValue">–</span> <span class="unit">tok/s</span></div>
+            <div class="tile-note" id="tokNote" data-i18n="tile.decodeNote">aus letztem Request</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label" data-i18n="tile.server">Server</div>
+            <div class="tile-value" style="font-size:15px"><span id="healthText">–</span></div>
+            <div class="tile-note"><span id="activeModelNote" data-i18n="srv.noModel">kein Modell</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2 data-i18n="sec.memPlan">Speicherplan</h2></div>
+          <div id="memPlan" class="hint"></div>
+        </div>
+        <div class="card note-card" data-i18n-html="mem.note"></div>
+      </section>
+
+      <!-- ============ EXPERTS ============ -->
+      <section class="panel" data-panel="experts" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h2><span data-i18n="sec.arena">Experten-Arena</span> <span class="info" data-i18n-tip="tip.liveMonitor">ⓘ</span></h2>
+          </div>
+          <div class="arena">
+            <div class="arena-head">
+              <span class="chart-label" data-i18n="chart.arena">Expert cache — live</span>
+              <span class="arena-legend"><i class="lg lg-hot"></i><span data-i18n="arena.resident">resident hit</span> <i class="lg lg-stream"></i><span data-i18n="arena.stream">streaming from SSD</span></span>
+            </div>
+            <canvas id="expertGrid" class="expert-grid"></canvas>
+          </div>
+          <div class="charts">
+            <div class="chart">
+              <div class="chart-head"><span class="chart-label" data-i18n="chart.hit">Cache-Hit-Rate</span><span class="chart-now"><span id="hitNow">0</span> <span class="unit">%</span></span></div>
+              <canvas id="hitChart" class="spark"></canvas>
+              <div class="chart-note" data-i18n="chart.hitNote">resident bedient</div>
+            </div>
+            <div class="chart">
+              <div class="chart-head"><span class="chart-label" data-i18n="chart.tokens">Tokens</span><span class="chart-now"><span id="tpsNow">0</span> <span class="unit">tok/s</span></span></div>
+              <canvas id="tpsChart" class="spark"></canvas>
+              <div class="chart-note" data-i18n="chart.tokensNote">Prefill + Decode</div>
+            </div>
+          </div>
+        </div>
+        <div class="card note-card" data-i18n-html="experts.note"></div>
+      </section>
+
+      <!-- ============ STREAMING ============ -->
+      <section class="panel" data-panel="streaming" hidden>
+        <div class="card">
+          <div class="card-head"><h2 data-i18n="sec.streaming">SSD-Streaming</h2></div>
+          <div class="charts">
+            <div class="chart">
+              <div class="chart-head"><span class="chart-label" data-i18n="chart.ssd">SSD-Durchsatz</span><span class="chart-now"><span id="ssdNow">0</span> <span class="unit">MB/s</span></span></div>
+              <canvas id="ssdChart" class="spark"></canvas>
+              <div class="chart-note" data-i18n="chart.ssdNote">Experten von SSD gestreamt</div>
+            </div>
+          </div>
+          <div class="ctrl-grid" style="margin-top:14px">
+            <div class="ctrl">
+              <div class="ctrl-head"><label for="io"><span data-i18n="lbl.io">I/O-Threads</span> <span class="info" data-i18n-tip="tip.io">ⓘ</span></label></div>
+              <select id="io">
+                <option value="1">1</option>
+                <option value="4">4</option>
+                <option value="8" selected>8</option>
+                <option value="16">16</option>
+              </select>
+            </div>
+            <div class="ctrl">
+              <div class="ctrl-head"><label data-i18n="lbl.partition">Cache-Partition</label></div>
+              <div id="partitionNote" class="hint" style="margin-top:6px"></div>
+            </div>
+          </div>
+          <details class="paths">
+            <summary data-i18n="adv.summary">Advanced: I/O-Hebel</summary>
+            <label class="adv-label"><span data-i18n="adv.mirror">Advanced: 2. SSD-Mirror (Dual-SSD)</span> <span class="info" data-i18n-tip="tip.mirror">ⓘ</span></label>
+            <input type="text" id="pMirror" spellcheck="false" data-i18n-ph="adv.mirrorPh" />
+            <div class="adv-warn" data-i18n="adv.mirrorWarn">⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.</div>
+            <label class="chk adv-chk"><input type="checkbox" id="bufferedReads" /> <span data-i18n="adv.buffered">Advanced: gepufferte Reads (Nicht-NVMe-Laufwerke)</span></label>
+            <label class="chk adv-chk"><input type="checkbox" id="onlinePredict" /> <span data-i18n="adv.predict">Advanced: Predictive Prefetch (experimentell)</span> <span class="info" data-i18n-tip="tip.predict">ⓘ</span></label>
+          </details>
+        </div>
+        <div class="card note-card" data-i18n-html="streaming.note"></div>
+      </section>
+
+      <!-- ============ LOGS ============ -->
+      <section class="panel" data-panel="logs" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="sec.logs">Logs &amp; Diagnose</h2>
+            <div style="display:flex;gap:10px;align-items:center">
+              <select id="logSrc">
+                <option value="server" data-i18n="logs.server">Server</option>
+                <option value="download" data-i18n="logs.download">Download</option>
+                <option value="convert" data-i18n="logs.convert">Konvertierung</option>
+              </select>
+              <label class="chk"><input type="checkbox" id="autoscroll" checked /> <span data-i18n="logs.autoscroll">Auto-Scroll</span></label>
+              <button id="diagBtn" class="btn btn-ghost" data-i18n="logs.diag">Diagnose kopieren</button>
+            </div>
+          </div>
+          <pre id="logs" class="logs">–</pre>
+        </div>
+      </section>
+
+      <!-- ============ SETTINGS ============ -->
+      <section class="panel" data-panel="settings" hidden>
+        <div class="card">
+          <h2 data-i18n="sec.settings">Einstellungen</h2>
+          <div class="reco">
+            <div class="reco-icon">✨</div>
+            <div class="reco-body">
+              <div class="reco-title" data-i18n="reco.title">Auto-Empfehlung für deinen Mac</div>
+              <div id="recoText" class="hint">Ermittle Werte…</div>
+            </div>
+            <button id="applyReco" class="btn btn-primary" data-i18n="btn.applyBest">Beste anwenden</button>
           </div>
           <div class="ctrl">
-            <div class="ctrl-head"><label class="chk"><input type="checkbox" id="specMtp" checked /> <span data-i18n="lbl.mtp">MTP-Speed</span> <span class="info" data-i18n-tip="tip.mtp">ⓘ</span></label></div>
-            <div class="ctrl-head" style="margin-top:10px"><label class="chk"><input type="checkbox" id="thinking" /> <span data-i18n="lbl.thinking">Thinking</span> <span class="info" data-i18n-tip="tip.thinking">ⓘ</span></label></div>
-            <div class="ctrl-head" style="margin-top:10px"><label class="chk"><input type="checkbox" id="compactSlots" checked /> <span data-i18n="lbl.compact">Compact (schneller)</span> <span class="info" data-i18n-tip="tip.compact">ⓘ</span></label></div>
+            <div class="ctrl-head">
+              <label for="cache"><span data-i18n="lbl.cache">Cache-Größe</span> <span class="info" data-i18n-tip="tip.cache">ⓘ</span></label>
+              <span class="val"><span id="cacheVal">10</span> GiB</span>
+            </div>
+            <input type="range" id="cache" min="2" max="24" step="1" value="10" />
+            <p class="hint"><span id="cacheRec"></span></p>
           </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============ MODELLE ============ -->
-    <section class="panel" data-panel="models" hidden>
-      <div class="card">
-        <div class="card-head">
-          <h2 data-i18n="sec.selectModel">Modell wählen</h2>
-          <span id="modelBadge" class="badge">–</span>
-        </div>
-        <div class="ctrl">
-          <div class="ctrl-head"><label for="modelSel"><span data-i18n="lbl.model">Modell</span> <span class="info" data-i18n-tip="tip.model">ⓘ</span></label></div>
-          <select id="modelSel"></select>
-          <p class="hint" id="modelNote"></p>
-          <p class="hint"><span data-i18n="speed.title">Erwartete Geschwindigkeit</span>: <span id="speedText">–</span></p>
-        </div>
-        <div class="dl-row">
-          <div class="dl-info">
-            <div id="dlStatus" class="dl-status">–</div>
-            <div class="meter"><div id="dlBar" class="meter-fill dl"></div></div>
-            <div id="dlNote" class="tile-note"></div>
+          <div class="ctrl-grid">
+            <div class="ctrl">
+              <div class="ctrl-head"><label for="ctx"><span data-i18n="lbl.context">Kontext</span> <span class="info" data-i18n-tip="tip.ctx">ⓘ</span></label></div>
+              <select id="ctx">
+                <option value="16384">16k</option>
+                <option value="32768">32k</option>
+                <option value="40960" selected>40k</option>
+                <option value="65536">64k</option>
+              </select>
+            </div>
+            <div class="ctrl">
+              <div class="ctrl-head"><label class="chk"><input type="checkbox" id="specMtp" checked /> <span data-i18n="lbl.mtp">MTP-Speed</span> <span class="info" data-i18n-tip="tip.mtp">ⓘ</span></label></div>
+              <div class="ctrl-head" style="margin-top:10px"><label class="chk"><input type="checkbox" id="thinking" /> <span data-i18n="lbl.thinking">Thinking</span> <span class="info" data-i18n-tip="tip.thinking">ⓘ</span></label></div>
+            </div>
+            <div class="ctrl">
+              <div class="ctrl-head"><label class="chk"><input type="checkbox" id="compactSlots" checked /> <span data-i18n="lbl.compact">Compact (schneller)</span> <span class="info" data-i18n-tip="tip.compact">ⓘ</span></label></div>
+              <div class="ctrl-head" style="margin-top:10px"><label class="chk"><input type="checkbox" id="grammarDraft" checked /> <span data-i18n="lbl.grammar">Grammar-Drafts (JSON/Tools)</span> <span class="info" data-i18n-tip="tip.grammar">ⓘ</span></label></div>
+            </div>
           </div>
-          <div class="dl-btns">
-            <button id="dlBtn" class="btn btn-primary" data-i18n="btn.download">Herunterladen</button>
-            <button id="convBtn" class="btn" data-i18n="btn.convert">Konvertieren</button>
-            <button id="dlCancel" class="btn btn-ghost" data-i18n="btn.cancel">Abbrechen</button>
-          </div>
-        </div>
-        <details class="paths">
-          <summary data-i18n="path.summary">Quelle &amp; Speicherort</summary>
-          <label><span data-i18n="path.gguf">GGUF-Ordner</span> <span class="info" data-i18n-tip="tip.gguf">ⓘ</span></label>
-          <input type="text" id="pDir" spellcheck="false" />
-          <label><span data-i18n="path.pgrn">PGRN-Pfad (gestreamt)</span> <span class="info" data-i18n-tip="tip.pgrn">ⓘ</span></label>
-          <input type="text" id="pPgrn" spellcheck="false" />
-          <label data-i18n="path.source">Download-Quelle (HuggingFace-Repo/URL)</label>
-          <input type="text" id="pUrl" spellcheck="false" />
-          <label data-i18n="path.binary">Server-Binary (unsere llama.cpp-Engine)</label>
-          <input type="text" id="pServer" spellcheck="false" />
-          <label class="adv-label"><span data-i18n="adv.mirror">Advanced: 2. SSD-Mirror (Dual-SSD)</span> <span class="info" data-i18n-tip="tip.mirror">ⓘ</span></label>
-          <input type="text" id="pMirror" spellcheck="false" data-i18n-ph="adv.mirrorPh" />
-          <div class="adv-warn" data-i18n="adv.mirrorWarn">⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.</div>
-          <label class="chk adv-chk"><input type="checkbox" id="bufferedReads" /> <span data-i18n="adv.buffered">Advanced: gepufferte Reads (Nicht-NVMe-Laufwerke)</span></label>
-          <label class="chk adv-chk"><input type="checkbox" id="onlinePredict" /> <span data-i18n="adv.predict">Advanced: Predictive Prefetch (experimentell)</span> <span class="info" data-i18n-tip="tip.predict">ⓘ</span></label>
-        </details>
-      </div>
-      <div class="card">
-        <div class="card-head"><h2 data-i18n="installed.title">Installierte Modelle</h2></div>
-        <div id="installedList" class="agents"></div>
-      </div>
-
-      <div class="card note-card" data-i18n-html="compat.text"></div>
-    </section>
-
-    <!-- ============ KILO ============ -->
-    <section class="panel" data-panel="kilo" hidden>
-      <div class="card">
-        <h2 data-i18n="sec.connectAgent">Coding-Agent verbinden</h2>
-        <p class="hint" style="margin-top:0" data-i18n="agent.intro">…</p>
-        <div class="kv"><span>Base URL</span><code id="kUrl">http://127.0.0.1:8080/v1</code><button class="btn btn-ghost copy" data-copy="kUrl">Kopieren</button></div>
-        <div class="kv"><span>Model</span><code>slipstream</code><button class="btn btn-ghost copy" data-copy-text="slipstream">Kopieren</button></div>
-        <div class="kv"><span>API Key</span><code>sk-local</code><button class="btn btn-ghost copy" data-copy-text="sk-local">Kopieren</button></div>
-        <div id="agentList" class="agents"></div>
-        <div id="agentNote" class="hint" style="margin-top:12px; min-height:16px"></div>
-      </div>
-      <div class="card">
-        <div class="card-head">
-          <h2><span data-i18n="sec.indexing">Indexierung</span> <span class="info" data-i18n-tip="tip.indexing">ⓘ</span></h2>
-          <div style="display:flex;gap:10px;align-items:center">
-            <span id="idxBadge" class="badge">–</span>
-            <button id="idxSetup" class="btn btn-primary">Einrichten &amp; starten</button>
-          </div>
-        </div>
-        <p class="hint" style="margin-top:0" data-i18n="idx.intro">…</p>
-        <div id="idxStep" class="tile-note" style="min-height:15px;color:var(--accent-soft)"></div>
-
-        <div class="svc">
-          <div class="svc-info">
-            <div class="svc-name">Embedder <span class="svc-port">Port 8090</span> <span class="info" data-i18n-tip="tip.embedder">ⓘ</span></div>
-            <div id="embStatus" class="tile-note">–</div>
-            <div class="meter"><div id="embBar" class="meter-fill dl"></div></div>
+          <div class="ctrl" style="margin-top:14px">
+            <div class="ctrl-head"><label for="extBase"><span data-i18n="lbl.extBase">GGUF-Verzeichnis (zweite SSD, optional)</span> <span class="info" data-i18n-tip="tip.extBase">ⓘ</span></label></div>
+            <input type="text" id="extBase" spellcheck="false" placeholder="/Volumes/…/Modelle" />
+            <p class="hint" data-i18n="hint.extBase">Leer lassen, wenn alles auf einer Platte liegt.</p>
           </div>
         </div>
 
-        <div class="svc">
-          <div class="svc-info">
-            <div class="svc-name">Qdrant <span class="svc-port">Port 6333</span> <span class="info" data-i18n-tip="tip.qdrant">ⓘ</span></div>
-            <div id="qStatus" class="tile-note">–</div>
-            <div class="meter"><div id="qBar" class="meter-fill dl"></div></div>
-          </div>
+        <div class="card">
+          <h2 data-i18n="sec.connectAgent">Coding-Agent verbinden</h2>
+          <p class="hint" style="margin-top:0" data-i18n="agent.intro">…</p>
+          <div class="kv"><span>Base URL</span><code id="kUrl">http://127.0.0.1:8080/v1</code><button class="btn btn-ghost copy" data-i18n="btn.copy" data-copy="kUrl">Kopieren</button></div>
+          <div class="kv"><span>Model</span><code>slipstream</code><button class="btn btn-ghost copy" data-i18n="btn.copy" data-copy-text="slipstream">Kopieren</button></div>
+          <div class="kv"><span>API Key</span><code>sk-local</code><button class="btn btn-ghost copy" data-i18n="btn.copy" data-copy-text="sk-local">Kopieren</button></div>
+          <div id="agentList" class="agents"></div>
+          <div id="agentNote" class="hint" style="margin-top:12px; min-height:16px"></div>
         </div>
 
-        <details class="paths">
-          <summary data-i18n="idx.valuesFor">Werte für deinen Agenten (Codebase Indexing → OpenAI Compatible)</summary>
-          <div class="kv"><span>Embedder-URL</span><code>http://127.0.0.1:8090/v1</code><button class="btn btn-ghost copy" data-copy-text="http://127.0.0.1:8090/v1">Kopieren</button></div>
-          <div class="kv"><span>Modell</span><code>nomic-embed-text</code><button class="btn btn-ghost copy" data-copy-text="nomic-embed-text">Kopieren</button></div>
-          <div class="kv"><span>Dimension</span><code>768</code><button class="btn btn-ghost copy" data-copy-text="768">Kopieren</button></div>
-          <div class="kv"><span>Qdrant-URL</span><code>http://localhost:6333</code><button class="btn btn-ghost copy" data-copy-text="http://localhost:6333">Kopieren</button></div>
-        </details>
-        <p class="hint" data-i18n="idx.hint">Danach im Agenten einmalig „Codebase Indexing" aktivieren, obige Werte eintragen, „Start Indexing". Der Index landet lokal in Qdrant.</p>
-      </div>
-    </section>
-
-    <!-- ============ DEBUG ============ -->
-    <section class="panel" data-panel="debug" hidden>
-      <div class="card">
-        <div class="card-head">
-          <h2>Test <span class="info" data-i18n-tip="tip.test">ⓘ</span></h2>
-        </div>
-        <textarea id="prompt" rows="3" data-i18n-ph="test.placeholder" placeholder="Prompt…"></textarea>
-        <div class="test-row">
-          <label class="chk"><input type="checkbox" id="noThink" /> <span data-i18n="test.noThink">ohne Thinking</span></label>
-          <button id="sendBtn" class="btn btn-primary" data-i18n="btn.send">Senden</button>
-        </div>
-        <div id="testMeta" class="test-meta"></div>
-        <details id="reasoningWrap" style="display:none"><summary data-i18n="test.reasoning">Reasoning</summary><pre id="reasoning" class="out"></pre></details>
-        <pre id="answer" class="out"></pre>
-      </div>
-      <div class="card">
-        <div class="card-head">
-          <h2>Logs &amp; Diagnose</h2>
-          <div style="display:flex;gap:10px;align-items:center">
-            <select id="logSrc">
-              <option value="server">Server</option>
-              <option value="download">Download</option>
-              <option value="convert">Konvertierung</option>
-            </select>
-            <label class="chk"><input type="checkbox" id="autoscroll" checked /> <span data-i18n="logs.autoscroll">Auto-Scroll</span></label>
-            <button id="diagBtn" class="btn btn-ghost" data-i18n="logs.diag">Diagnose kopieren</button>
+        <div class="card">
+          <div class="card-head">
+            <h2><span data-i18n="sec.indexing">Indexierung</span> <span class="info" data-i18n-tip="tip.indexing">ⓘ</span></h2>
+            <div style="display:flex;gap:10px;align-items:center">
+              <span id="idxBadge" class="badge">–</span>
+              <button id="idxSetup" class="btn btn-primary" data-mode="start">Einrichten &amp; starten</button>
+            </div>
           </div>
+          <p class="hint" style="margin-top:0" data-i18n="idx.intro">…</p>
+          <div id="idxStep" class="tile-note" style="min-height:15px;color:var(--accent-soft)"></div>
+
+          <div class="svc">
+            <div class="svc-info">
+              <div class="svc-name">Embedder <span class="svc-port">Port 8090</span> <span class="info" data-i18n-tip="tip.embedder">ⓘ</span></div>
+              <div id="embStatus" class="tile-note">–</div>
+              <div class="meter"><div id="embBar" class="meter-fill dl"></div></div>
+            </div>
+          </div>
+
+          <div class="svc">
+            <div class="svc-info">
+              <div class="svc-name">Qdrant <span class="svc-port">Port 6333</span> <span class="info" data-i18n-tip="tip.qdrant">ⓘ</span></div>
+              <div id="qStatus" class="tile-note">–</div>
+              <div class="meter"><div id="qBar" class="meter-fill dl"></div></div>
+            </div>
+          </div>
+
+          <details class="paths">
+            <summary data-i18n="idx.valuesFor">Werte für deinen Agenten (Codebase Indexing → OpenAI Compatible)</summary>
+            <div class="kv"><span>Embedder-URL</span><code>http://127.0.0.1:8090/v1</code><button class="btn btn-ghost copy" data-i18n="btn.copy" data-copy-text="http://127.0.0.1:8090/v1">Kopieren</button></div>
+            <div class="kv"><span data-i18n="lbl.model">Modell</span><code>nomic-embed-text</code><button class="btn btn-ghost copy" data-i18n="btn.copy" data-copy-text="nomic-embed-text">Kopieren</button></div>
+            <div class="kv"><span>Dimension</span><code>768</code><button class="btn btn-ghost copy" data-i18n="btn.copy" data-copy-text="768">Kopieren</button></div>
+            <div class="kv"><span>Qdrant-URL</span><code>http://localhost:6333</code><button class="btn btn-ghost copy" data-i18n="btn.copy" data-copy-text="http://localhost:6333">Kopieren</button></div>
+          </details>
+          <p class="hint" data-i18n="idx.hint">Danach im Agenten einmalig „Codebase Indexing" aktivieren, obige Werte eintragen, „Start Indexing". Der Index landet lokal in Qdrant.</p>
         </div>
-        <pre id="logs" class="logs">–</pre>
-      </div>
-    </section>
-  </main>
+      </section>
+    </main>
+  </div>
 
   <div id="toast" class="toast"></div>
   <div id="tooltip" class="tooltip"></div>

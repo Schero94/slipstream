@@ -1,5 +1,5 @@
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 7bc770ab4..975459a87 100644
+index 7bc770ab4..f6e9c8ac0 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -24,6 +24,7 @@
@@ -70,7 +70,7 @@ index 7bc770ab4..975459a87 100644
      return true;
  }
  
-@@ -2418,6 +2465,91 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2418,6 +2465,101 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.use_mmap = value;
          }
      ).set_env("LLAMA_ARG_MMAP"));
@@ -125,6 +125,16 @@ index 7bc770ab4..975459a87 100644
 +        }
 +    ).set_env("LLAMA_ARG_PGRN_COUPLING"));
 +    add_opt(common_arg(
++        {"--pgrn-partition-weights"}, "FILE",
++        "optional per-layer cache partition weights (bench.m1.partition_weights, "
++        "\"pgrn-partition-weights v1\"): apportions expert-cache slots by measured "
++        "per-layer working-set width instead of an equal split; parity-safe, falls "
++        "back to the equal split on any file problem",
++        [](common_params & params, const std::string & value) {
++            params.pgrn_weights_path = value;
++        }
++    ).set_env("LLAMA_ARG_PGRN_PARTITION_WEIGHTS"));
++    add_opt(common_arg(
 +        {"--pgrn-hot-percent"}, "N",
 +        "logical HOT percentage inside the fixed PGRN cache (0 keeps pure CLOCK-LRU-K)",
 +        [](common_params & params, const std::string & value) {
@@ -162,7 +172,7 @@ index 7bc770ab4..975459a87 100644
      add_opt(common_arg(
          {"-dio", "--direct-io"},
          {"-ndio", "--no-direct-io"},
-@@ -3631,6 +3763,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -3631,6 +3773,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.speculative.draft.mparams.hf_repo = value;
          }
      ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_HF_REPO"));
@@ -185,7 +195,7 @@ index 7bc770ab4..975459a87 100644
      add_opt(common_arg(
          {"--spec-draft-threads", "-td", "--threads-draft"}, "N",
          "number of threads to use during generation (default: same as --threads)",
-@@ -3807,6 +3955,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -3807,6 +3965,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.speculative.draft.n_min = value;
          }
      ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MIN"));
@@ -199,7 +209,7 @@ index 7bc770ab4..975459a87 100644
  
      add_opt(common_arg(
          {"--spec-draft-p-split", "--draft-p-split"}, "P",
-@@ -3877,6 +4032,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -3877,6 +4042,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
          }
      ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
@@ -307,10 +317,10 @@ index 127278dfb..7db1dcb0f 100644
      });
  
 diff --git a/common/common.cpp b/common/common.cpp
-index 8f13217ab..987bc5c52 100644
+index 8f13217ab..a2747cd57 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -1559,9 +1559,20 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
+@@ -1559,9 +1559,21 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
      mparams.main_gpu        = params.main_gpu;
      mparams.split_mode      = params.split_mode;
      mparams.tensor_split    = params.tensor_split;
@@ -328,12 +338,13 @@ index 8f13217ab..987bc5c52 100644
 +    mparams.pgrn_io_threads = params.pgrn_io_threads;
 +    mparams.pgrn_predict_path = params.pgrn_predict_path.empty() ? nullptr : params.pgrn_predict_path.c_str();
 +    mparams.pgrn_coupling_path = params.pgrn_coupling_path.empty() ? nullptr : params.pgrn_coupling_path.c_str();
++    mparams.pgrn_weights_path = params.pgrn_weights_path.empty() ? nullptr : params.pgrn_weights_path.c_str();
 +    mparams.pgrn_compact_slots = params.pgrn_compact_slots;
      mparams.check_tensors   = params.check_tensors;
      mparams.use_extra_bufts = !params.no_extra_bufts;
      mparams.no_host         = params.no_host;
 diff --git a/common/common.h b/common/common.h
-index bffc1767a..28c208e3a 100644
+index bffc1767a..da956b879 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -172,6 +172,7 @@ enum common_speculative_type {
@@ -383,7 +394,7 @@ index bffc1767a..28c208e3a 100644
  
      bool has_dft() const {
          return !draft.mparams.empty();
-@@ -575,6 +594,17 @@ struct common_params {
+@@ -575,6 +594,18 @@ struct common_params {
      bool use_mmap          = true;  // enable mmap to use filesystem cache
      bool use_direct_io     = false; // read from disk without buffering
      bool use_mlock         = false; // use mlock to keep model in memory
@@ -397,6 +408,7 @@ index bffc1767a..28c208e3a 100644
 +    int32_t  pgrn_io_threads = 1; // parallel cold-read threads per layer stream; <=1 = serial
 +    std::string pgrn_predict_path;   // optional PGCT1 hot-set table for speculative prefetch
 +    std::string pgrn_coupling_path;  // optional PGCC1 coupled table; preferred over predict_path
++    std::string pgrn_weights_path;   // optional per-layer partition weights (width-weighted cache split)
 +    bool pgrn_compact_slots = false; // default-off until numerical and real-model gates pass
      bool verbose_prompt    = false; // print prompt tokens before generation
      bool display_prompt    = true;  // print prompt before generation
@@ -1739,10 +1751,10 @@ index 9efb36f8a..b5707f11f 100644
  
          # Feed-forward up
 diff --git a/include/llama.h b/include/llama.h
-index a311ac202..b65f5131e 100644
+index a311ac202..741051161 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -319,6 +319,19 @@ extern "C" {
+@@ -319,6 +319,20 @@ extern "C" {
          // override key-value pairs of the model meta data
          const struct llama_model_kv_override * kv_overrides;
  
@@ -1758,11 +1770,12 @@ index a311ac202..b65f5131e 100644
 +        int32_t  pgrn_io_threads; // parallel cold-read threads per layer stream; <=1 = serial
 +        const char * pgrn_predict_path; // optional PGCT1 hot-set table for speculative prefetch (NULL = off)
 +        const char * pgrn_coupling_path; // optional PGCC1 coupled table; preferred over predict_path when set
++        const char * pgrn_weights_path; // optional per-layer partition weights (width-weighted cache split; NULL = equal)
 +
          // Keep the booleans together to avoid misalignment during copy-by-value.
          bool vocab_only;      // only load the vocabulary, no weights
          bool use_mmap;        // use mmap if possible
-@@ -328,6 +341,7 @@ extern "C" {
+@@ -328,6 +342,7 @@ extern "C" {
          bool use_extra_bufts; // use extra buffer types (used for weight repacking)
          bool no_host;         // bypass host buffer allowing extra buffers to be used
          bool no_alloc;        // only load metadata and simulate memory allocations
@@ -1770,7 +1783,7 @@ index a311ac202..b65f5131e 100644
      };
  
      struct llama_sampler_seq_config {
-@@ -572,6 +586,9 @@ extern "C" {
+@@ -572,6 +587,9 @@ extern "C" {
      LLAMA_API int32_t llama_model_n_head_kv    (const struct llama_model * model);
      LLAMA_API int32_t llama_model_n_swa        (const struct llama_model * model);
  
@@ -1780,7 +1793,7 @@ index a311ac202..b65f5131e 100644
      // Get the model's RoPE frequency scaling factor
      LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
  
-@@ -1408,6 +1425,16 @@ extern "C" {
+@@ -1408,6 +1426,16 @@ extern "C" {
                 const llama_token * trigger_tokens,
                              size_t num_trigger_tokens);
  
@@ -1797,7 +1810,7 @@ index a311ac202..b65f5131e 100644
  
      /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
      LLAMA_API struct llama_sampler * llama_sampler_init_penalties(
-@@ -1539,6 +1566,26 @@ extern "C" {
+@@ -1539,6 +1567,26 @@ extern "C" {
          int32_t n_p_eval;   // number of prompt tokens
          int32_t n_eval;     // number of generated tokens
          int32_t n_reused;   // number of times a ggml compute graph had been reused
@@ -2654,7 +2667,7 @@ index a3928523b..22061f5ff 100644
      const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index eaf3f35d2..2ef71682c 100644
+index eaf3f35d2..fb6241544 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -7,6 +7,11 @@
@@ -2714,7 +2727,7 @@ index eaf3f35d2..2ef71682c 100644
      buft_list_t cpu_buft_list;
      std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
  
-@@ -1491,6 +1511,132 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1491,6 +1511,133 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
      }
      ml.done_getting_tensors();
  
@@ -2808,6 +2821,7 @@ index eaf3f35d2..2ef71682c 100644
 +        runtime_params.io_width = params.pgrn_io_threads;
 +        runtime_params.predict_path = params.pgrn_predict_path;
 +        runtime_params.coupling_path = params.pgrn_coupling_path;
++        runtime_params.weights_path = params.pgrn_weights_path;
 +        runtime_params.cache_buft = scratch_buft;
 +        runtime_params.admission.total_bytes = memory.total_bytes;
 +        runtime_params.admission.available_bytes = memory.available_bytes;
@@ -2847,7 +2861,7 @@ index eaf3f35d2..2ef71682c 100644
      // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
      // If sidecar scales exist, the output weight must be an actual output tensor.
      GGML_ASSERT(!(output && tok_embd &&
-@@ -1503,6 +1649,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1503,6 +1650,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
              tensors_by_name.emplace_back(ggml_get_name(cur), cur);
          }
      }
@@ -2860,7 +2874,7 @@ index eaf3f35d2..2ef71682c 100644
  
      ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
      pimpl->mappings.reserve(ml.mappings.size());
-@@ -1991,6 +2143,149 @@ bool llama_model::has_tensor_overrides() const {
+@@ -1991,6 +2144,151 @@ bool llama_model::has_tensor_overrides() const {
      return pimpl->has_tensor_overrides;
  }
  
@@ -2939,9 +2953,11 @@ index eaf3f35d2..2ef71682c 100644
 +
 +void llama_model::pgrn_prefetch_kick(uint16_t src_layer, const int32_t * fired, size_t n_fired) const {
 +    if (!pgrn_enabled()) return;
-+    if (pgr_runtime_has_coupling(pimpl->pgrn_runtime)) {
-+        pgr_runtime_prefetch_kick_coupled(pimpl->pgrn_runtime, src_layer, fired,
-+                n_fired > INT_MAX ? INT_MAX : (int) n_fired);
++    const int nf = n_fired > INT_MAX ? INT_MAX : (int) n_fired;
++    if (pgr_runtime_has_online(pimpl->pgrn_runtime)) {
++        pgr_runtime_prefetch_kick_online(pimpl->pgrn_runtime, src_layer, fired, nf);
++    } else if (pgr_runtime_has_coupling(pimpl->pgrn_runtime)) {
++        pgr_runtime_prefetch_kick_coupled(pimpl->pgrn_runtime, src_layer, fired, nf);
 +    } else {
 +        pgr_runtime_prefetch_kick(pimpl->pgrn_runtime, (uint16_t) (src_layer + 1));
 +    }
@@ -3010,7 +3026,7 @@ index eaf3f35d2..2ef71682c 100644
  const ggml_tensor * llama_model::get_tensor(const char * name) const {
      auto it = std::find_if(tensors_by_name.begin(), tensors_by_name.end(),
              [name](const std::pair<std::string, ggml_tensor *> & it) {
-@@ -2310,6 +2605,16 @@ llama_model_params llama_model_default_params() {
+@@ -2310,6 +2608,17 @@ llama_model_params llama_model_default_params() {
          /*.progress_callback           =*/ nullptr,
          /*.progress_callback_user_data =*/ nullptr,
          /*.kv_overrides                =*/ nullptr,
@@ -3024,10 +3040,11 @@ index eaf3f35d2..2ef71682c 100644
 +        /*.pgrn_io_threads             =*/ 1,
 +        /*.pgrn_predict_path           =*/ nullptr,
 +        /*.pgrn_coupling_path          =*/ nullptr,
++        /*.pgrn_weights_path           =*/ nullptr,
          /*.vocab_only                  =*/ false,
          /*.use_mmap                    =*/ true,
          /*.use_direct_io               =*/ false,
-@@ -2318,6 +2623,7 @@ llama_model_params llama_model_default_params() {
+@@ -2318,6 +2627,7 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -3035,7 +3052,7 @@ index eaf3f35d2..2ef71682c 100644
      };
  
      return result;
-@@ -2538,6 +2844,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -2538,6 +2848,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_COGVLM:
          case LLM_ARCH_PANGU_EMBED:
          case LLM_ARCH_AFMOE:
@@ -3043,7 +3060,7 @@ index eaf3f35d2..2ef71682c 100644
          case LLM_ARCH_QWEN3NEXT:
          case LLM_ARCH_MIMO2:
          case LLM_ARCH_STEP35:
-@@ -2708,6 +3015,10 @@ int32_t llama_model_n_expert(const struct llama_model * model) {
+@@ -2708,6 +3019,10 @@ int32_t llama_model_n_expert(const struct llama_model * model) {
      return model->hparams.n_expert;
  }
  
@@ -3965,6 +3982,18 @@ index 2cdf35739..220db5487 100644
          }
      }
      llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
+diff --git a/tools/CMakeLists.txt b/tools/CMakeLists.txt
+index 780df3266..4ccea6ede 100644
+--- a/tools/CMakeLists.txt
++++ b/tools/CMakeLists.txt
+@@ -16,6 +16,7 @@ if (EMSCRIPTEN)
+ else()
+     add_subdirectory(batched-bench)
+     add_subdirectory(gguf-split)
++    add_subdirectory(pgrn-convert)
+     add_subdirectory(imatrix)
+     add_subdirectory(llama-bench)
+     add_subdirectory(completion)
 diff --git a/tools/server/CMakeLists.txt b/tools/server/CMakeLists.txt
 index b5c40884f..1fed5c770 100644
 --- a/tools/server/CMakeLists.txt

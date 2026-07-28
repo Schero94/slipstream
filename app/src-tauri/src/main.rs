@@ -5,7 +5,11 @@ use serde_json::{json, Map, Value};
 use std::fs::OpenOptions;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use tauri::{State, Manager};
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::TrayIconBuilder,
+    Manager, State,
+};
 
 const LOG_PATH: &str = "/tmp/peregrine-control-server.log";
 const DL_LOG: &str = "/tmp/peregrine-download.log";
@@ -111,9 +115,14 @@ struct ServerConfig {
     pgrn_online: bool,   // advanced: online co-activation predictor -> speculative prefetch
     #[serde(default = "default_true")]
     pgrn_compact: bool,  // default-on: zero-copy compact slots -> +13-24% decode at moderate cache, swap-safe (measured)
+    #[serde(default = "default_true")]
+    grammar_draft: bool, // default-on: grammar-forced drafts for structured output (JSON/tool-calls); adaptive-guarded + lossless. Measured +45% tok/s fetch-bound on rigid schemas, neutral on easy JSON (guard stands down)
+    #[serde(default = "default_kv_quant")]
+    kv_quant: String, // per-model KV type: "q8_0" for full-attention models (KV-RAM becomes cache headroom), "f16" for hybrids (S1 measured q8-KV at -12..-28% decode on the resident hybrid 35B; its linear-attention KV is tiny, so q8 buys nothing there)
 }
 
 fn default_true() -> bool { true }
+fn default_kv_quant() -> String { "q8_0".into() }
 
 #[tauri::command]
 fn start_server(cfg: ServerConfig, state: State<AppState>) -> Result<String, String> {
@@ -165,14 +174,27 @@ fn start_server(cfg: ServerConfig, state: State<AppState>) -> Result<String, Str
         "--batch-size", "2048",
         "--ubatch-size", "2048",
         "-fa", "on",
-        "-ctk", "q8_0",
-        "-ctv", "q8_0",
         "--jinja",
         "--alias", "slipstream",
         "--host", "127.0.0.1",
         "--port", &cfg.port.to_string(),
         "--no-warmup",
     ]);
+    // KV type per model family: f16 = engine default (skip the flags entirely).
+    if !cfg.kv_quant.is_empty() && cfg.kv_quant != "f16" {
+        cmd.args(["-ctk", &cfg.kv_quant, "-ctv", &cfg.kv_quant]);
+    }
+    // Width-weighted cache partition: auto-enable when a weights sidecar sits next
+    // to the PGRN (bench.m1.partition_weights). Engine is fail-soft (equal split on
+    // any file problem). Measured 2026-07-27 on the streamed 35B: +11% warm decode,
+    // output byte-identical.
+    if let Some(weights) = std::path::Path::new(&cfg.pgrn)
+        .parent()
+        .map(|dir| dir.join("partition-weights.txt"))
+        .filter(|p| p.exists())
+    {
+        cmd.arg("--pgrn-partition-weights").arg(weights);
+    }
     if cfg.io_threads > 1 {
         cmd.arg("--pgrn-io-threads").arg(cfg.io_threads.to_string());
     }
@@ -183,6 +205,9 @@ fn start_server(cfg: ServerConfig, state: State<AppState>) -> Result<String, Str
         if !cfg.draft_model.is_empty() && file_size(&cfg.draft_model) > 0 {
             cmd.args(["--model-draft", &cfg.draft_model, "--spec-draft-ngl", "99"]);
         }
+        // Grammar-forced drafts ride the same verify path (needs a draft path, so gated here).
+        // Engine defaults on + adaptive-guarded; pass 0 only when the user disables it.
+        cmd.args(["--spec-grammar-draft", if cfg.grammar_draft { "1" } else { "0" }]);
     }
     // Couple sampler to thinking mode. Thinking-on uses Qwen3's recommended
     // sampler AND a bounded reasoning budget, so the model can't over-think into
@@ -202,8 +227,7 @@ fn start_server(cfg: ServerConfig, state: State<AppState>) -> Result<String, Str
     Ok("Server gestartet - lädt Modell (~60s)...".into())
 }
 
-#[tauri::command]
-fn stop_server(state: State<AppState>) -> Result<String, String> {
+fn stop_server_impl(state: &AppState) {
     kill(&state.server);
     // Fallback: also reap a server we may not own the handle for (e.g. one
     // spawned by a previous app instance) so the port frees up.
@@ -212,7 +236,44 @@ fn stop_server(state: State<AppState>) -> Result<String, String> {
             .args(["-f", &format!("llama-server.*--port {SERVER_PORT}")])
             .status();
     }
+}
+
+#[tauri::command]
+fn stop_server(state: State<AppState>) -> Result<String, String> {
+    stop_server_impl(&state);
     Ok("Server gestoppt.".into())
+}
+
+/// Last decode tok/s parsed from the server log tail (llama.cpp "eval time").
+fn last_tps() -> Option<f64> {
+    let s = std::fs::read_to_string(LOG_PATH).ok()?;
+    let mut tps = None;
+    for line in s.lines() {
+        if let Some(idx) = line.find("tokens per second") {
+            // number immediately before the phrase
+            let head = line[..idx].trim_end();
+            if let Some(num) = head.rsplit(|c: char| c == ' ' || c == '(').next() {
+                if let Ok(v) = num.trim().parse::<f64>() {
+                    if line.contains("eval time") {
+                        tps = Some(v);
+                    }
+                }
+            }
+        }
+    }
+    tps
+}
+
+/// Compact menubar status line: state plus last decode speed when running.
+fn tray_status_line() -> String {
+    match http_status(&format!("http://127.0.0.1:{SERVER_PORT}/health")) {
+        200 => match last_tps() {
+            Some(v) => format!("Slipstream · {v:.0} tok/s"),
+            None => "Slipstream · bereit".into(),
+        },
+        0 => "Slipstream · gestoppt".into(),
+        _ => "Slipstream · lädt…".into(),
+    }
 }
 
 #[tauri::command]
@@ -293,6 +354,52 @@ struct ModelStatus {
     downloading: bool,
     converting: bool,
     disk_free_gib: f64,
+    /// A `partition-weights.txt` sidecar next to the PGRN — the same file
+    /// `start_server` auto-passes to the engine as `--pgrn-partition-weights`.
+    weights: bool,
+    /// An interrupted conversion that can be continued (R1.5).
+    resume: ConvResume,
+}
+
+/// State of an interrupted conversion, read from the converter's journal
+/// sidecar (`<pgrn>.partial.journal`). `records_*` count experts, so the UI can
+/// say "angehalten bei 41 %" instead of just "da liegt eine Datei".
+#[derive(Serialize, Default, Clone)]
+struct ConvResume {
+    resumable: bool,
+    records_done: u64,
+    records_total: u64,
+    partial_bytes: u64,
+    /// A `.partial` without a usable journal: only a fresh start can fix it.
+    orphan_partial: bool,
+}
+
+const PGRNJ_MAGIC: &[u8; 8] = b"PGRNJRN1";
+const PGRNJ_HEADER_BYTES: u64 = 120;
+const PGRN_DIR_RECORD: u64 = 26;
+
+fn conv_resume(pgrn: &str) -> ConvResume {
+    let partial = format!("{pgrn}.partial");
+    let partial_bytes = file_size(&partial);
+    if partial_bytes == 0 {
+        return ConvResume::default();
+    }
+    let journal = format!("{partial}.journal");
+    let head = std::fs::read(&journal).unwrap_or_default();
+    if head.len() < PGRNJ_HEADER_BYTES as usize || &head[..8] != PGRNJ_MAGIC {
+        return ConvResume { orphan_partial: true, partial_bytes, ..Default::default() };
+    }
+    let u64_at = |off: usize| -> u64 {
+        u64::from_le_bytes(head[off..off + 8].try_into().unwrap_or([0; 8]))
+    };
+    let records_done = (head.len() as u64 - PGRNJ_HEADER_BYTES) / PGRN_DIR_RECORD;
+    ConvResume {
+        resumable: true,
+        records_done,
+        records_total: u64_at(88).saturating_mul(u64_at(96)), // expert_count x layers
+        partial_bytes,
+        orphan_partial: false,
+    }
 }
 
 fn disk_free_gib(dir: &str) -> f64 {
@@ -308,29 +415,66 @@ fn disk_free_gib(dir: &str) -> f64 {
     .unwrap_or(0.0)
 }
 
+/// Expand a first-shard path/URL ("…-00001-of-00006.gguf") into all N shard
+/// strings by substituting the running index. Returns `[s]` for non-sharded
+/// inputs. Works on any string (file path or URL) since only the tail differs.
+fn shard_expand(s: &str) -> Vec<String> {
+    // find the "-NNNNN-of-MMMMM.gguf" tail
+    let Some(pos) = s.rfind("-of-") else { return vec![s.to_string()] };
+    if !s.ends_with(".gguf") || pos < 5 {
+        return vec![s.to_string()];
+    }
+    let no_str = &s[pos - 5..pos];
+    let of_str = &s[pos + 4..s.len() - 5];
+    let (Ok(_no), Ok(of)) = (no_str.parse::<u32>(), of_str.parse::<u32>()) else {
+        return vec![s.to_string()];
+    };
+    if of < 2 || of > 999 {
+        return vec![s.to_string()];
+    }
+    let prefix = &s[..pos - 5];
+    (1..=of)
+        .map(|i| format!("{prefix}{i:05}-of-{of:05}.gguf"))
+        .collect()
+}
+
+/// Sum file sizes across all shards of a (possibly sharded) gguf path.
+fn gguf_total_bytes(first: &str) -> u64 {
+    shard_expand(first).iter().map(|p| file_size(p)).sum()
+}
+
 #[tauri::command]
 fn model_status(gguf: String, pgrn: String, dir: String, state: State<AppState>) -> ModelStatus {
     ModelStatus {
-        gguf_bytes: file_size(&gguf),
+        gguf_bytes: gguf_total_bytes(&gguf),
         pgrn_bytes: file_size(&pgrn),
         downloading: alive(&state.dl),
         converting: alive(&state.conv),
         disk_free_gib: disk_free_gib(&dir),
+        weights: std::path::Path::new(&pgrn)
+            .parent()
+            .map(|d| d.join("partition-weights.txt").exists())
+            .unwrap_or(false),
+        resume: conv_resume(&pgrn),
     }
 }
 
-/// Content-Length of the (redirect-followed) URL, or 0.
+/// Content-Length of the (redirect-followed) URL, summed across all shards for
+/// a sharded first-shard URL, or 0.
 #[tauri::command]
 fn remote_size(url: String) -> u64 {
-    (|| {
-        let out = Command::new("curl").args(["-sIL", &url]).output().ok()?;
-        let s = String::from_utf8_lossy(&out.stdout);
-        s.lines()
-            .filter(|l| l.to_lowercase().starts_with("content-length:"))
-            .filter_map(|l| l.split(':').nth(1)?.trim().parse::<u64>().ok())
-            .max()
-    })()
-    .unwrap_or(0)
+    let one = |u: &str| -> u64 {
+        (|| {
+            let out = Command::new("curl").args(["-sIL", u]).output().ok()?;
+            let s = String::from_utf8_lossy(&out.stdout);
+            s.lines()
+                .filter(|l| l.to_lowercase().starts_with("content-length:"))
+                .filter_map(|l| l.split(':').nth(1)?.trim().parse::<u64>().ok())
+                .max()
+        })()
+        .unwrap_or(0)
+    };
+    shard_expand(&url).iter().map(|u| one(u)).sum()
 }
 
 #[tauri::command]
@@ -341,14 +485,38 @@ fn start_download(url: String, dest: String, dir: String, state: State<AppState>
     std::fs::create_dir_all(&dir).map_err(|e| format!("Ordner: {e}"))?;
     let log = OpenOptions::new().create(true).write(true).truncate(true).open(DL_LOG)
         .map_err(|e| e.to_string())?;
-    let child = Command::new("curl")
-        .args(["-L", "-C", "-", "--fail", "--retry", "5", "-o", &dest, &url])
-        .stdout(Stdio::null())
-        .stderr(Stdio::from(log))
-        .spawn()
-        .map_err(|e| format!("curl-Start: {e}"))?;
+    // Sharded XL models: one curl per shard, sequential, each resumable (-C -).
+    // The shard index in dest and URL advance in lockstep (shard_expand).
+    let dests = shard_expand(&dest);
+    let urls = shard_expand(&url);
+    let child = if dests.len() > 1 && dests.len() == urls.len() {
+        let mut script = String::from("set -e\n");
+        for (d, u) in dests.iter().zip(urls.iter()) {
+            script += &format!(
+                "curl -L -C - --fail --retry 5 -o {} {}\n",
+                shell_quote(d), shell_quote(u)
+            );
+        }
+        script += "echo ALL_SHARDS_DONE\n";
+        Command::new("sh").arg("-c").arg(script)
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log))
+            .spawn()
+    } else {
+        Command::new("curl")
+            .args(["-L", "-C", "-", "--fail", "--retry", "5", "-o", &dest, &url])
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log))
+            .spawn()
+    }
+    .map_err(|e| format!("curl-Start: {e}"))?;
     *state.dl.lock().map_err(|e| e.to_string())? = Some(child);
     Ok("Download gestartet.".into())
+}
+
+/// Minimal POSIX single-quote escaping for a shell argument.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[tauri::command]
@@ -356,32 +524,158 @@ fn cancel_download(state: State<AppState>) {
     kill(&state.dl);
 }
 
+/// Resolve the bundled native GGUF->PGRN converter (Reloaded R1). Prefers the
+/// self-contained binary inside the .app; falls back to the dev build dir.
+fn convert_bin(app: &tauri::AppHandle) -> String {
+    app.path()
+        .resource_dir()
+        .ok()
+        .and_then(|d| {
+            ["resources/pgrn-convert", "pgrn-convert"]
+                .iter()
+                .map(|c| d.join(c))
+                .find(|p| p.exists())
+        })
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| {
+            let repo = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
+            let repo = std::fs::canonicalize(repo)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            format!("{repo}/vendor/llama.cpp/build-static/bin/llama-pgrn-convert")
+        })
+}
+
 #[tauri::command]
-fn start_convert(repo: String, gguf: String, pgrn: String, state: State<AppState>) -> Result<String, String> {
+fn start_convert(app: tauri::AppHandle, gguf: String, pgrn: String, io_threads: u32, resume: bool, state: State<AppState>) -> Result<String, String> {
     if alive(&state.conv) {
         return Err("Konvertierung läuft bereits.".into());
     }
     if file_size(&gguf) == 0 {
         return Err("GGUF fehlt - erst herunterladen.".into());
     }
-    let python = format!("{repo}/.venv/bin/python");
-    let log = OpenOptions::new().create(true).write(true).truncate(true).open(CONV_LOG)
+    if file_size(&pgrn) > 0 {
+        return Err("PGRN existiert bereits - erst löschen, dann neu konvertieren.".into());
+    }
+    let partial = format!("{pgrn}.partial");
+    let journal = format!("{partial}.journal");
+    let state_before = conv_resume(&pgrn);
+    if resume && !state_before.resumable {
+        return Err("Keine fortsetzbare Konvertierung gefunden - bitte neu starten.".into());
+    }
+    if !resume {
+        // Starting over: drop the interrupted work explicitly. Safe here because
+        // no conversion we own is alive.
+        let _ = std::fs::remove_file(&partial);
+        let _ = std::fs::remove_file(&journal);
+    }
+    let bin = convert_bin(&app);
+    if file_size(&bin) == 0 {
+        return Err("Converter-Binary fehlt (pgrn-convert nicht gebündelt?).".into());
+    }
+    let threads = io_threads.clamp(1, 16).to_string();
+    // Resuming appends to the log so the earlier attempt stays readable.
+    let log = OpenOptions::new().create(true).write(true).append(resume).truncate(!resume)
+        .open(CONV_LOG)
         .map_err(|e| e.to_string())?;
-    let child = Command::new(&python)
-        .args(["-m", "bench.m1.convert_gguf_to_pgrn", "--input", &gguf, "--output", &pgrn, "--min-free-gb", "8"])
-        .current_dir(&repo)
-        .env("PYTHONPATH", &repo)
+    let mut args = vec![
+        "--input", &gguf,
+        "--output", &pgrn,
+        "--min-free-gb", "8",
+        "--io-threads", &threads,
+        "--progress", "jsonl",
+    ];
+    if resume {
+        args.push("--resume");
+    }
+    let child = Command::new(&bin)
+        .args(&args)
         .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
         .stderr(Stdio::from(log))
         .spawn()
-        .map_err(|e| format!("Python-Start: {e} (venv unter {python}?)"))?;
+        .map_err(|e| format!("Converter-Start: {e}"))?;
     *state.conv.lock().map_err(|e| e.to_string())? = Some(child);
-    Ok("Konvertierung gestartet.".into())
+    Ok(if resume {
+        format!("Konvertierung fortgesetzt ({} von {} Experten bereits fertig).",
+                state_before.records_done, state_before.records_total)
+    } else {
+        "Konvertierung gestartet.".into()
+    })
+}
+
+/// Discard an interrupted conversion's `.partial` + journal (UI: "Neu beginnen").
+#[tauri::command]
+fn discard_convert(pgrn: String, state: State<AppState>) -> Result<String, String> {
+    if alive(&state.conv) {
+        return Err("Konvertierung läuft - erst abbrechen.".into());
+    }
+    let partial = format!("{pgrn}.partial");
+    let _ = std::fs::remove_file(format!("{partial}.journal"));
+    let _ = std::fs::remove_file(&partial);
+    Ok("Angehaltene Konvertierung verworfen.".into())
+}
+
+/// Last JSONL progress line the converter wrote (phase/done/total/mb_s/eta).
+/// The UI polls this while `model_status.converting` to render a real bar.
+#[derive(Serialize, Default)]
+struct ConvProgress {
+    phase: String,
+    done_bytes: u64,
+    total_bytes: u64,
+    mb_s: f64,
+    eta_s: f64,
+    expert: u64,
+    expert_total: u64,
+    message: String,
+    /// Set on the converter's final `cancelled` line (R1.5).
+    resumable: bool,
+    records_done: u64,
+    records_total: u64,
+}
+
+#[tauri::command]
+fn convert_progress() -> ConvProgress {
+    let s = std::fs::read_to_string(CONV_LOG).unwrap_or_default();
+    let line = s
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with('{'))
+        .unwrap_or("");
+    let v: Value = serde_json::from_str(line).unwrap_or(Value::Null);
+    ConvProgress {
+        phase: v["phase"].as_str().unwrap_or("").into(),
+        done_bytes: v["done_bytes"].as_u64().unwrap_or(0),
+        total_bytes: v["total_bytes"].as_u64().unwrap_or(0),
+        mb_s: v["mb_s"].as_f64().unwrap_or(0.0),
+        eta_s: v["eta_s"].as_f64().unwrap_or(0.0),
+        expert: v["expert"].as_u64().unwrap_or(0),
+        expert_total: v["expert_total"].as_u64().unwrap_or(0),
+        message: v["message"].as_str().unwrap_or("").into(),
+        resumable: v["resumable"].as_bool().unwrap_or(false),
+        records_done: v["records_done"].as_u64().unwrap_or(0),
+        records_total: v["records_total"].as_u64().unwrap_or(0),
+    }
 }
 
 #[tauri::command]
 fn cancel_convert(state: State<AppState>) {
-    kill(&state.conv);
+    // SIGTERM first: the converter traps it, flushes its journal, and keeps the
+    // .partial so `start_convert(resume = true)` can continue it. Hard-kill only
+    // if it doesn't exit within ~2s — the journal still describes a valid prefix
+    // then, because it is only ever fsynced behind durable payload.
+    if let Ok(mut g) = state.conv.lock() {
+        if let Some(mut c) = g.take() {
+            let _ = Command::new("kill").args(["-TERM", &c.id().to_string()]).status();
+            for _ in 0..20 {
+                if matches!(c.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
 }
 
 #[tauri::command]
@@ -640,6 +934,15 @@ fn patch_kilo_config(cfg: KiloConfig) -> Result<String, String> {
     Ok(path)
 }
 
+/// Show + focus the main window (used by the tray "open" item and left-click).
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -647,9 +950,59 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             start_server, stop_server, is_running, server_state, read_log, system_stats,
             model_status, remote_size, start_download, cancel_download,
-            start_convert, cancel_convert, tail_file, patch_kilo_config, defaults,
+            start_convert, cancel_convert, discard_convert, convert_progress, tail_file, patch_kilo_config, defaults,
             start_embedder, stop_embedder, install_qdrant, start_qdrant, stop_qdrant, index_status
         ])
+        .setup(|app| {
+            // --- macOS menubar (tray): open, stop server, quit + live status ---
+            let open_i = MenuItem::with_id(app, "open", "Slipstream öffnen", true, None::<&str>)?;
+            let stop_i = MenuItem::with_id(app, "stop", "Server stoppen", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
+            let sep = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(app, &[&open_i, &stop_i, &sep, &quit_i])?;
+
+            let mut tray = TrayIconBuilder::with_id("slipstream-tray")
+                .tooltip("Slipstream")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => show_main(app),
+                    "stop" => stop_server_impl(&app.state::<AppState>()),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    use tauri::tray::TrayIconEvent;
+                    if let TrayIconEvent::Click { button, .. } = event {
+                        if button == tauri::tray::MouseButton::Left {
+                            show_main(&tray.app_handle());
+                        }
+                    }
+                });
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray = tray.icon(icon);
+            }
+            let tray = tray.build(app)?;
+
+            // Live status poller: refresh the tray tooltip every 3 s so the
+            // menubar reflects state + tok/s without opening the window.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                if let Some(t) = handle.tray_by_id("slipstream-tray") {
+                    let _ = t.set_tooltip(Some(tray_status_line()));
+                }
+            });
+            let _ = tray;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Close = hide to tray (menubar app stays resident), not quit.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running Peregrine Control");
 }

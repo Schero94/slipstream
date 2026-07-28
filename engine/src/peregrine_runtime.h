@@ -37,6 +37,7 @@ typedef struct {
     int io_width;   /* parallel cold-read threads per layer stream; 0/1 = serial */
     const char * predict_path;  /* optional PGCT1 hot-set table for speculative prefetch (NULL = off) */
     const char * coupling_path; /* optional PGCC1 coupled table; preferred over predict_path when set */
+    const char * weights_path;  /* optional per-layer partition weights ("pgrn-partition-weights v1"); NULL = equal split */
     ggml_backend_buffer_type_t cache_buft;
 } pgr_runtime_params;
 

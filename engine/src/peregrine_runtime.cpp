@@ -76,6 +76,86 @@ static pgr_stream_status pgr_runtime_load(
     return PGR_STREAM_OK;
 }
 
+/* Parse "pgrn-partition-weights v1" (one "<layer_id> <weight>" line per layer,
+ * weights > 0) and apportion `capacity` slots by largest remainder with a floor
+ * of one slot per layer. Returns false (equal split) on any problem. */
+static bool pgr_runtime_weighted_sizes(
+        pgrn_file * store, const char * path, size_t layer_count, size_t capacity,
+        std::vector<size_t> & sizes) {
+    if (!store || !path || !path[0] || layer_count == 0 || capacity < layer_count) return false;
+    FILE * fh = fopen(path, "r");
+    if (!fh) return false;
+    char magic[64] = {0};
+    if (!fgets(magic, sizeof(magic), fh) ||
+            strncmp(magic, "pgrn-partition-weights v1", 25) != 0) {
+        fclose(fh);
+        return false;
+    }
+    std::vector<long> ids;
+    std::vector<double> vals;
+    long layer_id = 0;
+    double weight = 0.0;
+    while (fscanf(fh, "%ld %lf", &layer_id, &weight) == 2) {
+        if (layer_id < 0 || layer_id > UINT16_MAX || !(weight > 0.0)) {
+            fclose(fh);
+            return false;
+        }
+        ids.push_back(layer_id);
+        vals.push_back(weight);
+    }
+    fclose(fh);
+    // map the store's layer order onto the file's weights; every layer must be covered
+    std::vector<double> w(layer_count, 0.0);
+    double wsum = 0.0;
+    for (size_t index = 0; index < layer_count; ++index) {
+        uint16_t layer = 0;
+        if (!pgrn_layer_at(store, index, &layer)) return false;
+        double found = 0.0;
+        for (size_t k = 0; k < ids.size(); ++k) {
+            if (ids[k] == (long) layer) { found = vals[k]; break; }
+        }
+        if (!(found > 0.0)) return false;
+        w[index] = found;
+        wsum += found;
+    }
+    if (!(wsum > 0.0)) return false;
+    // largest-remainder apportionment, floor 1, exact total == capacity
+    sizes.assign(layer_count, 1);
+    std::vector<double> frac(layer_count, 0.0);
+    size_t assigned = 0;
+    for (size_t i = 0; i < layer_count; ++i) {
+        const double raw = (double) capacity * (w[i] / wsum);
+        size_t base = (size_t) raw;
+        if (base < 1) base = 1;
+        if (base > INT_MAX) base = INT_MAX;
+        sizes[i] = base;
+        frac[i] = raw - (double) base;
+        assigned += base;
+    }
+    while (assigned < capacity) {
+        size_t best = 0;
+        for (size_t i = 1; i < layer_count; ++i) {
+            if (frac[i] > frac[best]) best = i;
+        }
+        sizes[best] += 1;
+        frac[best] = -1.0;
+        ++assigned;
+    }
+    while (assigned > capacity) {
+        size_t biggest = 0;
+        for (size_t i = 1; i < layer_count; ++i) {
+            if (sizes[i] > sizes[biggest]) biggest = i;
+        }
+        if (sizes[biggest] <= 1) return false;
+        sizes[biggest] -= 1;
+        --assigned;
+    }
+    for (size_t i = 0; i < layer_count; ++i) {
+        if (sizes[i] == 0 || sizes[i] > INT_MAX) return false;
+    }
+    return true;
+}
+
 pgr_runtime *pgr_runtime_new(
         const pgr_runtime_params * params, pgr_admission_plan * admitted_plan,
         char * error, size_t error_capacity) {
@@ -180,10 +260,25 @@ pgr_runtime *pgr_runtime_new(
     runtime->partition_capacity.reserve(layer_count);
     const size_t per_layer = runtime->capacity / layer_count;
     const size_t remainder = runtime->capacity % layer_count;
+    /* Opt-in width-weighted partition: apportion slots by measured per-layer
+     * working-set width instead of the equal split. Parity-safe (sizing only
+     * moves the hit-rate; every load stays CRC-checked), so any file/shape
+     * problem falls back to the equal split instead of failing the load. */
+    std::vector<size_t> weighted_sizes;
+    const bool weighted = pgr_runtime_weighted_sizes(
+            runtime->store, params->weights_path, layer_count, runtime->capacity, weighted_sizes);
+    if (params->weights_path && params->weights_path[0] && !weighted) {
+        fprintf(stderr, "[peregrine] partition weights unusable (%s) — equal split\n", params->weights_path);
+    }
+    if (weighted) {
+        fprintf(stderr, "[peregrine] width-weighted cache partition active (%s)\n", params->weights_path);
+    }
     size_t arena_offset = 0;
     for (size_t index = 0; index < layer_count; ++index) {
         uint16_t layer = 0;
-        const size_t partition_capacity = per_layer + (index < remainder ? 1 : 0);
+        const size_t partition_capacity = weighted
+                ? weighted_sizes[index]
+                : per_layer + (index < remainder ? 1 : 0);
         if (!pgrn_layer_at(runtime->store, index, &layer) || partition_capacity == 0 ||
                 partition_capacity > INT_MAX) {
             pgr_runtime_copy_error(error, error_capacity, "invalid PGRN layer partition");
