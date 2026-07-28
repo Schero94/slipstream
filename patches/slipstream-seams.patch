@@ -466,7 +466,7 @@ index 4191988bb..fca64f119 100644
  //
  // will cross-reference the sampled tokens with a batch of draft tokens and accept those that match
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index 3cb08767b..e3044717b 100644
+index 3cb08767b..f39f0a6c2 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
 @@ -1,5 +1,9 @@
@@ -479,7 +479,15 @@ index 3cb08767b..e3044717b 100644
  #include "common.h"
  #include "ggml.h"
  #include "llama.h"
-@@ -28,12 +32,26 @@
+@@ -13,6 +17,7 @@
+ 
+ #include <algorithm>
+ #include <cassert>
++#include <cmath>
+ #include <cstring>
+ #include <iomanip>
+ #include <map>
+@@ -28,12 +33,26 @@
  #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
  #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
  
@@ -506,7 +514,7 @@ index 3cb08767b..e3044717b 100644
      {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
      {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
      {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
-@@ -178,6 +196,96 @@ struct common_speculative_impl {
+@@ -178,6 +197,96 @@ struct common_speculative_impl {
      virtual bool need_embd_nextn() const { return false; }
  };
  
@@ -603,7 +611,7 @@ index 3cb08767b..e3044717b 100644
  struct common_speculative_impl_draft_simple : public common_speculative_impl {
      common_params_speculative_draft params;
  
-@@ -920,6 +1028,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+@@ -920,6 +1029,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
  
      const int32_t * target_layer_ids   = nullptr; // model_dft's extract layer indices
      uint32_t        target_layer_ids_n = 0;
@@ -611,7 +619,7 @@ index 3cb08767b..e3044717b 100644
  
      // scratch buffer for concatenated target features [n_tokens, n_embd_enc]
      std::vector<float> features_buf;
-@@ -977,13 +1086,30 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+@@ -977,13 +1087,30 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
              s.reset(common_sampler_init(model_dft, sparams));
          }
  
@@ -645,7 +653,7 @@ index 3cb08767b..e3044717b 100644
      }
  
      ~common_speculative_impl_draft_dflash() override {
-@@ -1052,7 +1178,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+@@ -1052,7 +1179,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                  // gather this chunk's target features, interleaved by extract layer
                  features_buf.resize((size_t) n_chunk * n_embd_enc);
                  for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
@@ -656,7 +664,7 @@ index 3cb08767b..e3044717b 100644
                      if (!layer) {
                          GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
                      }
-@@ -1063,6 +1191,29 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+@@ -1063,6 +1192,29 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                      }
                  }
  
@@ -686,7 +694,7 @@ index 3cb08767b..e3044717b 100644
                  // fuse extracted features through DFlash encoder
                  llama_batch enc_batch = {
                      /*.n_tokens =*/ n_chunk,
-@@ -1233,6 +1384,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+@@ -1233,6 +1385,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
      // Row 0 corresponds to the sampled token, row N to the Nth accepted draft token.
      std::vector<std::vector<float>> verify_h;
      std::vector<int32_t> verify_h_rows;
@@ -694,7 +702,7 @@ index 3cb08767b..e3044717b 100644
  
      std::vector<int>                i_last;
      std::vector<std::vector<float>> chain_h;
-@@ -1314,6 +1466,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+@@ -1314,6 +1467,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
  
          verify_h.assign(n_seq, {});
          verify_h_rows.assign(n_seq, 0);
@@ -702,7 +710,7 @@ index 3cb08767b..e3044717b 100644
      }
  
      ~common_speculative_impl_draft_mtp() override {
-@@ -1337,6 +1490,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+@@ -1337,6 +1491,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
      }
  
      void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
@@ -710,7 +718,7 @@ index 3cb08767b..e3044717b 100644
          const int32_t N = (int32_t) prompt.size();
          if (N <= 0) {
              return;
-@@ -1365,6 +1519,15 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+@@ -1365,6 +1520,15 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
          }
  
          const int32_t n_tokens = batch_in.n_tokens;
@@ -726,7 +734,7 @@ index 3cb08767b..e3044717b 100644
  
          // remember the frist and last batch index for each sequence
          std::fill(i_batch_beg.begin(), i_batch_beg.end(), -1);
-@@ -1434,6 +1597,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+@@ -1434,6 +1598,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                      llama_set_nextn_layer_offset(ctx_dft, head);
                  }
  
@@ -734,7 +742,7 @@ index 3cb08767b..e3044717b 100644
                  const int32_t rc = llama_decode(ctx_dft, batch);
                  if (rc != 0) {
                      SPC_ERR("llama_decode(ctx_dft) head=%d failed rc=%d (pos=%d)\n",
-@@ -1492,6 +1656,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+@@ -1492,6 +1657,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
  
              n_drafting++;
              drafting[seq_id] = true;
@@ -742,7 +750,7 @@ index 3cb08767b..e3044717b 100644
              common_sampler_reset(smpls[seq_id].get());
  
              common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
-@@ -1523,6 +1688,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+@@ -1523,6 +1689,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                  llama_set_nextn_layer_offset(ctx_dft, i);
              }
  
@@ -750,7 +758,7 @@ index 3cb08767b..e3044717b 100644
              int ret = llama_decode(ctx_dft, batch);
              if (ret != 0) {
                  SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
-@@ -2145,6 +2311,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
+@@ -2145,6 +2312,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
          case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
          case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
          case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:  return "draft-dflash";
@@ -758,7 +766,7 @@ index 3cb08767b..e3044717b 100644
          case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
          case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram-map-k";
          case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram-map-k4v";
-@@ -2198,6 +2365,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
+@@ -2198,6 +2366,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
              case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
              case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
              case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
@@ -766,7 +774,7 @@ index 3cb08767b..e3044717b 100644
                  n_max = std::max(n_max, std::max(0, spec->draft.n_max));
                  break;
              case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
-@@ -2342,6 +2510,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+@@ -2342,6 +2511,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
          bool has_draft_eagle3 = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3)) && params.draft.ctx_dft != nullptr;
          bool has_draft_mtp    = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP))    && params.draft.ctx_dft != nullptr;
          bool has_draft_dflash = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)) && params.draft.ctx_dft != nullptr;
@@ -774,7 +782,7 @@ index 3cb08767b..e3044717b 100644
  
  
  
-@@ -2352,7 +2521,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+@@ -2352,7 +2522,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
          bool has_ngram_mod     = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MOD));
  
          // when adding a new type - update here the logic above
@@ -783,7 +791,7 @@ index 3cb08767b..e3044717b 100644
  
          // this list here defines the priority of the speculators
          // the one with highest priority are listed first
-@@ -2385,6 +2554,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+@@ -2385,6 +2555,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
          if (has_draft_dflash) {
              configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params));
          }
@@ -793,7 +801,7 @@ index 3cb08767b..e3044717b 100644
      }
  
      std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
-@@ -2409,6 +2581,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+@@ -2409,6 +2582,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                  impls.push_back(std::make_unique<common_speculative_impl_draft_dflash>(config.params, n_seq));
                  break;
              }
@@ -804,7 +812,7 @@ index 3cb08767b..e3044717b 100644
              case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
                  common_ngram_map ngram_map = get_common_ngram_map(config.type, config.params.ngram_simple);
  
-@@ -2726,3 +2902,26 @@ void common_speculative_print_stats(const common_speculative * spec) {
+@@ -2726,3 +2903,26 @@ void common_speculative_print_stats(const common_speculative * spec) {
                  str_perf.c_str());
      }
  }
@@ -2248,10 +2256,18 @@ index bf91daa8b..e0aaef4a2 100644
      llama_adapter_loras_ptr loras;
  
 diff --git a/src/llama-grammar.cpp b/src/llama-grammar.cpp
-index badcbfd0f..a9695d232 100644
+index badcbfd0f..2c375d4f9 100644
 --- a/src/llama-grammar.cpp
 +++ b/src/llama-grammar.cpp
-@@ -1050,6 +1050,58 @@ void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr) {
+@@ -7,6 +7,7 @@
+ #include <cmath>
+ #include <algorithm>
+ #include <cstdint>
++#include <cstring>
+ #include <set>
+ #include <stdexcept>
+ 
+@@ -1050,6 +1051,58 @@ void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr) {
      grammar->stacks = std::move(stacks_new);
  }
  
@@ -2667,7 +2683,7 @@ index a3928523b..22061f5ff 100644
      const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index eaf3f35d2..fb6241544 100644
+index eaf3f35d2..4c8669dd4 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -7,6 +7,11 @@
@@ -2682,7 +2698,15 @@ index eaf3f35d2..fb6241544 100644
  
  #include "llama-kv-cache.h"
  #include "llama-kv-cache-iswa.h"
-@@ -250,6 +255,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -24,6 +29,7 @@
+ #include <algorithm>
+ #include <cassert>
+ #include <cfloat>
++#include <climits>
+ #include <cstdint>
+ #include <cstring>
+ #include <cmath>
+@@ -250,6 +256,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_arcee(params);
          case LLM_ARCH_AFMOE:
              return new llama_model_afmoe(params);
@@ -2691,7 +2715,7 @@ index eaf3f35d2..fb6241544 100644
          case LLM_ARCH_ERNIE4_5:
              return new llama_model_ernie4_5(params);
          case LLM_ARCH_ERNIE4_5_MOE:
-@@ -793,6 +800,7 @@ const char * llm_type_name(llm_type type) {
+@@ -793,6 +801,7 @@ const char * llm_type_name(llm_type type) {
          case LLM_TYPE_24B_A2B:       return "24B.A2B";
          case LLM_TYPE_26B_A4B:       return "26B.A4B";
          case LLM_TYPE_30B_A3B:       return "30B.A3B";
@@ -2699,7 +2723,7 @@ index eaf3f35d2..fb6241544 100644
          case LLM_TYPE_31B_A3_5B:     return "31B.A3.5B";
          case LLM_TYPE_35B_A3B:       return "35B.A3B";
          case LLM_TYPE_48B_A3B:       return "48B.A3B";
-@@ -982,7 +990,11 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode s
+@@ -982,7 +991,11 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode s
  
  struct llama_model::impl {
      impl() = default;
@@ -2712,7 +2736,7 @@ index eaf3f35d2..fb6241544 100644
  
      uint64_t n_elements = 0;
  
-@@ -1002,6 +1014,14 @@ struct llama_model::impl {
+@@ -1002,6 +1015,14 @@ struct llama_model::impl {
      // contexts where the model tensors metadata is stored as well as the corresponding buffers:
      std::vector<std::pair<ggml_context_ptr, std::vector<ggml_backend_buffer_ptr>>> ctxs_bufs;
  
@@ -2727,7 +2751,7 @@ index eaf3f35d2..fb6241544 100644
      buft_list_t cpu_buft_list;
      std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
  
-@@ -1491,6 +1511,133 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1491,6 +1512,145 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
      }
      ml.done_getting_tensors();
  
@@ -2747,7 +2771,19 @@ index eaf3f35d2..fb6241544 100644
 +            }
 +            const auto * list = pimpl->dev_layer.at(il).buft_list;
 +            if (!list || list->empty()) throw std::runtime_error("PGRN layer has no backend buffer type");
-+            const ggml_backend_buffer_type_t layer_buft = list->front().second;
++            // Deliberately the device's own buffer type, not the head of the layer
++            // list. Streaming writes raw GGUF-layout expert bytes into a slot at a
++            // runtime offset, so the buffer has to store what it is given. The CPU
++            // backend offers a repacking buffer type ahead of its plain one, which
++            // rewrites weights on a whole-tensor set_tensor and asserts offset == 0 —
++            // it cannot host a streamed slot at all. Repack and per-expert streaming
++            // are mutually exclusive by construction, so expert matmuls give up the
++            // repacked kernels here; the resident path elsewhere in the model keeps
++            // them. On Metal (and any GPU list) the device buffer type is already the
++            // head of the list, so this changes nothing there.
++            ggml_backend_dev_t layer_dev = pimpl->dev_layer.at(il).dev;
++            if (!layer_dev) throw std::runtime_error("PGRN layer has no backend device");
++            const ggml_backend_buffer_type_t layer_buft = ggml_backend_dev_buffer_type(layer_dev);
 +            if (!scratch_buft) scratch_buft = layer_buft;
 +            if (scratch_buft != layer_buft) {
 +                throw std::runtime_error("PGRN v1 requires all streamed layers on one backend");
@@ -2861,7 +2897,7 @@ index eaf3f35d2..fb6241544 100644
      // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
      // If sidecar scales exist, the output weight must be an actual output tensor.
      GGML_ASSERT(!(output && tok_embd &&
-@@ -1503,6 +1650,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1503,6 +1663,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
              tensors_by_name.emplace_back(ggml_get_name(cur), cur);
          }
      }
@@ -2874,7 +2910,7 @@ index eaf3f35d2..fb6241544 100644
  
      ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
      pimpl->mappings.reserve(ml.mappings.size());
-@@ -1991,6 +2144,151 @@ bool llama_model::has_tensor_overrides() const {
+@@ -1991,6 +2157,151 @@ bool llama_model::has_tensor_overrides() const {
      return pimpl->has_tensor_overrides;
  }
  
@@ -3026,7 +3062,7 @@ index eaf3f35d2..fb6241544 100644
  const ggml_tensor * llama_model::get_tensor(const char * name) const {
      auto it = std::find_if(tensors_by_name.begin(), tensors_by_name.end(),
              [name](const std::pair<std::string, ggml_tensor *> & it) {
-@@ -2310,6 +2608,17 @@ llama_model_params llama_model_default_params() {
+@@ -2310,6 +2621,17 @@ llama_model_params llama_model_default_params() {
          /*.progress_callback           =*/ nullptr,
          /*.progress_callback_user_data =*/ nullptr,
          /*.kv_overrides                =*/ nullptr,
@@ -3044,7 +3080,7 @@ index eaf3f35d2..fb6241544 100644
          /*.vocab_only                  =*/ false,
          /*.use_mmap                    =*/ true,
          /*.use_direct_io               =*/ false,
-@@ -2318,6 +2627,7 @@ llama_model_params llama_model_default_params() {
+@@ -2318,6 +2640,7 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -3052,7 +3088,7 @@ index eaf3f35d2..fb6241544 100644
      };
  
      return result;
-@@ -2538,6 +2848,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -2538,6 +2861,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_COGVLM:
          case LLM_ARCH_PANGU_EMBED:
          case LLM_ARCH_AFMOE:
@@ -3060,7 +3096,7 @@ index eaf3f35d2..fb6241544 100644
          case LLM_ARCH_QWEN3NEXT:
          case LLM_ARCH_MIMO2:
          case LLM_ARCH_STEP35:
-@@ -2708,6 +3019,10 @@ int32_t llama_model_n_expert(const struct llama_model * model) {
+@@ -2708,6 +3032,10 @@ int32_t llama_model_n_expert(const struct llama_model * model) {
      return model->hparams.n_expert;
  }
  

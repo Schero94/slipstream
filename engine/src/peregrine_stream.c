@@ -4,14 +4,16 @@
  *   - cloxcache (peregrine_cache.c) chooses the victim slot (measured eviction),
  *   - a FIXED resident buffer of capacity*record_bytes is the HARD memory cap
  *     (the direct fix for the kernel-panic failure: resident bytes cannot grow),
- *   - pread(2) with F_NOCACHE streams a cold expert into the freed slot on a miss
- *     (the streaming_store method, so the OS cache cannot hide real device cost).
+ *   - pread(2) on an uncached fd streams a cold expert into the freed slot on a
+ *     miss (the streaming_store method, so the OS cache cannot hide real device
+ *     cost — see peregrine_io.h for how that is said on each platform).
  *
  * The ring slot returned by the cache IS the buffer slot, so eviction and byte
  * placement stay consistent. This is what ggml-metal's expert path calls in stage 3;
  * it is validated standalone here (real file reads, no model, no llama.cpp headers). */
 #include "peregrine_stream.h"
 #include "peregrine_tier.h"
+#include "peregrine_io.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -21,10 +23,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#ifndef F_NOCACHE
-#define F_NOCACHE 48   /* macOS: bypass the unified buffer cache */
-#endif
 
 struct pgr_stream {
     pgr_tier *policy;
@@ -114,7 +112,7 @@ pgr_stream *pgr_stream_new(const char *path, size_t record_bytes, int capacity, 
     if (!s) return NULL;
     s->fd = open(path, O_RDONLY);
     if (s->fd < 0) { pgr_stream_free(s); return NULL; }
-    (void)fcntl(s->fd, F_NOCACHE, 1);
+    pgr_io_hint_random(s->fd);
     return s;
 }
 

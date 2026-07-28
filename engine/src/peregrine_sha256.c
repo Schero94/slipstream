@@ -1,4 +1,5 @@
 #include "peregrine_sha256.h"
+#include "peregrine_io.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -8,10 +9,6 @@
 
 #if defined(__APPLE__)
 #include <CommonCrypto/CommonDigest.h>
-#endif
-
-#ifndef F_NOCACHE
-#define F_NOCACHE 48
 #endif
 
 typedef struct {
@@ -128,7 +125,7 @@ int pgr_sha256_bytes(const void * data, size_t size, char out_hex[65]) {
 int pgr_sha256_file(const char * path, char out_hex[65]) {
     if (!path || !out_hex) return -1;
     int fd = open(path, O_RDONLY); if (fd < 0) return -1;
-    (void)fcntl(fd, F_NOCACHE, 1);
+    pgr_io_hint_sequential(fd);   /* one pass front to back, then discard */
 #if defined(__APPLE__)
     CC_SHA256_CTX ctx;
     if (CC_SHA256_Init(&ctx) != 1) { close(fd); return -1; }

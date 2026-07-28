@@ -4,6 +4,7 @@
 #include <atomic>
 #include <climits>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <unistd.h>

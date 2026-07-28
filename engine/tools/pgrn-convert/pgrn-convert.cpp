@@ -39,16 +39,14 @@
 #include <sys/statvfs.h>
 #include <unistd.h>
 
+#include "peregrine_io.h"
+
 #ifdef __APPLE__
 // Apple's SHA-256 uses the ARMv8 SHA-2 instructions. Measured on an M3 Pro:
 // 3073 MB/s vs 366 MB/s for the portable fallback below, bit-identical digests.
 // The hashing phase reads the whole source, so on a 22.8 GB GGUF this turns a
 // CPU-bound 87 s into a disk-bound one — and a resume pays it again every time.
 #include <CommonCrypto/CommonDigest.h>
-#endif
-
-#ifndef F_NOCACHE
-#define F_NOCACHE 48
 #endif
 
 #define PGRN_ALIGN 16384ull
@@ -653,11 +651,11 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // --- source fds (F_NOCACHE: don't balloon the page cache with the model) ---
+    // --- source fds (uncached: don't balloon the page cache with the model) ---
     for (auto & sh : shards) {
         sh.fd = open(sh.path.c_str(), O_RDONLY);
         if (sh.fd < 0) return fail("open failed: %s", sh.path.c_str());
-        (void)fcntl(sh.fd, F_NOCACHE, 1);
+        pgr_io_hint_sequential(sh.fd);
     }
     auto close_shards = [&](void) {
         for (auto & sh : shards) { if (sh.fd >= 0) { close(sh.fd); sh.fd = -1; } }
@@ -849,7 +847,7 @@ int main(int argc, char ** argv) {
 
         out_fd = open(partial.c_str(), O_RDWR);
         if (out_fd < 0) { close(journal_fd); close_shards(); return fail("cannot open %s", partial.c_str()); }
-        (void)fcntl(out_fd, F_NOCACHE, 1);
+        pgr_io_hint_sequential(out_fd);
 
         // The payload is fsynced before its records are journalled, so the file
         // must already cover every journalled record. If it somehow does not,
@@ -905,7 +903,7 @@ int main(int argc, char ** argv) {
     } else {
         out_fd = open(partial.c_str(), O_CREAT | O_EXCL | O_RDWR, 0644);
         if (out_fd < 0) { close_shards(); return fail("cannot create %s", partial.c_str()); }
-        (void)fcntl(out_fd, F_NOCACHE, 1);
+        pgr_io_hint_sequential(out_fd);
 
         if (journal_enabled) {
             unlink(journal_path.c_str());   // a journal without its .partial is stale

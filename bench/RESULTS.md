@@ -2674,3 +2674,326 @@ Verdict - Metal optimization is LOW priority for Peregrine:
   36 GB). Don't chase Metal - the lever is the fetch cost (cache hit rate / RAM / storage).
 - Worth revisiting only if we target M5 + a mostly-resident/high-cache regime (tensor-core
   prefill for TTFT), or adopt upstream llama.cpp dispatch/fusion gains as they land.
+
+## Slipstream Reloaded R1: native GGUF->PGRN converter + real progress (v0.2.0) — 2026-07-27
+
+- Built `tools/pgrn-convert` into the fork (C++17): llama.cpp's own GGUF loader,
+  vendored SHA-256/CRC32 (zlib-compatible), parallel expert reads with strictly
+  deterministic write order, JSONL progress protocol (sha256 -> write -> verify ->
+  done/error), SIGTERM-clean `.partial` handling, fail-closed disk admission.
+- **Byte-parity gate PASS (4/4):** native output is SHA-256-identical to the Python
+  reference converter on complete synthetic GGUFs (two geometries), roundtrip reads
+  return the exact source bytes, existing outputs are refused
+  (`tests/m1/test_pgrn_convert_native_parity.py`).
+- Binary is self-contained: 712,576 bytes, only system frameworks (`otool -L` clean).
+- App v0.2.0: `start_convert` now spawns the bundled native converter — the Python/
+  venv dependency is gone from the user path (the README limitation this closes).
+  Real progress bar (phase/%/MB/s/ETA) via `convert_progress` polling of the JSONL
+  log; cancel sends SIGTERM so the converter removes its `.partial`; fixed a
+  pre-existing bug where convert wrote the PGRN next to an external GGUF instead of
+  the configured fast-SSD pPgrn path.
+- Built and installed locally: `Slipstream_0.2.0_aarch64.dmg` (13,562,738 bytes),
+  both binaries bundled, ad-hoc signature valid, running embedder undisturbed.
+- **Open:** the real-model parity run (35B: native PGRN SHA vs the existing
+  Python-produced sidecar) is blocked by disk space (5 GB free, needs ~19 GB); the
+  synthetic gate already pins the format logic byte-exactly. Not released/pushed —
+  awaiting explicit approval. Zero M0a tokens.
+
+## Cache-partition probe: global LRU vs equal per-layer (real trace) — 2026-07-27
+
+- Offline replay of the real live-observe routing trace (702 decode tokens, 40
+  layers) comparing the runtime's equal per-layer split (`capacity/layer_count`,
+  peregrine_runtime.cpp) against one global LRU at identical budgets.
+- Per-layer working sets are genuinely unequal: 163 min / 201 median / 254 max
+  unique experts (of 256) per layer in the window. Access FREQUENCY per layer is
+  uniform by construction (every token routes top-k through every MoE layer) —
+  capacity should follow working-set width, not "hotness".
+- Measured hit-rates: 2 GB global 57.74% vs per-layer 57.86% (-0.13 pp);
+  4 GB 74.66% vs 73.51% (+1.15 pp); 10 GB 93.99% vs 92.32% (+1.66 pp).
+- In the 78–92% fetch-bound decode regime, +1.7 pp hit is a double-digit-percent
+  miss reduction — but a global policy breaks the compact zero-copy arena design
+  (fixed per-layer slot tensors). Actionable candidate: width-weighted STATIC
+  partition (keeps compact), full A/B pending on a larger trace. Small-trace
+  caveat: 702 tokens, cold-start included. Zero M0a tokens.
+
+## Width-weighted cache partition — offline proof + engine opt-in — 2026-07-27
+
+- Motivated by the external architecture review: the runtime split expert-cache
+  slots equally per layer (`capacity/layer_count`). Real 35B trace shows unequal
+  per-layer working-set widths (163–254 unique experts of 256 in a 702-token
+  window) while access FREQUENCY per layer is uniform by construction.
+- Offline proof (50/50 train/eval split, real trace, warm eval): equal 93.82% vs
+  width-weighted 95.31% vs global-LRU ceiling 95.90% held-out hit at 10 GB — the
+  weighted STATIC split captures 72% of the global gain and keeps the compact
+  zero-copy arena intact. At 2 GB all policies converge (no tight-regime win).
+- Built into the fork: `--pgrn-partition-weights FILE` ("pgrn-partition-weights
+  v1"), largest-remainder apportionment with floor 1, parity-safe fail-soft to
+  the equal split on any file/shape problem. Generator:
+  `bench.m1.partition_weights` (trace → widths; `--pgrn` fills uncovered layers
+  such as the MTP head with the median). Real 35B weights file generated
+  (41 layers, widths 208–256).
+- Full fork rebuild clean; all 14 peregrine ctests green (the transient
+  model-e2e failure was a stale test binary against the grown llama_model_params
+  ABI — green after rebuilding the test driver). App v0.2.0 rebuilt + installed
+  with the new engine.
+- **Gate open:** live A/B (equal vs weighted, decode tok/s at fixed budget)
+  needs the 35B GGUF — external SSD currently unplugged. Opt-in until that gate
+  passes. Zero M0a tokens.
+
+## App default corrected: per-model KV type instead of unconditional q8_0 — 2026-07-27
+
+- The app passed `-ctk/-ctv q8_0` unconditionally; S1 had measured q8-KV at
+  −12/−21/−28% decode on the resident hybrid 35B and rejected it. Corrected to a
+  per-model `kv_quant`: hybrid Qwen3.6 (linear attention, tiny KV) now runs f16
+  (engine default), full-attention models keep q8_0 (KV-RAM becomes cache
+  headroom for streaming). Live A/B on the streamed path remains open.
+
+## R1 REAL byte-parity gate PASS + weighted-partition live A/B — 2026-07-27
+
+- **Native converter byte-parity on the real model: PASS.** `llama-pgrn-convert`
+  converted the exact admitted 35B GGUF (external SSD, `--expect-sha256` matched
+  `55983c5a…fe9f1`) in 3:42 min (source-read-bound at ~260 MB/s over USB; write
+  10,496 experts; full CRC verify). Output 20,128,754,176 bytes with SHA-256
+  `732a314b95cb3a63e31c3c9cd44e284757721d13a29d7aecd10360d13e193269` —
+  **byte-identical to the Python-produced PGRN**. R1's last gate is green; the
+  parity test file was deleted afterwards.
+- **Weighted-partition live A/B (streamed 35B, 10 GB cache, io 8, compact on,
+  no speculation, temp 0 seed 42, GGUF on external / PGRN internal):**
+  - Short cold run (1 prompt, 2×300 tokens): equal 13.47/13.48 vs weighted
+    13.11/13.00 tok/s (−3%) — no benefit while the cache is cold-filling.
+  - Longer warm run (3 distinct prompts × 400 tokens): equal 12.81/11.99/12.60
+    vs weighted 13.12/13.43/13.91 tok/s — weighted wins every request,
+    **+11.1% on the warm mean (req2+3: 12.30 → 13.67 tok/s)**, trend rising as
+    the cache warms. Outputs byte-identical per prompt across arms (parity ✓);
+    the engine logged "width-weighted cache partition active".
+  - Weights generalized: they were generated from the OLD live-observe trace,
+    the A/B used different prompts.
+- Consequence: the app now auto-enables `--pgrn-partition-weights` when a
+  `partition-weights.txt` sidecar sits next to the PGRN (engine stays fail-soft
+  to the equal split). Cold/short sessions see ~neutral; real coding sessions
+  (warm cache) measured double-digit decode gains. Zero M0a tokens.
+
+## Night session: salon-grade app + XL-tier conversion — 2026-07-27
+
+- **Split-GGUF conversion (XL tier).** `pgrn-convert` now accepts a multi-shard
+  GGUF (gguf-split "-NNNNN-of-MMMMM.gguf"): pass the first shard, it derives +
+  opens all shards, scans expert tensors across them (each tensor wholly in one
+  shard), hashes shards in order, and writes one PGRN. Single-file output stays
+  byte-identical to the Python reference (parity gate untouched); sharded adds a
+  `source_shards` metadata field. Tests: 6/6 in
+  `tests/m1/test_pgrn_convert_native_parity.py` incl. a synthetic split model
+  yielding identical expert payloads to the equivalent single file, and a
+  reject-non-first-shard guard. This unblocks every XL model (Qwen3-Coder-480B,
+  Llama4 Maverick, DeepSeek V3/R1, GLM-5.2).
+- **Multi-shard download in the app.** `start_download`/`remote_size`/
+  `model_status` are shard-aware: a first-shard URL expands to all shards
+  (lockstep index substitution), downloaded sequentially + resumable; sizes sum
+  across shards. Non-sharded path unchanged.
+- **macOS menubar tray.** Tauri `tray-icon`: menu (open / stop server / quit),
+  left-click opens the window, a 3 s poller refreshes the tooltip with live
+  state + tok/s; window close hides to tray (resident menubar app). Backend
+  compiles clean.
+- **Chat tab (streaming).** New first tab: real conversation UI streaming
+  `/v1/chat/completions` (SSE), tok/s readout, thinking toggle, clear/stop.
+  **Smoke against the real engine:** 5 SSE deltas, coherent answer, clean
+  shutdown — the exact wire format the UI parses. `node --check app.js` clean.
+- **Quality<->speed selector.** Qwen models expose Q4/Q5/Q6 variants in the
+  Models tab; the selector rewrites file/url/pgrn paths and the converter/
+  downloader follow. Trading speed for quality is now a one-click choice.
+- App v0.2.0 rebuilt (DMG 13.7 MB, converter + engine bundled, partition-weights
+  auto-detected). Install deferred: the old GUI is still running (safe-swap on
+  next close). Zero M0a tokens.
+
+## R1.5: resume + verify for XL conversions — 2026-07-28
+
+Interrupting a 22.8 GB conversion used to cost all of it: the `.partial` was
+deleted, because a partial file cannot say how much of itself is valid (the
+directory is written last). A journal sidecar (`<pgrn>.partial.journal`, 120-byte
+header + the 26-byte directory record of every committed chunk) makes that
+answerable, and the commit order — payload `fsync` **before** its records are
+journalled and `fsync`ed — guarantees the journal can only lag the data, never
+lead it.
+
+**Real-model gate, Qwen3.6-35B-A3B Q4_K_XL (22.85 GB GGUF, 10,496 experts,
+48 layers → 20.13 GB PGRN), M3 Pro / 36 GB, source on external SSD, output on
+internal NVMe:**
+
+| Run | Course | Result |
+|---|---|---|
+| Clean reference | uninterrupted, 3 min 43 s | `732a314b95cb…e193269` |
+| Interrupted ×2 (a) | SIGTERM at 3,584/10,496 → resume (cancelled again during the CRC re-check, commit point held) → resume to completion | **byte-identical** |
+| Interrupted ×2 (b) | SIGTERM at 4,237/10,496 → resume wrote further, SIGTERM at 8,333/10,496 → resume to completion | **byte-identical** |
+
+Both interrupted runs left no `.partial` and no journal behind. Journal length
+matched its claim exactly every time (`120 + records × 26`: 3,584 → 93,304 B;
+4,237 → 110,282 B; 8,333 → 216,778 B). The reference SHA is the *same*
+`732a314b…` recorded for the R1 parity gate against the Python converter, so
+adding resume did not move a single byte.
+
+**Phase costs measured from the JSONL stream** (clean run, before the SHA work
+below): hashing 22.85 GB at 262 MB/s = 87 s, writing 20.13 GB at 265 MB/s = 76 s,
+CRC verify sweep 20.13 GB at 339 MB/s = 59 s. The resume re-check runs at
+339 MB/s (24 s for an 8.05 GB prefix, 47 s for 15.84 GB) — a resume pays that
+plus a full re-hash of the source, which is deliberate: without it a resume could
+silently continue onto a replaced source file.
+
+**Tests:** `tests/m1/test_pgrn_convert_resume.py`, 9/9, stable over 5 repeats, no
+skips. Two independent angles — the real signal path (SIGTERM mid-write, exit 2,
+`--resume`, SHA equality) and a reconstructed interrupted state built from a
+finished file (proves the documented sidecar layout is what the tool reads, with
+no dependence on process timing) — plus prefix corruption repaired, foreign
+journal rejected, `.partial` untouched without `--resume`, `--no-journal`
+retaining delete-on-cancel, and the flag contradiction refused. The 6 existing
+parity tests stay green.
+
+## Converter hashing was CPU-bound, not disk-bound — 2026-07-28
+
+The measurement above made the dominant cost visible: hashing the source took
+87 s of a 223 s conversion, at 262 MB/s — while the *write* phase read the same
+file at 524–1193 MB/s. So the bottleneck was the vendored portable SHA-256, not
+the SSD.
+
+Isolated in-memory benchmark on this M3 Pro (2 GiB buffer, no I/O):
+
+| SHA-256 implementation | Throughput |
+|---|---|
+| vendored portable (FIPS 180-4 reference loop) | 366 MB/s |
+| Apple CommonCrypto (ARMv8 SHA-2 instructions) | **3073 MB/s** |
+
+Same algorithm, so the digest is unchanged — verified byte-for-byte in the
+benchmark and by the parity gates. The converter now uses CommonCrypto on
+`__APPLE__` and keeps the portable implementation as the fallback for the R2
+Linux target.
+
+**Effect on the real 22.85 GB source:** hashing phase 262 → **726 MB/s**, i.e.
+87 s → 31 s, and the whole conversion **3 min 43 s → 2 min 56 s** (−21 %). That
+saving lands on *every* conversion and *every* resume; on an XL-tier model
+(~250 GB source) the same ratio turns ~16 min of hashing into ~6. The remaining
+726 MB/s is the serial sum of read (~920 MB/s) and hash (3073 MB/s) — read-bound
+now, so further gains would need an overlapping prefetch rather than a faster
+hash.
+
+**Parity re-proven after the swap**, since the digest goes into the PGRN header:
+source `55983c5a75a1…ad3fe9f1` and output `732a314b95cb…e193269` are unchanged
+against the pre-optimization baseline, and all 15 converter tests stay green.
+
+## The CRC sweep was leaving 3.7× on the table — 2026-07-28
+
+Same reading applied to the next phase. The verify sweep re-reads every written
+record and checks it against the CRC in its directory entry, single-threaded, at
+339 MB/s — on the device from which the *write* phase's parallel reads were
+already pulling 1.2 GB/s. The records are independent by construction, so the
+sweep parallelises over the existing `--io-threads` with no ordering constraint.
+
+The one subtlety is which mismatch to report. Several threads can find damage at
+once, and the resume path *rolls back* to what it is told, so reporting the
+first-noticed record instead of the **lowest** one would leave earlier damage in
+the file. The sweep therefore keeps a compare-and-swap minimum; the same choice
+makes the `verify` error message reproducible instead of scheduling-dependent.
+Both call sites (verify at the end, resume over the inherited prefix) now share
+one implementation rather than two copies of the same loop.
+
+**A/B on the real 22.85 GB model**, same binary, same source, thread count as the
+only variable:
+
+| `--io-threads` | sha256 | write | verify | total |
+|---|---|---|---|---|
+| 1 | 691 MB/s | 212 MB/s | 318 MB/s | 191.3 s |
+| 4 | 687 MB/s | 245 MB/s | **1188 MB/s** | **132.6 s** |
+
+The sweep gained **3.7×** (59 s → 17 s) and the write phase 16 % from the same
+knob; `sha256` is unaffected at 687 vs 691 MB/s, which is the control that says
+the measurement is hitting what it claims to. Output `732a314b…` at both thread
+counts, so parity holds either way.
+
+**Cumulative effect on a full conversion of this model: 223 s → 133 s (−40 %)**,
+from the two changes together. A resume benefits twice over, since it pays both
+the source hash and a sweep over the inherited prefix.
+
+Tests: 16/16, stable over 3 repeats. The parallelisation added one — two records
+corrupted at once, early and late, with the rollback point read back out of the
+`write` phase's first progress line to prove it landed on the *earlier* one
+rather than merely producing a correct file by luck.
+
+## Linux was not a port, it was a second opinion — 2026-07-28
+
+R2's gate is "one reference model on Linux with parity". Getting there needed four
+fixes, and **three of them were bugs on Apple hardware too** — silent ones, of the
+kind a single platform cannot show you. That is the finding worth recording; the
+parity number below is almost the smaller half of it.
+
+Three gates in `bench/m2/`, all in Docker (Debian Trixie), so the results do not
+depend on this Mac:
+
+| Gate | What it establishes | Result |
+|---|---|---|
+| `run_engine_gate.sh` | the engine builds on Linux, portable tests run | 12/12 |
+| `run_converter_gate.sh` | the converter is portable and byte-identical | 16/16, same SHA-256 both platforms |
+| `run_parity_gate.sh` | streamed == resident, with less memory | PASS |
+
+### What the second compiler and the second kernel found
+
+- **Four standard headers** missing their include (`memcpy`, `std::isfinite`,
+  `mkstemp` twice). Apple's libc++ supplies them transitively; the omission was
+  invisible here and a compile error anywhere else.
+- **Admission was memory-blind in a container.** It asked `sysinfo`, which answers
+  for the machine. Capped at 2 GiB it reported the host's 7 GiB — a 3.5× overestimate
+  in the one mechanism whose entire purpose is refusing early. Now the cgroup limit
+  (v2 `memory.max`/`current`, v1 `limit_in_bytes`/`usage_in_bytes`) clamps both
+  figures, with reclaimable page cache from `memory.stat` counted as available.
+- **The page-cache hint was a no-op on Linux, not a gap.** Every read path set
+  `fcntl(F_NOCACHE)` behind an `#ifndef` that defined the Apple-only constant to `0`
+  elsewhere — so the call compiled, ran, failed and changed nothing. Readahead stayed
+  on for a deliberately random access pattern, and pages the streamer will never
+  revisit stayed resident. The premise that streaming owns the residency decision
+  simply did not hold there. `peregrine_io.h` now states intent (random, sequential,
+  forget) and each platform spells it its own way.
+- **The expert cache was asking for a buffer that cannot hold it.** It took the head
+  of the layer's buffer-type list; the CPU backend puts its *repacking* type there.
+  Repacking rewrites a whole tensor when set, streaming writes one expert at an
+  offset, and the abort (`GGML_ASSERT(offset == 0)`) was the buffer saying so. It now
+  asks the layer's device for its own buffer type — which on Metal already was the
+  head, so that path is unchanged.
+
+### Parity
+
+`granite-3.0-1b-a400m-instruct` Q4_K_M, a real 32-expert MoE (0.69 GiB of experts);
+both arms same machine, same CPU backend, 4 threads, greedy, seed 1234, `-ngl 0`,
+32 tokens, PGRN cache deliberately 0.25 GiB so misses actually happen:
+
+| Arm | Peak RSS | Output |
+|---|---|---|
+| resident (`-nr`) | 853 MiB | reference |
+| **streamed (`-nr`)** | **487 MiB** | **identical** |
+| resident, repacking on | 1594 MiB | *differs* (see below) |
+
+Then the same prompt on macOS/Metal, resident and streamed. **All four runs that
+share a kernel produce the same text** — Linux resident, Linux streamed, macOS
+resident, macOS streamed. Streaming is not delivering similar weights; it is
+delivering the same bytes, across two platforms and two backends.
+
+The third row is why the first two both carry `-nr`. Repacking changes the
+accumulation order of the matmul, and that alone moves greedy output: it answers
+"1. 2, 3, 5 / 2. 4, 6, 8" where the plain kernel answers "1. 2, 3, and 5. / 2. 7,
+11, and 13." (the plain kernel is also the correct one here, which is luck, not
+evidence). Comparing a repacked resident arm against a plain streamed arm would
+have measured the kernel and told us nothing about the bytes — so the gate reports
+that run separately and never gates on it.
+
+Memory framing, both honest and worth keeping apart: against the like-for-like
+resident arm, streaming saves **366 MiB (43 %)**; against what a Linux user gets by
+default with repacking on, 1594 → 487 MiB (69 %) — but that comparison also removes
+repacking's own footprint, so it flatters us.
+
+### What this costs, and what is still unmeasured
+
+Streamed experts cannot live in a repacked buffer, so on CPU their matmuls run the
+generic kernels. Everything resident keeps repacking, and Metal has none, so only
+the Linux/x86-and-ARM-CPU streaming path pays. Repacking each expert slot after its
+fetch would recover it; that is a candidate, not a promise.
+
+Throughput is deliberately absent. The model is reached through virtiofs from a
+macOS host, so any tok/s here would describe the VM. The same applies to the tok/s
+curve over cache size that R2 asks for, and CUDA (SSD → RAM cache → VRAM upload) is
+untested for want of the hardware. Cross-platform therefore means exactly this
+today: **Linux/CPU is verified correct, not measured fast.**

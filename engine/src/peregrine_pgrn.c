@@ -1,5 +1,6 @@
 /* PGRN v1 reader. Metadata and expert bytes are read with pread; mmap is never used. */
 #include "peregrine_pgrn.h"
+#include "peregrine_io.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -20,10 +21,6 @@
 #define PGRN_HEADER_FIXED 16U
 #define PGRN_DIR_RECORD    26U
 #define PGRN_MAX_EXPERTS 1000000U
-
-#ifndef F_NOCACHE
-#define F_NOCACHE 48
-#endif
 
 struct pgrn_file {
     int fd;
@@ -74,11 +71,12 @@ static int pgrn_read_full(int fd, void * dst, size_t size, uint64_t offset) {
     return 0;
 }
 
-/* Skip F_NOCACHE (buffered reads) when PGRN_BUFFERED is set — some drives
- * (DRAM-less / non-NVMe externals) run smoother through the page cache. Opt-in;
- * the default stays direct/uncached so the OS cache never fights the RAM budget. */
+/* Expert records are read at offsets that the previous read cannot predict, so the
+ * hint is "random": no readahead, no retention. PGRN_BUFFERED opts back into the
+ * page cache for drives (DRAM-less / non-NVMe externals) that run smoother that
+ * way; peregrine_io.h honours it. */
 static void pgrn_set_cache_mode(int fd) {
-    if (fd >= 0 && getenv("PGRN_BUFFERED") == NULL) (void)fcntl(fd, F_NOCACHE, 1);
+    pgr_io_hint_random(fd);
 }
 
 /* Micro-benchmark a disk's cold-read speed: a few spread reads of the record size.

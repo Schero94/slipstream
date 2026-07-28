@@ -132,6 +132,8 @@ Converting an XL model is minutes of work, and the app has to be open for it. It
 
 The app isn't notarized, so the first launch needs right-click → Open, or `xattr -dr com.apple.quarantine Slipstream.app`.
 
+The app is macOS-only. The *engine* now also builds on Linux and streams correctly there: a 32-expert reference MoE produces identical output whether its experts come from the GGUF or are streamed from a PGRN, in 487 MiB instead of 853 MiB, and the same text as both macOS/Metal arms ([`bench/m2/`](bench/m2/)). That is a correctness result, not a performance one — no tuned Linux numbers exist, and CUDA is untested. Expect it to work and don't expect it to be fast yet.
+
 ---
 
 ## Repository layout
@@ -141,7 +143,7 @@ engine/    new source files (PGRN streaming, prefetch, admission, arena, …), p
 patches/   slipstream-seams.patch, the changes to upstream llama.cpp files
 apply.sh   clones ggml-org/llama.cpp @ pinned commit, drops in engine/, applies the patch
 app/       the Tauri 2 control app (dist/ frontend + src-tauri/ Rust backend)
-bench/     benchmark methodology and recorded results (RESULTS.md)
+bench/     benchmark methodology and recorded results (RESULTS.md); bench/m2/ are the Linux gates
 docs/      architecture notes
 ```
 

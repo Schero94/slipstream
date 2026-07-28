@@ -1,6 +1,7 @@
 #include "peregrine_system_memory.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(__APPLE__)
@@ -28,6 +29,98 @@ static int pgr_linux_mem_available(uint64_t * out) {
     }
     fclose(stream);
     return found && pgr_mul_u64((uint64_t) kib, 1024U, out) == 0 ? 0 : -1;
+}
+
+/* PGR_CGROUP_ROOT overrides the cgroup mount point -- for unusual mounts, and so
+ * the test can drive the parser from a fixture directory. */
+static const char * pgr_cgroup_root(void) {
+    const char * env = getenv("PGR_CGROUP_ROOT");
+    return (env && *env) ? env : "/sys/fs/cgroup";
+}
+
+/* Reads a single-value cgroup file.  Returns 0 on a number, 1 for the literal
+ * "max" (cgroup v2's "no limit"), -1 when unreadable. */
+static int pgr_read_cgroup_u64(const char * dir, const char * name, uint64_t * out) {
+    char path[512];
+    if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int) sizeof(path)) return -1;
+    FILE * stream = fopen(path, "r");
+    if (!stream) return -1;
+    char token[64] = {0};
+    const int got = fscanf(stream, "%63s", token);
+    fclose(stream);
+    if (got != 1) return -1;
+    if (strcmp(token, "max") == 0) return 1;
+    char * end = NULL;
+    const unsigned long long value = strtoull(token, &end, 10);
+    if (end == token) return -1;
+    *out = (uint64_t) value;
+    return 0;
+}
+
+/* Sums the file pages the kernel can drop under pressure.  memory.current counts
+ * page cache, which is not really occupied -- ignoring that would understate
+ * availability as badly as ignoring the limit overstates it. */
+static uint64_t pgr_cgroup_reclaimable(const char * dir, const char * const * keys) {
+    char path[512];
+    if (snprintf(path, sizeof(path), "%s/memory.stat", dir) >= (int) sizeof(path)) return 0;
+    FILE * stream = fopen(path, "r");
+    if (!stream) return 0;
+    char key[64];
+    unsigned long long value = 0;
+    uint64_t sum = 0;
+    while (fscanf(stream, "%63s %llu", key, &value) == 2) {
+        for (size_t i = 0; keys[i]; i++) {
+            if (strcmp(key, keys[i]) == 0) {
+                if (sum <= UINT64_MAX - value) sum += (uint64_t) value;
+                break;
+            }
+        }
+    }
+    fclose(stream);
+    return sum;
+}
+
+/* A cgroup memory cap makes the host's /proc/meminfo the wrong authority: a
+ * container limited to 2 GiB still reads the host's 8 GiB and would admit a cache
+ * the kernel then OOM-kills.  Fills limit and a matching availability, or returns
+ * -1 when this process is not capped (or the files are not readable).
+ *
+ * Availability inside the cap mirrors the macOS choice of free + inactive: the
+ * headroom the cap leaves, plus reclaimable file pages. */
+static int pgr_cgroup_memory(uint64_t * limit, uint64_t * available) {
+    static const char * const v2_keys[] = { "inactive_file", NULL };
+    static const char * const v1_keys[] = { "total_inactive_file", NULL };
+
+    const char * root = pgr_cgroup_root();
+    char v1[512];
+    const struct {
+        const char * dir;
+        const char * limit_file;
+        const char * usage_file;
+        const char * const * keys;
+    } layouts[] = {
+        { root, "memory.max",           "memory.current",     v2_keys }, /* cgroup v2 */
+        { v1,   "memory.limit_in_bytes", "memory.usage_in_bytes", v1_keys }, /* cgroup v1 */
+    };
+    if (snprintf(v1, sizeof(v1), "%s/memory", root) >= (int) sizeof(v1)) return -1;
+
+    for (size_t i = 0; i < sizeof(layouts) / sizeof(layouts[0]); i++) {
+        uint64_t cap = 0;
+        if (pgr_read_cgroup_u64(layouts[i].dir, layouts[i].limit_file, &cap) != 0) continue;
+        /* cgroup v1 spells "no limit" as a near-UINT64_MAX sentinel rather than
+         * "max"; either way a cap that large constrains nothing. */
+        if (cap == 0 || cap > (UINT64_MAX >> 1)) continue;
+        uint64_t used = 0;
+        if (pgr_read_cgroup_u64(layouts[i].dir, layouts[i].usage_file, &used) != 0) used = 0;
+        uint64_t free_in_cap = cap > used ? cap - used : 0;
+        const uint64_t reclaimable = pgr_cgroup_reclaimable(layouts[i].dir, layouts[i].keys);
+        if (free_in_cap <= UINT64_MAX - reclaimable) free_in_cap += reclaimable;
+        if (free_in_cap > cap) free_in_cap = cap;
+        *limit = cap;
+        *available = free_in_cap;
+        return 0;
+    }
+    return -1;
 }
 #endif
 
@@ -59,6 +152,18 @@ int pgr_system_memory_read(pgr_system_memory * out) {
     const long page_size = sysconf(_SC_PAGESIZE);
     if (pages <= 0 || page_size <= 0 || pgr_mul_u64((uint64_t) pages, (uint64_t) page_size, &out->total_bytes) != 0) return -1;
     if (pgr_linux_mem_available(&out->available_bytes) == 0 && out->available_bytes <= out->total_bytes) out->available_known = 1;
+    /* Whichever authority is tighter wins: the host may be roomy while this
+     * process is capped, and a cap may be generous while the host is under
+     * pressure. */
+    uint64_t cap = 0, cap_available = 0;
+    if (pgr_cgroup_memory(&cap, &cap_available) == 0) {
+        if (cap < out->total_bytes) out->total_bytes = cap;
+        if (!out->available_known || cap_available < out->available_bytes) {
+            out->available_bytes = cap_available;
+            out->available_known = 1;
+        }
+        if (out->available_bytes > out->total_bytes) out->available_bytes = out->total_bytes;
+    }
     return 0;
 #else
     return -1;

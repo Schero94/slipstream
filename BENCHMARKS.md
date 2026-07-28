@@ -7,6 +7,7 @@ Real, reproducible numbers on a **36 GB Apple-Silicon Mac**. This is an evidence
 - A **35B MoE** coder runs at **~13–19 tok/s** streamed from SSD, with the Mac staying usable.
 - A **118B MoE** (Laguna S 2.1) that does **not fit in 36 GB RAM** runs at **~2.8 tok/s** — from 0.72 before optimization (**3.9×**).
 - The single biggest lever was **storage placement**, not a clever kernel.
+- The engine now also **streams correctly on Linux/CPU** — same tokens as resident, 487 vs 853 MiB. Correctness only; no tuned Linux numbers, CUDA untested.
 
 ---
 
@@ -149,6 +150,57 @@ SIGTERM and resumed, produced byte-identical output to an uninterrupted run — 
 the digest recorded when the native converter was first proved byte-equal to the
 Python reference. 16/16 converter tests, including one that corrupts two records at
 once and checks the rollback lands on the earlier one.
+
+---
+
+## Linux: a second compiler found four bugs, three of which were ours on macOS too
+
+Building the engine for Linux was meant to be a port. It turned into an audit, and
+that is the more useful result. The parity number comes after the bugs, because the
+bugs are what a single platform cannot show you.
+
+- **Four standard headers** were missing their include (`memcpy`, `std::isfinite`,
+  `mkstemp` twice). Apple's libc++ supplies them transitively — invisible here, a
+  compile error anywhere else.
+- **Admission was memory-blind in a container.** It asked `sysinfo`, which answers
+  for the machine, not the cgroup. Capped at 2 GiB it reported the host's 7 GiB: a
+  3.5× overestimate in the one mechanism whose whole purpose is refusing early.
+- **The page-cache hint was a no-op on Linux, not merely absent.** Every read path
+  set `fcntl(F_NOCACHE)`, guarded by an `#ifndef` that defined the Apple-only
+  constant to `0` elsewhere. So the call compiled, ran, failed, and changed nothing:
+  readahead stayed on for a deliberately random access pattern, and pages the
+  streamer will never revisit stayed resident. The premise this project rests on —
+  that streaming, not the kernel, decides what is in memory — did not hold there.
+- **The expert cache asked for a buffer that cannot hold it.** It took the head of
+  the layer's buffer-type list, and the CPU backend puts its *repacking* type there.
+  Repacking rewrites a whole tensor when set; streaming writes one expert at an
+  offset. The abort (`GGML_ASSERT(offset == 0)`) was the buffer saying so.
+
+Then the gate. `granite-3.0-1b-a400m-instruct` Q4_K_M, a real 32-expert MoE, both
+arms on the same Linux CPU backend, 4 threads, greedy, seed 1234, PGRN cache set to
+0.25 GiB against 0.69 GiB of experts so misses genuinely happen:
+
+| Arm | Peak RSS | Output |
+|---|---|---|
+| resident (`-nr`) | 853 MiB | reference |
+| **streamed (`-nr`)** | **487 MiB** | **identical** |
+| resident, repacking on | 1594 MiB | *differs — see below* |
+
+The same prompt on macOS/Metal, resident and streamed, gives that same text. Four
+runs across two platforms and two backends agree, so streaming is delivering the
+same bytes, not similar ones.
+
+Both gated arms run with `-nr` (no repacking) on purpose. Repacking changes the
+accumulation order of the matmul, which moves greedy output by itself — visible in
+the third row. Comparing a repacked resident arm against a plain streamed arm would
+have measured the kernel and said nothing about the bytes.
+
+The cost, plainly: streamed experts cannot live in a repacked buffer, so on CPU
+their matmuls run the generic kernels. Metal has no repacking, so nothing changes
+there. No throughput is reported — the model arrives over virtiofs from a macOS
+host, so any tok/s would describe the VM — and CUDA is untested. Gates:
+`bench/m2/run_{engine,converter,parity}_gate.sh` (12/12, 16/16 with matching
+SHA-256 across platforms, PASS).
 
 ---
 
