@@ -74,8 +74,11 @@ echo "llama-completion built"
 # An array, not a string: the prompt contains spaces, and word splitting would
 # hand llama-completion a truncated -p and no usable diagnostics.
 CLI=/build/src/build/bin/llama-completion
+# Each arm names its own repacking choice, so that none of them silently inherits what
+# the engine would have chosen. That choice is itself under test in arm 4.
+# (No apostrophes below this line: the whole block is single-quoted for the container.)
 COMMON=(-m "/models/'"$GGUF_NAME"'" -p "'"$PROMPT"'" -n '"$NPREDICT"' -t '"$THREADS"'
-        --temp 0 --seed 1234 -ngl 0 -c 512 --no-warmup -no-cnv -nr)
+        --temp 0 --seed 1234 -ngl 0 -c 512 --no-warmup -no-cnv)
 
 run_arm() {   # name, extra args...
     local name="$1"; shift
@@ -87,32 +90,48 @@ run_arm() {   # name, extra args...
 }
 
 echo "--- arm 1: resident (experts from the GGUF) ---"
-run_arm resident
+run_arm resident -nr
 echo "--- arm 2: streamed (experts from the PGRN) ---"
-run_arm streamed --pgrn /models/'"$PGRN_NAME"' \
+run_arm streamed -nr --pgrn /models/'"$PGRN_NAME"' \
     --pgrn-cache-gb '"$CACHE_GB"' --pgrn-headroom-gb '"$HEADROOM_GB"' --pgrn-io-threads 2
-# --repack comes after the -nr in COMMON and wins, so this is the same run with
-# repacking back on. Informational only: it says what the layout change costs in
-# token terms, which is worth knowing but is not the engine being under test.
+# Informational only: what the layout change costs in token terms. Worth knowing, but
+# it is the CPU backend under test here rather than anything of ours.
 echo "--- arm 3: resident with repacking (informational) ---"
 run_arm resident_repack --repack
+# The shape a Linux user actually has: no control app to compute a cache budget and a
+# reserve, and no reason to know about repacking, so --pgrn has to be enough on its own.
+# Admission derives the budget and the reserve from the host (on Linux, from the cgroup
+# limit where one is set), and streaming turns repacking off by itself so that this run
+# lands in the same numeric regime as the resident baseline. Gated on identical output:
+# a default that answers differently from the documented baseline is not a usable one.
+echo "--- arm 4: streamed with nothing but --pgrn (the real default) ---"
+run_arm derived --pgrn /models/'"$PGRN_NAME"'
 '
 
 say "compare"
 RES_RSS=$(awk '/Maximum resident set size/ {printf "%.0f", $NF/1024}' "$WORK/resident.err")
 STR_RSS=$(awk '/Maximum resident set size/ {printf "%.0f", $NF/1024}' "$WORK/streamed.err")
-echo "peak RSS: resident ${RES_RSS} MiB, streamed ${STR_RSS} MiB"
+DER_RSS=$(awk '/Maximum resident set size/ {printf "%.0f", $NF/1024}' "$WORK/derived.err")
+echo "peak RSS: resident ${RES_RSS} MiB, streamed ${STR_RSS} MiB, derived ${DER_RSS} MiB"
+# The derived arm is expected to be the largest of the three, and that is the policy
+# working rather than failing: with room to spare it caches every expert, which is the
+# fastest thing to do. Streaming saves memory when the model does not fit, not when it
+# does — arm 2 forces that case with a deliberately small cache.
+echo "  (derived caches every expert because this host has room; the saving in arm 2"
+echo "   comes from capping the cache at ${CACHE_GB} GiB, which is the >RAM case)"
 echo "generated text:"
 sed 's/^/  | /' "$WORK/resident.txt"
 
 FAIL=0
-if ! diff -q "$WORK/resident.txt" "$WORK/streamed.txt" >/dev/null; then
-    echo "output differs:"
-    # diff exits 1 on a difference, which under pipefail plus set -e would end the
-    # script here and swallow the verdict. The difference is the message, not an error.
-    diff "$WORK/resident.txt" "$WORK/streamed.txt" | head -30 | sed 's/^/  /' || true
-    FAIL=1
-fi
+for arm in streamed derived; do
+    if ! diff -q "$WORK/resident.txt" "$WORK/$arm.txt" >/dev/null; then
+        echo "$arm output differs from resident:"
+        # diff exits 1 on a difference, which under pipefail plus set -e would end the
+        # script here and swallow the verdict. A difference is the message, not an error.
+        diff "$WORK/resident.txt" "$WORK/$arm.txt" | head -30 | sed 's/^/  /' || true
+        FAIL=1
+    fi
+done
 # A streamed arm that is not smaller did not stream.
 if [ "$STR_RSS" -ge "$RES_RSS" ]; then
     echo "streamed arm is not smaller than resident — experts were probably not streamed"

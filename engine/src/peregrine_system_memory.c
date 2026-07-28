@@ -169,3 +169,24 @@ int pgr_system_memory_read(pgr_system_memory * out) {
     return -1;
 #endif
 }
+
+#define PGR_GIB (1024ULL * 1024ULL * 1024ULL)
+
+uint64_t pgr_default_headroom_bytes(uint64_t total_bytes) {
+    if (total_bytes == 0) return 0;
+#if defined(__APPLE__)
+    const uint64_t quarter = total_bytes / 4;
+    const uint64_t want = 3 * PGR_GIB;
+    return want < quarter ? want : quarter;
+#else
+    uint64_t want = total_bytes / 8;
+    if (want < PGR_GIB / 2) want = PGR_GIB / 2;
+    if (want > 3 * PGR_GIB) want = 3 * PGR_GIB;
+    /* A reserve at or above the machine leaves nothing to run in; on a host this
+     * small the caller is better served by a refusal it can read than by a reserve
+     * that makes every plan impossible. Half is the most that can be given back
+     * while still reserving something. */
+    if (want >= total_bytes) want = total_bytes / 2;
+    return want;
+#endif
+}

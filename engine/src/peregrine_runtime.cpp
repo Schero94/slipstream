@@ -219,16 +219,109 @@ pgr_runtime *pgr_runtime_new(
             if (runtime->co_counts) { runtime->co_layers = L; runtime->co_experts = E; }
         }
     }
-    if (pgr_admission_compute(&input, admitted_plan) != 0 ||
-            admitted_plan->status != PGR_ADMISSION_OK ||
+    if (pgr_admission_compute(&input, admitted_plan) != 0) {
+        pgr_runtime_copy_error(error, error_capacity,
+                "admission inputs are invalid or overflow 64-bit arithmetic");
+        pgr_runtime_free(runtime);
+        return nullptr;
+    }
+    if (admitted_plan->status != PGR_ADMISSION_OK ||
             admitted_plan->expert_cache_bytes < slot_bytes) {
-        pgr_runtime_copy_error(error, error_capacity, "native memory admission refused PGRN cache");
+        /* One message for every cause left a user holding a refusal with no idea which
+         * number to change. Each of these is a different situation with a different
+         * remedy, so each says what it measured and what it wanted. */
+        const uint64_t MiB = 1024ULL * 1024ULL;
+        const uint64_t fits = admitted_plan->static_ceiling_bytes >
+                              admitted_plan->mandatory_resident_bytes
+                ? admitted_plan->static_ceiling_bytes - admitted_plan->mandatory_resident_bytes : 0;
+        char detail[352];
+        if (admitted_plan->status == PGR_ADMISSION_OK) {
+            /* Reached only via the slot check below the plan: the plan itself is fine. */
+            std::snprintf(detail, sizeof(detail),
+                    "admitted expert cache %llu MiB is smaller than a single expert (%llu MiB); "
+                    "raise --pgrn-cache-gb or reduce --pgrn-headroom-gb",
+                    (unsigned long long) (admitted_plan->expert_cache_bytes / MiB),
+                    (unsigned long long) ((uint64_t) slot_bytes / MiB));
+        } else switch (admitted_plan->reason) {
+            case PGR_REASON_HEADROOM_EXCEEDS_RAM:
+                std::snprintf(detail, sizeof(detail),
+                        "the reserve of %llu MiB leaves nothing of the %llu MiB this host reports; "
+                        "lower --pgrn-headroom-gb",
+                        (unsigned long long) (input.min_headroom_bytes / MiB),
+                        (unsigned long long) (input.total_bytes / MiB));
+                break;
+            case PGR_REASON_MODEL_EXCEEDS_CEILING:
+                std::snprintf(detail, sizeof(detail),
+                        "the model needs %llu MiB resident before any expert cache, but only %llu MiB "
+                        "remains of %llu MiB after the %llu MiB reserve; this model is too large for "
+                        "this host",
+                        (unsigned long long) (admitted_plan->mandatory_resident_bytes / MiB),
+                        (unsigned long long) (admitted_plan->static_ceiling_bytes / MiB),
+                        (unsigned long long) (input.total_bytes / MiB),
+                        (unsigned long long) (admitted_plan->reserved_headroom_bytes / MiB));
+                break;
+            case PGR_REASON_CACHE_REQUEST_TOO_LARGE:
+                std::snprintf(detail, sizeof(detail),
+                        "requested expert cache %llu MiB exceeds the %llu MiB that fits; omit "
+                        "--pgrn-cache-gb to take what fits, or lower --pgrn-headroom-gb",
+                        (unsigned long long) (input.requested_cache_bytes / MiB),
+                        (unsigned long long) (fits / MiB));
+                break;
+            case PGR_REASON_AVAILABLE_UNKNOWN:
+                pgr_runtime_copy_error(error, error_capacity,
+                        "current free memory could not be read on this host, so admission fails "
+                        "closed rather than guess");
+                pgr_runtime_free(runtime);
+                return nullptr;
+            case PGR_REASON_RESERVE_AT_RISK:
+                std::snprintf(detail, sizeof(detail),
+                        "the plan fits the machine but not the moment: %llu MiB is free now and "
+                        "%llu MiB resident is planned, which would break the %llu MiB reserve; "
+                        "close something or lower --pgrn-cache-gb",
+                        (unsigned long long) (input.available_bytes / MiB),
+                        (unsigned long long) (admitted_plan->resident_bytes / MiB),
+                        (unsigned long long) (admitted_plan->reserved_headroom_bytes / MiB));
+                break;
+            default:
+                std::snprintf(detail, sizeof(detail),
+                        "admission refused the PGRN cache without a stated reason (status %d)",
+                        (int) admitted_plan->status);
+                break;
+        }
+        pgr_runtime_copy_error(error, error_capacity, detail);
         pgr_runtime_free(runtime);
         return nullptr;
     }
     uint64_t capacity64 = admitted_plan->expert_cache_bytes / slot_bytes;
     if (capacity64 < layer_count || capacity64 > INT_MAX || capacity64 > SIZE_MAX / slot_bytes) {
-        pgr_runtime_copy_error(error, error_capacity, "PGRN cache capacity is invalid");
+        /* Almost always the first condition, and almost always a cache the user set too
+         * small: every layer needs at least one slot to hold the expert it is computing.
+         * Say the number that would work instead of calling the value invalid. */
+        char detail[352];
+        const uint64_t MiB = 1024ULL * 1024ULL;
+        if (capacity64 < layer_count) {
+            const uint64_t need = (uint64_t) layer_count * slot_bytes;
+            /* Round the suggestion up to the precision it is printed at. A value that
+             * is merely close would be rejected on the next attempt, which is worse
+             * than offering nothing. */
+            const uint64_t gib_hundredths = (need * 100 + (1024ULL * MiB) - 1) / (1024ULL * MiB);
+            std::snprintf(detail, sizeof(detail),
+                    "an expert cache of %llu MiB is too small: each of the %llu layers needs one "
+                    "slot of %llu KiB, so use at least %llu MiB (--pgrn-cache-gb %.2f) or omit the "
+                    "flag to take what fits",
+                    (unsigned long long) (admitted_plan->expert_cache_bytes / MiB),
+                    (unsigned long long) layer_count,
+                    (unsigned long long) ((uint64_t) slot_bytes / 1024ULL),
+                    (unsigned long long) ((need + MiB - 1) / MiB),
+                    (double) gib_hundredths / 100.0);
+        } else {
+            std::snprintf(detail, sizeof(detail),
+                    "expert cache of %llu MiB in slots of %llu MiB overflows the addressable slot "
+                    "count on this build",
+                    (unsigned long long) (admitted_plan->expert_cache_bytes / MiB),
+                    (unsigned long long) ((uint64_t) slot_bytes / MiB));
+        }
+        pgr_runtime_copy_error(error, error_capacity, detail);
         pgr_runtime_free(runtime);
         return nullptr;
     }

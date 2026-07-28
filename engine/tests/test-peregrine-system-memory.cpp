@@ -120,6 +120,41 @@ int main() {
         (unsigned long long) (host.total_bytes / MiB));
 #endif
 
+    // ---- default reserve policy ----
+    // Properties that have to hold on every platform, because a caller relies on
+    // them to get a usable plan without naming a number.
+    const uint64_t GiB = 1024ULL * 1024ULL * 1024ULL;
+    CHECK(pgr_default_headroom_bytes(0) == 0);
+    for (uint64_t total = GiB; total <= 512 * GiB; total *= 2) {
+        const uint64_t reserve = pgr_default_headroom_bytes(total);
+        CHECK(reserve > 0);
+        CHECK(reserve < total);            // something must be left to run in
+        CHECK(reserve <= 3 * GiB);         // the reserve never grows without bound
+    }
+    // Non-decreasing in machine size: a bigger host must never reserve less.
+    uint64_t previous = 0;
+    for (uint64_t total = GiB; total <= 512 * GiB; total += GiB) {
+        const uint64_t reserve = pgr_default_headroom_bytes(total);
+        CHECK(reserve >= previous);
+        previous = reserve;
+    }
+    // The one measured point: 3 GiB on the 36 GiB machine every published number
+    // comes from. Both policies agree here, which is why it is the anchor.
+    CHECK(pgr_default_headroom_bytes(36 * GiB) == 3 * GiB);
+#if defined(__APPLE__)
+    // Capped at a quarter so a small Mac can still stream at all.
+    CHECK(pgr_default_headroom_bytes(8 * GiB) == 2 * GiB);
+    CHECK(pgr_default_headroom_bytes(4 * GiB) == 1 * GiB);
+#else
+    // An eighth, floored: a 2 GiB container keeps 512 MiB and can still stream.
+    CHECK(pgr_default_headroom_bytes(8 * GiB) == 1 * GiB);
+    CHECK(pgr_default_headroom_bytes(2 * GiB) == GiB / 2);
+#endif
+
+    std::printf("PGR_HEADROOM_OK 2GiB=%lluMiB 8GiB=%lluMiB 36GiB=%lluMiB\n",
+        (unsigned long long) (pgr_default_headroom_bytes(2 * GiB) / (1024 * 1024)),
+        (unsigned long long) (pgr_default_headroom_bytes(8 * GiB) / (1024 * 1024)),
+        (unsigned long long) (pgr_default_headroom_bytes(36 * GiB) / (1024 * 1024)));
     std::printf("PGR_SYSTEM_MEMORY_OK total=%llu available=%llu known=%d\n",
         (unsigned long long) memory.total_bytes,
         (unsigned long long) memory.available_bytes,

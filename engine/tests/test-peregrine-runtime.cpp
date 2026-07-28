@@ -122,9 +122,46 @@ int main() {
         pgr_runtime_free(rb);
     }
 
+    // Refusals have to name what was measured and which knob to turn. Each of these
+    // used to arrive as the same sentence, which told a user nothing they could act on.
     p = params(path); p.admission.available_known = 0;
     CHECK(pgr_runtime_new(&p, &plan, error, sizeof(error)) == nullptr);
-    CHECK(std::strstr(error, "admission refused") != nullptr);
+    CHECK(std::strstr(error, "could not be read") != nullptr);
+
+    p = params(path); p.admission.min_headroom_bytes = 40 * GiB;   // more than the host
+    CHECK(pgr_runtime_new(&p, &plan, error, sizeof(error)) == nullptr);
+    CHECK(std::strstr(error, "leaves nothing") != nullptr);
+    CHECK(std::strstr(error, "--pgrn-headroom-gb") != nullptr);
+
+    p = params(path); p.admission.requested_cache_bytes = 5 * GiB; // fits nowhere near
+    p.admission.min_headroom_bytes = 30 * GiB;                     // ceiling 6 GiB, model needs 8
+    CHECK(pgr_runtime_new(&p, &plan, error, sizeof(error)) == nullptr);
+    CHECK(std::strstr(error, "too large for this host") != nullptr);
+
+    p = params(path); p.admission.requested_cache_bytes = REC;     // one slot, two layers
+    CHECK(pgr_runtime_new(&p, &plan, error, sizeof(error)) == nullptr);
+    CHECK(std::strstr(error, "too small") != nullptr);
+    CHECK(std::strstr(error, "--pgrn-cache-gb") != nullptr);
+
+    // Zero means "derive it": the case a caller without a control app relies on.
+    p = params(path);
+    p.admission.requested_cache_bytes = 0;
+    p.admission.expert_total_bytes = 8 * REC;   // keep the auto-sized cache test-sized
+    runtime = pgr_runtime_new(&p, &plan, error, sizeof(error));
+    CHECK(runtime != nullptr);
+    CHECK(plan.expert_cache_bytes == 8 * REC);  // all of them fit, so all of them are cached
+    CHECK(plan.status == PGR_ADMISSION_OK);
+    pgr_runtime_free(runtime);
+
+    // An upper bound above the total expert size is met by caching every expert,
+    // rather than refused for being generous.
+    p = params(path);
+    p.admission.requested_cache_bytes = 20 * GiB;
+    p.admission.expert_total_bytes = 8 * REC;
+    runtime = pgr_runtime_new(&p, &plan, error, sizeof(error));
+    CHECK(runtime != nullptr);
+    CHECK(plan.expert_cache_bytes == 8 * REC);
+    pgr_runtime_free(runtime);
 
     p = params(path); p.hot_percent = 50; p.promote_hits = 3; p.demote_idle_epochs = 8; p.cooldown_epochs = 4;
     p.cache_buft = ggml_backend_cpu_buffer_type();

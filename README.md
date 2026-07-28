@@ -132,7 +132,7 @@ Converting an XL model is minutes of work, and the app has to be open for it. It
 
 The app isn't notarized, so the first launch needs right-click → Open, or `xattr -dr com.apple.quarantine Slipstream.app`.
 
-The app is macOS-only. The *engine* now also builds on Linux and streams correctly there: a 32-expert reference MoE produces identical output whether its experts come from the GGUF or are streamed from a PGRN, in 487 MiB instead of 853 MiB, and the same text as both macOS/Metal arms ([`bench/m2/`](bench/m2/)). That is a correctness result, not a performance one — no tuned Linux numbers exist, and CUDA is untested. Expect it to work and don't expect it to be fast yet.
+The app is macOS-only. The *engine* now also builds on Linux and streams correctly there: a 32-expert reference MoE produces identical output whether its experts come from the GGUF or are streamed from a PGRN, in 487 MiB instead of 853 MiB, and the same text as both macOS/Metal arms ([`bench/m2/`](bench/m2/)). Since there is no app on Linux to compute a memory plan, `--pgrn model.pgrn` on its own is enough — the cache budget and RAM reserve are derived from the host, including from the cgroup limit inside a container. That is a correctness result, not a performance one: no tuned Linux numbers exist, and CUDA is untested. Expect it to work and don't expect it to be fast yet.
 
 ---
 
@@ -173,7 +173,20 @@ cd app/src-tauri && cargo tauri build   # -> the self-contained .dmg
 
 ## Running the engine directly
 
-The app sets all of this for you. If you're running `llama-server` yourself, this is the part that isn't upstream llama.cpp:
+One flag is enough. Everything else is tuning:
+
+```bash
+./llama-server -m model.gguf --pgrn model.pgrn
+```
+
+The cache budget and the RAM reserve are derived from the machine: the reserve from its size and platform (on Linux, from the cgroup limit where one is set), the cache from whatever is left once the dense weights, KV and overhead fit. If a plan can't be made, the refusal names what it measured and a value that works:
+
+```
+an expert cache of 1 MiB is too small: each of the 24 layers needs one slot of
+996 KiB, so use at least 24 MiB (--pgrn-cache-gb 0.03) or omit the flag
+```
+
+Those two flags were required until 2026-07-28, which the macOS app hid by computing them and a Linux user could not. If you want to set them yourself:
 
 ```bash
 ./llama-server -m model.gguf \
@@ -187,8 +200,8 @@ The app sets all of this for you. If you're running `llama-server` yourself, thi
 | Flag | What it does |
 |---|---|
 | `--pgrn FILE` | Stream experts from this PGRN sidecar. Disables mmap of the model. |
-| `--pgrn-cache-gb N` | Hard upper bound in GiB on the resident expert cache. Required with `--pgrn`. |
-| `--pgrn-headroom-gb N` | RAM in GiB kept free for macOS and whatever else you're running. Required with `--pgrn`. |
+| `--pgrn-cache-gb N` | Hard upper bound in GiB on the resident expert cache. Omit it to take the largest that fits. A bound above the total expert size caches all of them. |
+| `--pgrn-headroom-gb N` | RAM in GiB kept out of reach so the rest of the system stays usable. Omit it for a default derived from this machine. |
 | `--pgrn-io-threads N` | Parallel cold-read threads per layer stream, 1 to 64. This is the flag that moves prefill: 8 to 16 took a 30k-token prompt from 75 to 208 tok/s. |
 | `--pgrn-compact-slots` | Run single-token MoE layers straight from pinned arena slots. Worth +13-24%. |
 | `--pgrn-predict FILE` | PGCT1 hot-set table for speculative next-layer prefetch. Warms the cache only, never changes output. |
@@ -198,6 +211,8 @@ The app sets all of this for you. If you're running `llama-server` yourself, thi
 | `--pgrn-ane-budget-mib N` | Memory ceiling in MiB for that Core ML draft. |
 
 There are further HOT/WARM tuning flags (`--pgrn-promote-hits`, `--pgrn-demote-idle`, `--pgrn-hot-cooldown`). The tier reservation measured between -1% and -6%, so the default of 0 is also the best setting I found. `llama-server --help` lists them all.
+
+One default worth knowing about: `--pgrn` turns CPU weight repacking off. A streamed expert can't live in a repacked buffer — repacking rewrites a whole tensor at load, streaming writes one expert at an offset — so leaving it on would run repacked dense weights against plain experts. That's a third numeric regime, matching neither the resident baseline nor the streamed one, which is a poor thing to get by default from a project whose claim is that the two agree. It's worth +2.8% (7.35 vs 7.15 tok/s on the reference MoE), so `--repack` still wins if you ask for it by name and don't need to match the published output.
 
 Two environment variables cover the multi-disk case:
 

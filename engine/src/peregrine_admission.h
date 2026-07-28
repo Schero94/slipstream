@@ -20,6 +20,17 @@ typedef enum {
     PGR_LOAD_STREAMING,
 } pgr_load_mode;
 
+/* Why a plan is not OK. Several distinct situations used to reach the caller as one
+ * message, which left a user with a refusal and no idea which number to change. */
+typedef enum {
+    PGR_REASON_NONE = 0,                 /* status OK */
+    PGR_REASON_HEADROOM_EXCEEDS_RAM,     /* the reserve alone is the whole machine */
+    PGR_REASON_MODEL_EXCEEDS_CEILING,    /* dense weights + KV + overhead do not fit */
+    PGR_REASON_CACHE_REQUEST_TOO_LARGE,  /* an explicit cache larger than what fits */
+    PGR_REASON_AVAILABLE_UNKNOWN,        /* current free memory unreadable: fail closed */
+    PGR_REASON_RESERVE_AT_RISK,          /* fits statically, reserve would not survive */
+} pgr_admission_reason;
+
 typedef struct {
     uint64_t total_bytes;
     uint64_t available_bytes;
@@ -37,6 +48,7 @@ typedef struct {
 typedef struct {
     pgr_admission_status status;
     pgr_load_mode mode;
+    pgr_admission_reason reason;
     uint64_t static_ceiling_bytes;
     uint64_t reserved_headroom_bytes;
     uint64_t mandatory_resident_bytes;

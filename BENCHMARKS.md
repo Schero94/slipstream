@@ -202,6 +202,36 @@ host, so any tok/s would describe the VM — and CUDA is untested. Gates:
 `bench/m2/run_{engine,converter,parity}_gate.sh` (12/12, 16/16 with matching
 SHA-256 across platforms, PASS).
 
+### What repacking is worth in the streamed regime — and why it is now off
+
+The third row above raised a question it did not answer: if a streamed run keeps
+repacking on, the dense weights get repacked and the experts cannot, so the run lands
+in a *third* numeric regime. That was the default anyone on Linux got. On the
+reference MoE it answers "1. 2, 3, 5 / 2. 7, 11, 13" where both the resident baseline
+and the streamed arm answer "1. 2, 3, and 5. / 2. 7, 11, and 13." — neither of them.
+
+Measured with the same cache on both arms, so the I/O cost is identical and only
+compute varies; three repeats, 160 tokens each:
+
+| Run | repacking on | repacking off |
+|---|---|---|
+| 1 | 7.38 tok/s | 7.14 tok/s |
+| 2 | 7.36 tok/s | 7.14 tok/s |
+| 3 | 7.31 tok/s | 7.17 tok/s |
+| **mean** | **7.35** | **7.15** |
+
+**+2.8 %**, and small for the reason that makes it small: the experts carry most of
+the work and are unrepacked either way, so only attention and the dense path gain. So
+`--pgrn` now turns repacking off, and an explicit `--repack` still wins. The parity
+gate gained a fourth arm for exactly this — `--pgrn` and nothing else, no repacking
+flag, the shape a user without a control app actually has — gated on producing output
+identical to the resident baseline.
+
+Its peak RSS is the largest of the four arms (907 MiB, against 853 resident and 487
+streamed-with-a-capped-cache), and that is the policy working rather than failing:
+with room to spare, the derived plan caches every expert, which is the fastest thing
+to do. Streaming saves memory when the model does *not* fit.
+
 ---
 
 ## What did *not* work (recorded honestly)

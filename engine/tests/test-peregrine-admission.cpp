@@ -60,8 +60,31 @@ int main() {
     CHECK(pgr_admission_compute(&in, &plan) == 0);
     CHECK(plan.status == PGR_ADMISSION_REFUSE);
 
+    // Asking for more cache than the machine can hold is refused: the request does
+    // not fit, and quietly shrinking it would hide that from the caller.
     in = base(); in.model_bytes = 40 * GiB; in.expert_total_bytes = 34 * GiB;
     in.requested_cache_bytes = 18 * GiB;
+    CHECK(pgr_admission_compute(&in, &plan) == 0);
+    CHECK(plan.status == PGR_ADMISSION_REFUSE);
+
+    // Asking for more cache than there are experts is a different thing entirely:
+    // the parameter is an upper bound, and a bound above the total is satisfied by
+    // caching all of them. Callers cannot read expert_total_bytes before opening the
+    // file, so a round number has to be allowed to be too generous. base() has 18 GiB
+    // of experts and room for exactly that, so the clamp lands on a resident plan.
+    in = base(); in.requested_cache_bytes = 30 * GiB;
+    CHECK(pgr_admission_compute(&in, &plan) == 0);
+    CHECK(plan.status == PGR_ADMISSION_OK);
+    CHECK(plan.expert_cache_bytes == 18 * GiB);
+    CHECK(plan.streamed_expert_bytes == 0);
+    CHECK(plan.mode == PGR_LOAD_RESIDENT);
+
+    // Over-generous *and* beyond the machine: clamping to the expert total comes
+    // first, and 34 GiB of experts still exceeds the 17 GiB that fits, so this is
+    // refused rather than quietly shrunk. Omitting the flag is what asks for "as
+    // much as fits" — the case asserted further up.
+    in = base(); in.model_bytes = 40 * GiB; in.expert_total_bytes = 34 * GiB;
+    in.requested_cache_bytes = 99 * GiB;
     CHECK(pgr_admission_compute(&in, &plan) == 0);
     CHECK(plan.status == PGR_ADMISSION_REFUSE);
 

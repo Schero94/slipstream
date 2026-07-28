@@ -1,5 +1,5 @@
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 7bc770ab4..f6e9c8ac0 100644
+index 7bc770ab4..39e00a07c 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -24,6 +24,7 @@
@@ -70,7 +70,15 @@ index 7bc770ab4..f6e9c8ac0 100644
      return true;
  }
  
-@@ -2418,6 +2465,101 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2182,6 +2229,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+         string_format("whether to enable weight repacking (default: %s)", params.no_extra_bufts ? "disabled" : "enabled"),
+         [](common_params & params, bool value) {
+             params.no_extra_bufts = !value;
++            params.repack_explicit = true;
+         }
+     ).set_env("LLAMA_ARG_REPACK"));
+     add_opt(common_arg(
+@@ -2418,6 +2466,104 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.use_mmap = value;
          }
      ).set_env("LLAMA_ARG_MMAP"));
@@ -87,14 +95,17 @@ index 7bc770ab4..f6e9c8ac0 100644
 +    ).set_env("LLAMA_ARG_PGRN"));
 +    add_opt(common_arg(
 +        {"--pgrn-cache-gb"}, "N",
-+        "hard upper bound in GiB for the resident PGRN expert cache (required with --pgrn)",
++        "hard upper bound in GiB for the resident PGRN expert cache; omit it to take the "
++        "largest that fits after the reserve. A bound above the total expert size caches "
++        "all of them",
 +        [](common_params & params, const std::string & value) {
 +            params.pgrn_cache_bytes = parse_pgrn_gib(value);
 +        }
 +    ).set_env("LLAMA_ARG_PGRN_CACHE_GB"));
 +    add_opt(common_arg(
 +        {"--pgrn-headroom-gb"}, "N",
-+        "minimum available RAM in GiB reserved for macOS and foreground applications (required with --pgrn)",
++        "RAM in GiB kept out of reach so the rest of the system stays usable; omit it for a "
++        "default derived from this machine (on Linux, from the cgroup limit where one is set)",
 +        [](common_params & params, const std::string & value) {
 +            params.pgrn_headroom_bytes = parse_pgrn_gib(value);
 +        }
@@ -172,7 +183,7 @@ index 7bc770ab4..f6e9c8ac0 100644
      add_opt(common_arg(
          {"-dio", "--direct-io"},
          {"-ndio", "--no-direct-io"},
-@@ -3631,6 +3773,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -3631,6 +3777,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.speculative.draft.mparams.hf_repo = value;
          }
      ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_HF_REPO"));
@@ -195,7 +206,7 @@ index 7bc770ab4..f6e9c8ac0 100644
      add_opt(common_arg(
          {"--spec-draft-threads", "-td", "--threads-draft"}, "N",
          "number of threads to use during generation (default: same as --threads)",
-@@ -3807,6 +3965,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -3807,6 +3969,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.speculative.draft.n_min = value;
          }
      ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MIN"));
@@ -209,7 +220,7 @@ index 7bc770ab4..f6e9c8ac0 100644
  
      add_opt(common_arg(
          {"--spec-draft-p-split", "--draft-p-split"}, "P",
-@@ -3877,6 +4042,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -3877,6 +4046,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
          }
      ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
@@ -317,10 +328,10 @@ index 127278dfb..7db1dcb0f 100644
      });
  
 diff --git a/common/common.cpp b/common/common.cpp
-index 8f13217ab..a2747cd57 100644
+index 8f13217ab..375de951f 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -1559,9 +1559,21 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
+@@ -1559,11 +1559,35 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
      mparams.main_gpu        = params.main_gpu;
      mparams.split_mode      = params.split_mode;
      mparams.tensor_split    = params.tensor_split;
@@ -342,9 +353,23 @@ index 8f13217ab..a2747cd57 100644
 +    mparams.pgrn_compact_slots = params.pgrn_compact_slots;
      mparams.check_tensors   = params.check_tensors;
      mparams.use_extra_bufts = !params.no_extra_bufts;
++    // Streaming and weight repacking cannot both apply to an expert: repacking rewrites
++    // a whole tensor at load, streaming writes one expert at an offset. So a streamed
++    // model with repacking on runs repacked dense weights against plain experts — a
++    // third numeric regime that matches neither the resident baseline nor the streamed
++    // one, which is a poor thing to get by default from a project whose claim is that
++    // streamed output equals resident output. Measured worth of that regime on Linux
++    // CPU: 7.35 vs 7.15 tok/s, +2.8%, because the experts carry most of the work and
++    // are unrepacked either way. So streaming turns it off unless the user asked for
++    // it by name, in which case they get the 2.8% and the third regime with it.
++    if (!params.pgrn_path.empty() && !params.repack_explicit) {
++        mparams.use_extra_bufts = false;
++    }
      mparams.no_host         = params.no_host;
+ 
+     if (params.kv_overrides.empty()) {
 diff --git a/common/common.h b/common/common.h
-index bffc1767a..da956b879 100644
+index bffc1767a..fb5697399 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -172,6 +172,7 @@ enum common_speculative_type {
@@ -394,13 +419,14 @@ index bffc1767a..da956b879 100644
  
      bool has_dft() const {
          return !draft.mparams.empty();
-@@ -575,6 +594,18 @@ struct common_params {
+@@ -575,6 +594,19 @@ struct common_params {
      bool use_mmap          = true;  // enable mmap to use filesystem cache
      bool use_direct_io     = false; // read from disk without buffering
      bool use_mlock         = false; // use mlock to keep model in memory
 +    std::string pgrn_path;          // optional PGRN expert store for bounded SSD streaming
-+    uint64_t pgrn_cache_bytes    = 0; // hard resident expert-cache budget
-+    uint64_t pgrn_headroom_bytes = 0; // RAM reserved for macOS and foreground applications
++    uint64_t pgrn_cache_bytes    = 0; // hard resident expert-cache budget; 0 derives it
++    uint64_t pgrn_headroom_bytes = 0; // RAM kept free for the rest of the system; 0 derives it
++    bool repack_explicit   = false; // the user named --repack/--no-repack themselves
 +    uint32_t pgrn_hot_percent = 0; // logical HOT share of the fixed cache; zero preserves pure Clox
 +    uint32_t pgrn_promote_hits = 3;
 +    uint64_t pgrn_demote_idle_epochs = 64;
@@ -2683,7 +2709,7 @@ index a3928523b..22061f5ff 100644
      const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index eaf3f35d2..4c8669dd4 100644
+index eaf3f35d2..87f219ad9 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -7,6 +7,11 @@
@@ -2751,7 +2777,7 @@ index eaf3f35d2..4c8669dd4 100644
      buft_list_t cpu_buft_list;
      std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
  
-@@ -1491,6 +1512,145 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1491,6 +1512,151 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
      }
      ml.done_getting_tensors();
  
@@ -2866,10 +2892,16 @@ index eaf3f35d2..4c8669dd4 100644
 +        runtime_params.admission.expert_total_bytes = ml.external_expert_bytes;
 +        runtime_params.admission.overhead_bytes = PGR_RUNTIME_OVERHEAD;
 +        runtime_params.admission.staging_bytes = scratch_reserve;
-+        runtime_params.admission.min_headroom_bytes = params.pgrn_headroom_bytes;
++        // Zero means "you decide" for both: the reserve comes from the machine's size
++        // and platform, the cache from what is left once everything mandatory fits.
++        // Streaming is then one flag, which is the only form a Linux user has — there
++        // is no control app there to compute these for them.
++        runtime_params.admission.min_headroom_bytes = params.pgrn_headroom_bytes != 0
++                ? params.pgrn_headroom_bytes
++                : pgr_default_headroom_bytes(memory.total_bytes);
 +        runtime_params.admission.requested_cache_bytes = params.pgrn_cache_bytes;
 +        runtime_params.admission.already_allocated_bytes = ml.n_bytes - ml.external_expert_bytes;
-+        char error[192] = {};
++        char error[384] = {};
 +        pimpl->pgrn_runtime = pgr_runtime_new(
 +                &runtime_params, &pimpl->pgrn_plan, error, sizeof(error));
 +        if (!pimpl->pgrn_runtime) throw std::runtime_error(std::string("PGRN admission failed: ") + error);
@@ -2897,7 +2929,7 @@ index eaf3f35d2..4c8669dd4 100644
      // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
      // If sidecar scales exist, the output weight must be an actual output tensor.
      GGML_ASSERT(!(output && tok_embd &&
-@@ -1503,6 +1663,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1503,6 +1669,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
              tensors_by_name.emplace_back(ggml_get_name(cur), cur);
          }
      }
@@ -2910,7 +2942,7 @@ index eaf3f35d2..4c8669dd4 100644
  
      ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
      pimpl->mappings.reserve(ml.mappings.size());
-@@ -1991,6 +2157,151 @@ bool llama_model::has_tensor_overrides() const {
+@@ -1991,6 +2163,151 @@ bool llama_model::has_tensor_overrides() const {
      return pimpl->has_tensor_overrides;
  }
  
@@ -3062,7 +3094,7 @@ index eaf3f35d2..4c8669dd4 100644
  const ggml_tensor * llama_model::get_tensor(const char * name) const {
      auto it = std::find_if(tensors_by_name.begin(), tensors_by_name.end(),
              [name](const std::pair<std::string, ggml_tensor *> & it) {
-@@ -2310,6 +2621,17 @@ llama_model_params llama_model_default_params() {
+@@ -2310,6 +2627,17 @@ llama_model_params llama_model_default_params() {
          /*.progress_callback           =*/ nullptr,
          /*.progress_callback_user_data =*/ nullptr,
          /*.kv_overrides                =*/ nullptr,
@@ -3080,7 +3112,7 @@ index eaf3f35d2..4c8669dd4 100644
          /*.vocab_only                  =*/ false,
          /*.use_mmap                    =*/ true,
          /*.use_direct_io               =*/ false,
-@@ -2318,6 +2640,7 @@ llama_model_params llama_model_default_params() {
+@@ -2318,6 +2646,7 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -3088,7 +3120,7 @@ index eaf3f35d2..4c8669dd4 100644
      };
  
      return result;
-@@ -2538,6 +2861,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -2538,6 +2867,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_COGVLM:
          case LLM_ARCH_PANGU_EMBED:
          case LLM_ARCH_AFMOE:
@@ -3096,7 +3128,7 @@ index eaf3f35d2..4c8669dd4 100644
          case LLM_ARCH_QWEN3NEXT:
          case LLM_ARCH_MIMO2:
          case LLM_ARCH_STEP35:
-@@ -2708,6 +3032,10 @@ int32_t llama_model_n_expert(const struct llama_model * model) {
+@@ -2708,6 +3038,10 @@ int32_t llama_model_n_expert(const struct llama_model * model) {
      return model->hparams.n_expert;
  }
  
@@ -3243,7 +3275,7 @@ index 707cd4bac..b7c289263 100644
  
  struct LLM_KV;
 diff --git a/src/llama.cpp b/src/llama.cpp
-index 0de6048f2..a969cb62a 100644
+index 0de6048f2..360886085 100644
 --- a/src/llama.cpp
 +++ b/src/llama.cpp
 @@ -9,6 +9,8 @@
@@ -3255,14 +3287,17 @@ index 0de6048f2..a969cb62a 100644
  
  #include "ggml.h"
  #include "ggml-cpp.h"
-@@ -279,8 +281,25 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
+@@ -279,8 +281,28 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
  static std::pair<int, llama_model *> llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
          const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model_params & params) {
      try {
 +        const bool external_experts = params.pgrn_path != nullptr;
-+        if (external_experts && (!params.pgrn_path[0] || params.pgrn_cache_bytes == 0 ||
-+                params.pgrn_headroom_bytes == 0 || params.vocab_only || params.no_alloc || fname.empty())) {
-+            throw std::runtime_error("PGRN mode requires a file-backed model, cache budget, headroom, and allocated weights");
++        // Cache budget and headroom may be zero: admission then derives both from the
++        // machine. What remains genuinely required is a file-backed model with real
++        // weight allocation, since streaming has to write experts into live tensors.
++        if (external_experts && (!params.pgrn_path[0] ||
++                params.vocab_only || params.no_alloc || fname.empty())) {
++            throw std::runtime_error("PGRN mode requires a file-backed model with allocated weights");
 +        }
 +        if (external_experts) {
 +            if (splits.size() > 1) throw std::runtime_error("PGRN v1 does not support split GGUF sources");
@@ -3282,7 +3317,7 @@ index 0de6048f2..a969cb62a 100644
  
          ml.print_info();
          std::unique_ptr<llama_model> model_ptr(llama_model_create(ml, params));
-@@ -578,4 +597,3 @@ const char * llama_print_system_info(void) {
+@@ -578,4 +600,3 @@ const char * llama_print_system_info(void) {
  
      return s.c_str();
  }

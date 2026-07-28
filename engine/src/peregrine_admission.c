@@ -18,10 +18,12 @@ int pgr_admission_compute(const pgr_admission_input * input, pgr_admission_plan 
     plan->status = PGR_ADMISSION_REFUSE;
     plan->mode = PGR_LOAD_REFUSE;
     if (!input || input->total_bytes == 0 || input->model_bytes == 0 ||
-            input->expert_total_bytes > input->model_bytes ||
-            input->requested_cache_bytes > input->expert_total_bytes) return -1;
+            input->expert_total_bytes > input->model_bytes) return -1;
 
-    if (input->total_bytes <= input->min_headroom_bytes) return 0;
+    if (input->total_bytes <= input->min_headroom_bytes) {
+        plan->reason = PGR_REASON_HEADROOM_EXCEEDS_RAM;
+        return 0;
+    }
     plan->reserved_headroom_bytes = input->min_headroom_bytes;
     plan->static_ceiling_bytes = input->total_bytes - input->min_headroom_bytes;
     plan->recommended_wired_limit_mb = plan->static_ceiling_bytes / PGR_MIB;
@@ -32,12 +34,31 @@ int pgr_admission_compute(const pgr_admission_input * input, pgr_admission_plan 
             pgr_add_u64(mandatory, input->overhead_bytes, &mandatory) != 0 ||
             pgr_add_u64(mandatory, input->staging_bytes, &mandatory) != 0) return -1;
     plan->mandatory_resident_bytes = mandatory;
-    if (mandatory > plan->static_ceiling_bytes) return 0;
+    if (mandatory > plan->static_ceiling_bytes) {
+        plan->reason = PGR_REASON_MODEL_EXCEEDS_CEILING;
+        return 0;
+    }
 
     const uint64_t max_cache = plan->static_ceiling_bytes - mandatory;
     uint64_t cache = input->requested_cache_bytes;
-    if (cache == 0) cache = input->expert_total_bytes < max_cache ? input->expert_total_bytes : max_cache;
-    if (cache > max_cache) return 0;
+    if (cache == 0) {
+        /* Auto: cache every expert if they fit, otherwise fill the ceiling and stream
+         * the rest. Experts exceeding the ceiling is the normal streaming case, not a
+         * failure. */
+        cache = input->expert_total_bytes < max_cache ? input->expert_total_bytes : max_cache;
+    } else {
+        /* A bound above the total expert size is met by caching all of them. The
+         * parameter is an upper bound, and treating an over-generous one as a bad
+         * input would force callers to know expert_total_bytes before they can name
+         * a number — which they cannot read until the file is open. */
+        if (cache > input->expert_total_bytes) cache = input->expert_total_bytes;
+        /* Asking for more than the machine has is a different matter, and still
+         * refused: that is the caller being told the request does not fit. */
+        if (cache > max_cache) {
+            plan->reason = PGR_REASON_CACHE_REQUEST_TOO_LARGE;
+            return 0;
+        }
+    }
 
     plan->expert_cache_bytes = cache;
     plan->streamed_expert_bytes = input->expert_total_bytes - cache;
@@ -49,6 +70,7 @@ int pgr_admission_compute(const pgr_admission_input * input, pgr_admission_plan 
      * original watchdog failure when other processes already held memory. */
     if (!input->available_known) {
         plan->mode = PGR_LOAD_REFUSE;
+        plan->reason = PGR_REASON_AVAILABLE_UNKNOWN;
         return 0;
     }
     if (input->already_allocated_bytes > plan->resident_bytes) return -1;
@@ -59,7 +81,13 @@ int pgr_admission_compute(const pgr_admission_input * input, pgr_admission_plan 
     if (pgr_add_u64(future_resident, current_reserve, &current_need) != 0) return -1;
     plan->system_free_after_load_bytes = input->available_bytes > future_resident
         ? input->available_bytes - future_resident : 0;
-    plan->status = input->available_bytes < current_need ? PGR_ADMISSION_WARN : PGR_ADMISSION_OK;
+    if (input->available_bytes < current_need) {
+        plan->status = PGR_ADMISSION_WARN;
+        plan->reason = PGR_REASON_RESERVE_AT_RISK;
+    } else {
+        plan->status = PGR_ADMISSION_OK;
+        plan->reason = PGR_REASON_NONE;
+    }
     return 0;
 }
 
