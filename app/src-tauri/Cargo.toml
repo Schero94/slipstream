@@ -1,8 +1,8 @@
 [package]
 name = "peregrine-control"
-version = "0.2.4"
+version = "0.2.31"
 edition = "2021"
-description = "Native control panel for the Peregrine (llama.cpp fork) SSD-streaming server"
+description = "Native control panel for Slipstream — SSD-streaming MoE on Apple Silicon"
 default-run = "peregrine-control"
 
 [build-dependencies]
@@ -13,6 +13,13 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
+core-foundation = "0.10"
+p2p-core = { path = "../../crates/p2p-core" }
+p2p-crypto = { path = "../../crates/p2p-crypto" }
+p2p-ledger = { path = "../../crates/p2p-ledger" }
+p2p-node = { path = "../../apps/p2p-node" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 
 [[bin]]
 name = "peregrine-control"

@@ -1,0 +1,13 @@
+[package]
+name = "p2p-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Stable core types for Slipstream P2P inference (capability, jobs, mock engine, local node)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+hex = "0.4"
+rand = "0.8"

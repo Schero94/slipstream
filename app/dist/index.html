@@ -8,30 +8,44 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <img class="logo" src="logo.png" alt="Slipstream" />
-      <div>
+    <div class="brand" title="Slipstream">
+      <img class="logo" src="logo.png" alt="" />
+      <div class="brand-text">
         <h1>Slipstream</h1>
         <p class="sub" data-i18n="header.sub">Große Coding-Modelle lokal auf dem Mac — von SSD gestreamt</p>
       </div>
     </div>
     <div class="topbar-right">
-      <select id="lang" class="langsel" title="Language">
-        <option value="en">EN</option>
-        <option value="zh">中文</option>
-        <option value="es">ES</option>
-        <option value="de">DE</option>
-      </select>
-      <span id="statusPill" class="pill pill-off">○ Gestoppt</span>
-      <button id="powerBtn" class="btn btn-primary" disabled>Modell wählen…</button>
+      <!-- Always-visible AI-server observability: tok/s · cache · RSS (honest – when down). -->
+      <div id="obsStrip" class="obs-strip" title="Server: last tok/s · cache hit · RSS" aria-label="Server status">
+        <span class="obs-item"><span class="obs-k" data-i18n="obs.tps">tok/s</span> <span id="obsTps" class="obs-v">–</span></span>
+        <span class="obs-sep" aria-hidden="true">·</span>
+        <span class="obs-item"><span class="obs-k" data-i18n="obs.cache">cache</span> <span id="obsCache" class="obs-v">–</span></span>
+        <span class="obs-sep" aria-hidden="true">·</span>
+        <span class="obs-item"><span class="obs-k" data-i18n="obs.rss">RSS</span> <span id="obsRss" class="obs-v">–</span></span>
+      </div>
+      <div class="top-cluster">
+        <select id="lang" class="langsel" title="Language" aria-label="Language">
+          <option value="en">EN</option>
+          <option value="zh">中文</option>
+          <option value="es">ES</option>
+          <option value="de">DE</option>
+        </select>
+        <span id="statusPill" class="pill pill-off">○ Gestoppt</span>
+      </div>
+      <div class="power-wrap">
+        <p class="start-tip" id="startTip" data-i18n="hint.startPath">Models folder → Backend Auto → Start</p>
+        <button id="powerBtn" class="btn btn-primary btn-power" disabled>Modell wählen…</button>
+      </div>
     </div>
   </header>
 
-  <!-- Global activity strip: visible on every tab, collapses when idle. -->
-  <div id="activity" class="activity idle">
+  <!-- Only visible while a request is in flight — idle state lived here as a
+       near-empty bar and read as a broken second navbar. -->
+  <div id="activity" class="activity idle" hidden>
     <div class="act-dot"></div>
     <div class="act-body">
-      <div class="act-title" id="actTitle">–</div>
+      <div class="act-title" id="actTitle"></div>
       <div class="act-sub" id="actSub"></div>
       <div class="meter act-meter"><div id="actBar" class="meter-fill"></div></div>
     </div>
@@ -45,34 +59,83 @@
       <button class="tab" data-tab="downloads"><span class="nav-ico">↓</span><span data-i18n="nav.downloads">Downloads</span></button>
       <button class="tab" data-tab="benchmarks"><span class="nav-ico">▲</span><span data-i18n="nav.benchmarks">Benchmarks</span></button>
       <div class="nav-sep"></div>
-      <button class="tab" data-tab="memory"><span class="nav-ico">▤</span><span data-i18n="nav.memory">Memory</span></button>
-      <button class="tab" data-tab="experts"><span class="nav-ico">◫</span><span data-i18n="nav.experts">Experts</span></button>
-      <button class="tab" data-tab="streaming"><span class="nav-ico">≋</span><span data-i18n="nav.streaming">Streaming</span></button>
-      <button class="tab nav-disabled" disabled data-i18n-tip="tip.cluster"><span class="nav-ico">⌗</span><span data-i18n="nav.cluster">Cluster</span></button>
+      <!-- Serving, streaming, memory and system used to be four entries showing
+           overlapping numbers from two measurement chains. One entry now, four
+           sections inside it, one source per figure. -->
+      <button class="tab" data-tab="status"><span class="nav-ico">◉</span><span data-i18n="nav.live">Live</span></button>
       <div class="nav-sep"></div>
       <button class="tab" data-tab="logs"><span class="nav-ico">≡</span><span data-i18n="nav.logs">Logs</span></button>
       <button class="tab" data-tab="settings"><span class="nav-ico">⚙</span><span data-i18n="nav.settings">Settings</span></button>
+      <!-- Soft-hidden from primary journey; still reachable (PRODUCT_CLICK_JOURNEY). -->
+      <button class="tab nav-soft" data-tab="cluster" id="navCluster" data-i18n-tip="tip.cluster"><span class="nav-ico">⌗</span><span data-i18n="nav.cluster">Cluster</span></button>
     </nav>
 
+    <div class="content">
     <main>
       <!-- ============ CHAT ============ -->
       <section class="panel" data-panel="chat">
         <div class="chat-wrap">
           <div id="chatMessages" class="chat-messages">
-            <div class="chat-empty" id="chatEmpty" data-i18n="chat.empty">Starte eine Unterhaltung mit dem lokalen Modell.</div>
+            <div class="chat-empty" id="chatEmpty">
+              <p class="chat-empty-title" data-i18n="journey.title">Modelle größer als RAM streamen von der SSD</p>
+              <ol class="journey-steps" id="journeySteps">
+                <li>
+                  <button type="button" class="journey-step" id="journeyStep1" data-journey="folder">
+                    <span class="journey-n" aria-hidden="true">1</span>
+                    <span data-i18n="journey.step1">Modellordner wählen</span>
+                  </button>
+                </li>
+                <li>
+                  <button type="button" class="journey-step" id="journeyStep2" data-journey="start">
+                    <span class="journey-n" aria-hidden="true">2</span>
+                    <span data-i18n="journey.step2">Server starten</span>
+                  </button>
+                </li>
+                <li>
+                  <button type="button" class="journey-step" id="journeyStep3" data-journey="prompt">
+                    <span class="journey-n" aria-hidden="true">3</span>
+                    <span data-i18n="journey.step3">Code-Prompt senden</span>
+                  </button>
+                </li>
+              </ol>
+              <p class="chat-empty-tip" data-i18n="journey.codingTip">Coding: Thinking aus, greedy (temp 0).</p>
+            </div>
           </div>
           <div class="chat-inputbar">
             <div class="chat-meta" id="chatMeta"></div>
+            <div class="chat-attach-row" id="chatAttachRow" hidden>
+              <div class="chat-attach-preview" id="chatAttachPreview"></div>
+              <button type="button" id="chatAttachClear" class="btn btn-ghost btn-compact" data-i18n="chat.attachClear">Anhang entfernen</button>
+            </div>
             <div class="chat-inputrow">
+              <button type="button" id="chatAttach" class="btn btn-ghost chat-attach-btn" hidden title="Image" data-i18n-tip="tip.chatAttach">🖼</button>
+              <button type="button" id="chatDocAttach" class="btn btn-ghost chat-attach-btn" hidden title="Document" data-i18n-tip="tip.chatDocAttach">📎</button>
               <textarea id="chatInput" rows="1" data-i18n-ph="chat.placeholder" placeholder="Nachricht an das lokale Modell…"></textarea>
               <button id="chatSend" class="btn btn-primary" data-i18n="btn.send">Senden</button>
               <button id="chatStop" class="btn btn-danger" style="display:none" data-i18n="chat.stop">Stopp</button>
             </div>
-            <div class="chat-hints">
-              <label class="chk"><input type="checkbox" id="chatThink" /> <span data-i18n="chat.thinking">Thinking</span></label>
-              <button id="chatClear" class="btn btn-ghost" data-i18n="chat.clear">Verlauf löschen</button>
+            <!-- One calm meta row: model + toggles. Tools/JSON stay MLX-gated via [hidden]. -->
+            <div class="chat-composer-bar">
+              <div class="chat-composer-left">
+                <label class="chat-model-label" for="chatModelSel"><span data-i18n="chat.model">Modell</span></label>
+                <select id="chatModelSel" class="chat-model-sel" title="GET /v1/models"></select>
+                <span class="chat-models-live" id="chatModelsLive" hidden title="GET /v1/models">live</span>
+                <span class="chat-vlm-badge" id="chatVlmBadge" hidden data-i18n="chat.vlm">VLM</span>
+              </div>
+              <div class="chat-composer-toggles">
+                <label class="chk"><input type="checkbox" id="chatThink" /> <span data-i18n="chat.thinking">Thinking</span></label>
+                <label class="chk" id="chatToolsWrap" hidden><input type="checkbox" id="chatTools" /> <span data-i18n="chat.tools">Tools</span></label>
+                <label class="chk" id="chatJsonWrap" hidden><input type="checkbox" id="chatJson" /> <span data-i18n="chat.json">JSON</span></label>
+                <button id="chatClear" class="btn btn-ghost btn-compact" data-i18n="chat.clear">Verlauf löschen</button>
+              </div>
               <span class="chat-hintnote" id="chatServerNote" data-i18n="chat.serverHint">Server muss laufen (oben rechts → Start).</span>
             </div>
+            <!-- MLX + JSON only: collapsed by default; paste → response_format.json_schema -->
+            <details class="chat-schema-wrap" id="chatSchemaWrap" hidden>
+              <summary class="chat-schema-label"><span data-i18n="chat.schema">Schema</span> <span class="info" data-i18n-tip="tip.chatSchema">ⓘ</span></summary>
+              <textarea id="chatSchema" rows="3" spellcheck="false" data-i18n-ph="chat.schemaPh" placeholder='{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}'></textarea>
+              <span class="chat-schema-status" id="chatSchemaStatus"></span>
+            </details>
           </div>
         </div>
       </section>
@@ -84,10 +147,16 @@
             <h2 data-i18n="sec.selectModel">Modell wählen</h2>
             <span id="modelBadge" class="badge">–</span>
           </div>
+          <!-- One primary Models root for Metal GGUF+PGRN and MLX trees. -->
+          <div class="ctrl" id="modelsRootWrap">
+            <div class="ctrl-head"><label for="pModelsRoot"><span data-i18n="lbl.modelsRoot">Models folder</span> <span class="info" data-i18n-tip="tip.modelsRoot">ⓘ</span></label></div>
+            <input type="text" id="pModelsRoot" spellcheck="false" placeholder="~/Modelle" />
+            <p class="hint" data-i18n="hint.modelsRoot">One folder for everything: GGUF + .pgrn here, MLX under mlx/. Default: ~/Modelle.</p>
+          </div>
           <div class="ctrl">
             <div class="ctrl-head"><label for="modelSel"><span data-i18n="lbl.model">Modell</span> <span class="info" data-i18n-tip="tip.model">ⓘ</span></label></div>
             <select id="modelSel"></select>
-            <div id="qualityWrap" style="margin-top:12px;display:none">
+            <div id="qualityWrap" class="quality-wrap" style="display:none">
               <div class="ctrl-head"><label for="qualitySel"><span data-i18n="lbl.quality">Qualität ↔ Speed</span> <span class="info" data-i18n-tip="tip.quality">ⓘ</span></label></div>
               <select id="qualitySel"></select>
             </div>
@@ -106,7 +175,7 @@
             <input type="text" id="pServer" spellcheck="false" />
           </details>
         </div>
-        <div class="card note-card" data-i18n-html="compat.text"></div>
+        <div class="note-card" data-i18n-html="compat.text"></div>
       </section>
 
       <!-- ============ DOWNLOADS ============ -->
@@ -116,7 +185,7 @@
             <h2 data-i18n="sec.downloads">Download &amp; Konvertierung</h2>
             <span id="dlModelName" class="badge">–</span>
           </div>
-          <p class="hint" style="margin-top:0" data-i18n="dl.intro">GGUF laden, dann in das gestreamte PGRN-Format konvertieren. Mehrteilige (XL-)Modelle werden Shard für Shard geladen und in einem Durchgang konvertiert.</p>
+          <p class="hint section-lead" data-i18n="dl.intro">GGUF laden, dann in das gestreamte PGRN-Format konvertieren. Mehrteilige (XL-)Modelle werden Shard für Shard geladen und in einem Durchgang konvertiert.</p>
           <div class="dl-row">
             <div class="dl-info">
               <div id="dlStatus" class="dl-status">–</div>
@@ -154,7 +223,7 @@
             <h2 data-i18n="sec.bench">Benchmark</h2>
             <span id="benchBadge" class="badge">–</span>
           </div>
-          <p class="hint" style="margin-top:0" data-i18n="bench.intro">Ein Klick: misst Prefill (Prompt lesen) und Decode (Antwort schreiben) am laufenden Server — echte Zahlen, keine Schätzung.</p>
+          <p class="hint section-lead" data-i18n="bench.intro">Ein Klick: misst Prefill (Prompt lesen) und Decode (Antwort schreiben) am laufenden Server — echte Zahlen, keine Schätzung.</p>
           <div class="ctrl-grid bench-grid">
             <div class="ctrl">
               <div class="ctrl-head"><label for="benchTokens" data-i18n="bench.tokens">Tokens je Lauf</label></div>
@@ -194,103 +263,261 @@
         </div>
       </section>
 
-      <!-- ============ MEMORY ============ -->
-      <section class="panel" data-panel="memory" hidden>
-        <div class="tiles">
-          <div class="tile">
-            <div class="tile-label"><span data-i18n="tile.ram">Freier RAM</span> <span class="info" data-i18n-tip="tip.ram">ⓘ</span></div>
-            <div class="tile-value"><span id="ramValue">–</span> <span class="unit">GiB</span></div>
-            <div class="meter"><div id="ramBar" class="meter-fill"></div></div>
-            <div id="ramNote" class="tile-note">–</div>
-          </div>
-          <div class="tile">
-            <div class="tile-label"><span data-i18n="tile.usability">Usability</span> <span class="info" data-i18n-tip="tip.usability">ⓘ</span></div>
-            <div class="tile-value"><span id="ampel" class="ampel ampel-green">●</span> <span id="ampelText">–</span></div>
-            <div class="tile-note">Swap: <span id="swapValue">–</span> MB</div>
-          </div>
-          <div class="tile">
-            <div class="tile-label"><span data-i18n="tile.decode">Decode</span> <span class="info" data-i18n-tip="tip.decode">ⓘ</span></div>
-            <div class="tile-value"><span id="tokValue">–</span> <span class="unit">tok/s</span></div>
-            <div class="tile-note" id="tokNote" data-i18n="tile.decodeNote">aus letztem Request</div>
-          </div>
-          <div class="tile">
-            <div class="tile-label" data-i18n="tile.server">Server</div>
-            <div class="tile-value" style="font-size:15px"><span id="healthText">–</span></div>
-            <div class="tile-note"><span id="activeModelNote" data-i18n="srv.noModel">kein Modell</span></div>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-head"><h2 data-i18n="sec.memPlan">Speicherplan</h2></div>
-          <div id="memPlan" class="hint"></div>
-        </div>
-        <div class="card note-card" data-i18n-html="mem.note"></div>
-      </section>
+      <!-- ============ STATUS ============ -->
+      <!-- ============ STATUS — one live view, four sections ============
+           Serving comes from /metrics, streaming from the engine log, memory and
+           system from the host sampler. Each figure has exactly one of those
+           behind it; where two used to show the same quantity, the duplicate is
+           gone rather than relabelled. -->
+      <section class="panel" data-panel="status" hidden>
+        <nav class="anchors" id="statusAnchors">
+          <button class="anchor anchor-on" data-anchor="secServing" data-i18n="anchor.serving">Serving</button>
+          <button class="anchor" data-anchor="secStreaming" data-i18n="anchor.streaming">Streaming</button>
+          <button class="anchor" data-anchor="secMemory" data-i18n="anchor.memory">Speicher</button>
+          <button class="anchor" data-anchor="secSystem" data-i18n="anchor.system">System</button>
+        </nav>
 
-      <!-- ============ EXPERTS ============ -->
-      <section class="panel" data-panel="experts" hidden>
-        <div class="card">
+        <div class="card" id="secServing">
           <div class="card-head">
-            <h2><span data-i18n="sec.arena">Experten-Arena</span> <span class="info" data-i18n-tip="tip.liveMonitor">ⓘ</span></h2>
+            <h2><span data-i18n="sec.serving">Serving-Statistik</span> <span class="info" data-i18n-tip="tip.serving">ⓘ</span></h2>
+            <div class="head-tools">
+              <div class="seg">
+                <button id="scopeSession" class="seg-on" data-scope="session" data-i18n="scope.session">Sitzung</button>
+                <button id="scopeAlltime" data-scope="alltime" data-i18n="scope.alltime">Gesamt</button>
+              </div>
+              <button id="statsClear" class="btn btn-ghost" data-i18n="stats.clear">Zurücksetzen</button>
+              <span id="statsConfirm" class="confirm" hidden>
+                <span data-i18n="stats.sure">Sicher?</span>
+                <button id="statsYes" class="btn btn-ghost btn-danger" data-i18n="stats.yes">Ja</button>
+                <button id="statsNo" class="btn btn-ghost" data-i18n="stats.no">Abbrechen</button>
+              </span>
+            </div>
+          </div>
+          <div class="tiles">
+            <div class="tile">
+              <div class="tile-label" data-i18n="stat.tokens">Tokens gesamt</div>
+              <div class="tile-value" id="stTokens">–</div>
+              <div class="tile-note" id="stScopeNote">–</div>
+            </div>
+            <div class="tile">
+              <div class="tile-label" data-i18n="stat.cached">Aus dem Cache</div>
+              <div class="tile-value" id="stCached">–</div>
+              <div class="tile-note" data-i18n="stat.cachedNote">Prompt-Tokens, die nicht gerechnet werden mussten</div>
+            </div>
+            <div class="tile">
+              <div class="tile-label"><span data-i18n="stat.efficiency">Cache-Effizienz</span> <span class="info" data-i18n-tip="tip.efficiency">ⓘ</span></div>
+              <div class="tile-value"><span id="stEff">–</span> <span class="unit">%</span></div>
+              <div class="meter"><div id="stEffBar" class="meter-fill"></div></div>
+            </div>
+            <div class="tile">
+              <div class="tile-label" data-i18n="stat.requests">Anfragen</div>
+              <div class="tile-value" id="stRequests">–</div>
+              <div class="tile-note" id="stRequestNote">–</div>
+            </div>
+          </div>
+          <div id="stNoServer" class="hint" hidden data-i18n="stats.noServer">Noch keine Messung — der Server antwortet nicht auf /metrics.</div>
+          <div class="legend stack-gap-lg">
+            <div class="legend-row"><span class="name"><span data-i18n="stat.lastTps">Last decode</span> <span class="info" data-i18n-tip="tip.lastTps">ⓘ</span></span><span class="val" id="stLastTps">–</span></div>
+            <div class="legend-row"><span class="name"><span data-i18n="stat.prefill">Prefill</span> <span class="info" data-i18n-tip="tip.prefillRate">ⓘ</span></span><span class="val" id="stPrefill">–</span></div>
+            <div class="legend-row"><span class="name" data-i18n="stat.decode">Decode (avg)</span><span class="val" id="stDecode">–</span></div>
+            <div class="legend-row"><span class="name" data-i18n="stat.model">Modell</span><span class="val" id="activeModelNote">–</span></div>
+            <div class="legend-row"><span class="name"><span data-i18n="stat.rss">RSS / model mem</span> <span class="info" data-i18n-tip="tip.rss">ⓘ</span></span><span class="val" id="stRss">–</span></div>
+            <div class="legend-row"><span class="name"><span data-i18n="stat.pgrnHw">PGRN high-water</span> <span class="info" data-i18n-tip="tip.pgrnHw">ⓘ</span></span><span class="val" id="stPgrnHw">–</span></div>
+          </div>
+          <div class="note-inline" data-i18n-html="status.note"></div>
+        </div>
+
+        <!-- 2 — streaming: the engine log, parsed once in Rust -->
+        <div class="card" id="secStreaming">
+          <div class="card-head">
+            <h2><span data-i18n="sec.streaming">SSD-Streaming</span> <span class="info" data-i18n-tip="tip.liveMonitor">ⓘ</span></h2>
+            <span class="head-note" id="stStreamState">–</span>
           </div>
           <div class="arena">
             <div class="arena-head">
-              <span class="chart-label" data-i18n="chart.arena">Expert cache — live</span>
-              <span class="arena-legend"><i class="lg lg-hot"></i><span data-i18n="arena.resident">resident hit</span> <i class="lg lg-stream"></i><span data-i18n="arena.stream">streaming from SSD</span></span>
+              <span class="chart-label" data-i18n="chart.arena">Experten-Cache — live</span>
+              <span class="arena-legend"><i class="lg lg-hot"></i><span data-i18n="arena.resident">resident bedient</span> <i class="lg lg-stream"></i><span data-i18n="arena.stream">streamt von SSD</span></span>
             </div>
             <canvas id="expertGrid" class="expert-grid"></canvas>
           </div>
           <div class="charts">
             <div class="chart">
-              <div class="chart-head"><span class="chart-label" data-i18n="chart.hit">Cache-Hit-Rate</span><span class="chart-now"><span id="hitNow">0</span> <span class="unit">%</span></span></div>
+              <div class="chart-head"><span class="chart-label" data-i18n="chart.hit">Cache-Trefferquote</span><span class="chart-now"><span id="stExperts">–</span></span></div>
               <canvas id="hitChart" class="spark"></canvas>
-              <div class="chart-note" data-i18n="chart.hitNote">resident bedient</div>
+              <div class="chart-note" data-i18n="chart.hitNote">resident bedient, kein SSD-Read</div>
             </div>
             <div class="chart">
-              <div class="chart-head"><span class="chart-label" data-i18n="chart.tokens">Tokens</span><span class="chart-now"><span id="tpsNow">0</span> <span class="unit">tok/s</span></span></div>
-              <canvas id="tpsChart" class="spark"></canvas>
-              <div class="chart-note" data-i18n="chart.tokensNote">Prefill + Decode</div>
-            </div>
-          </div>
-        </div>
-        <div class="card note-card" data-i18n-html="experts.note"></div>
-      </section>
-
-      <!-- ============ STREAMING ============ -->
-      <section class="panel" data-panel="streaming" hidden>
-        <div class="card">
-          <div class="card-head"><h2 data-i18n="sec.streaming">SSD-Streaming</h2></div>
-          <div class="charts">
-            <div class="chart">
-              <div class="chart-head"><span class="chart-label" data-i18n="chart.ssd">SSD-Durchsatz</span><span class="chart-now"><span id="ssdNow">0</span> <span class="unit">MB/s</span></span></div>
+              <div class="chart-head"><span class="chart-label" data-i18n="chart.ssd">SSD-Durchsatz</span><span class="chart-now"><span id="stSsdNow">0</span> <span class="unit">MB/s</span></span></div>
               <canvas id="ssdChart" class="spark"></canvas>
               <div class="chart-note" data-i18n="chart.ssdNote">Experten von SSD gestreamt</div>
             </div>
           </div>
-          <div class="ctrl-grid" style="margin-top:14px">
-            <div class="ctrl">
-              <div class="ctrl-head"><label for="io"><span data-i18n="lbl.io">I/O-Threads</span> <span class="info" data-i18n-tip="tip.io">ⓘ</span></label></div>
-              <select id="io">
-                <option value="1">1</option>
-                <option value="4">4</option>
-                <option value="8" selected>8</option>
-                <option value="16">16</option>
-              </select>
+          <div id="partitionNote" class="hint stack-gap"></div>
+          <div class="note-inline" data-i18n-html="experts.note"></div>
+          <div class="note-inline" data-i18n-html="streaming.note"></div>
+        </div>
+
+        <!-- 3 — memory: the host sampler's own tick, plus the plan (a forecast) -->
+        <div class="card" id="secMemory">
+          <div class="card-head"><h2 data-i18n="host.memory">Speicher</h2></div>
+          <div class="statgrid">
+            <div>
+              <div class="legend-row">
+                <span class="tile-value" style="margin:0"><span id="stMemUsed">–</span> <span class="unit">/ <span id="stMemTotal">–</span></span></span>
+                <span class="val" id="stMemPct">–</span>
+              </div>
+              <div class="stack">
+                <i id="stMemWired" class="seg-wired"></i>
+                <i id="stMemActive" class="seg-active"></i>
+                <i id="stMemComp" class="seg-comp"></i>
+                <i id="stMemFree" class="seg-free"></i>
+              </div>
+              <div class="legend">
+                <div class="legend-row"><span class="dot seg-wired"></span><span class="name" data-i18n="host.wired">Wired</span><span class="val" id="stWired">–</span></div>
+                <div class="legend-row"><span class="dot seg-active"></span><span class="name" data-i18n="host.active">Aktiv</span><span class="val" id="stActive">–</span></div>
+                <div class="legend-row"><span class="dot seg-comp"></span><span class="name" data-i18n="host.compressed">Komprimiert</span><span class="val" id="stCompressed">–</span></div>
+                <div class="legend-row"><span class="dot seg-free"></span><span class="name" data-i18n="host.free">Frei</span><span class="val" id="stFree">–</span></div>
+              </div>
             </div>
-            <div class="ctrl">
-              <div class="ctrl-head"><label data-i18n="lbl.partition">Cache-Partition</label></div>
-              <div id="partitionNote" class="hint" style="margin-top:6px"></div>
+            <div>
+              <div class="subhead"><span data-i18n="tile.usability">Bedienbarkeit</span> <span class="info" data-i18n-tip="tip.usability">ⓘ</span></div>
+              <div class="legend-row">
+                <span class="tile-value" style="margin:0"><span id="ampel" class="ampel ampel-green">●</span> <span id="ampelText" style="font-size:15px">–</span></span>
+              </div>
+              <div class="legend-row"><span class="name" data-i18n="host.swap">Swap in Benutzung</span><span class="val" id="stSwap">–</span></div>
+              <div class="subhead stack-gap-lg" data-i18n="sec.memPlan">Speicherplan</div>
+              <div id="memPlan" class="hint"></div>
             </div>
           </div>
-          <details class="paths">
-            <summary data-i18n="adv.summary">Advanced: I/O-Hebel</summary>
-            <label class="adv-label"><span data-i18n="adv.mirror">Advanced: 2. SSD-Mirror (Dual-SSD)</span> <span class="info" data-i18n-tip="tip.mirror">ⓘ</span></label>
-            <input type="text" id="pMirror" spellcheck="false" data-i18n-ph="adv.mirrorPh" />
-            <div class="adv-warn" data-i18n="adv.mirrorWarn">⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.</div>
-            <label class="chk adv-chk"><input type="checkbox" id="bufferedReads" /> <span data-i18n="adv.buffered">Advanced: gepufferte Reads (Nicht-NVMe-Laufwerke)</span></label>
-            <label class="chk adv-chk"><input type="checkbox" id="onlinePredict" /> <span data-i18n="adv.predict">Advanced: Predictive Prefetch (experimentell)</span> <span class="info" data-i18n-tip="tip.predict">ⓘ</span></label>
-          </details>
+          <div class="note-inline" data-i18n-html="mem.note"></div>
         </div>
-        <div class="card note-card" data-i18n-html="streaming.note"></div>
+
+        <!-- 4 — system -->
+        <div class="card" id="secSystem">
+          <div class="card-head"><h2 data-i18n="sec.host">System</h2></div>
+          <div class="statgrid">
+            <div>
+              <div class="subhead">CPU</div>
+              <div class="legend-row"><span class="name" data-i18n="host.ecores">E-Kerne</span><span class="val" id="stECores">–</span></div>
+              <div class="meter"><div id="stECoreBar" class="meter-fill"></div></div>
+              <div class="legend-row stack-gap"><span class="name" data-i18n="host.pcores">P-Kerne</span><span class="val" id="stPCores">–</span></div>
+              <div class="meter"><div id="stPCoreBar" class="meter-fill"></div></div>
+              <div class="subhead stack-gap-lg">GPU</div>
+              <div class="legend-row"><span class="name" data-i18n="host.gpu">Auslastung</span><span class="val" id="stGpu">–</span></div>
+              <div class="meter"><div id="stGpuBar" class="meter-fill"></div></div>
+              <div class="legend-row stack-gap"><span class="name" data-i18n="host.gpuMem">GPU-Speicher</span><span class="val" id="stGpuMem">–</span></div>
+            </div>
+            <div>
+              <div class="subhead" data-i18n="host.section">Host</div>
+              <div class="legend-row"><span class="name"><span data-i18n="host.thermal">Thermik</span> <span class="info" data-i18n-tip="tip.thermal">ⓘ</span></span><span class="val" id="stThermal">–</span></div>
+              <div class="legend-row"><span class="name" data-i18n="host.load">Last</span><span class="val" id="stLoad">–</span></div>
+              <div class="legend-row"><span class="name" data-i18n="host.uptime">Laufzeit</span><span class="val" id="stUptime">–</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ CLUSTER / P2P ============ -->
+      <!-- Primary Slipstream P2P surface. Gate: localStorage `slipstream.p2p` (default OFF).
+           Independent of Metal/MLX start_server. -->
+      <section class="panel" data-panel="cluster" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h2 data-i18n="sec.cluster">Cluster / P2P</h2>
+            <span id="p2pPill" class="badge p2p-pill p2p-offline">offline</span>
+          </div>
+          <div class="ctrl-head">
+            <label class="chk">
+              <input type="checkbox" id="p2pEnable" />
+              <span data-i18n="lbl.p2pEnable">Enable Slipstream P2P (experimental)</span>
+            </label>
+          </div>
+          <p class="hint section-lead" data-i18n="hint.p2p">Off by default. Local Metal/MLX path unchanged.</p>
+          <div class="kv cluster-mlx-cap">
+            <span data-i18n="lbl.mlxStream">MLX streaming</span>
+            <code id="clusterMlxCap">–</code>
+            <span id="clusterMlxCapBadge" class="badge missing" hidden>–</span>
+          </div>
+          <details class="paths" id="p2pL3Details">
+            <summary data-i18n="adv.p2pL3">Advanced: L3 expert mirror</summary>
+            <p class="hint" data-i18n="hint.p2pL3">L3 expert peer mirror (separate from sealed jobs; default OFF): host — l3_expert_mirror.py export-mirror then serve-mirror; consumer — SLIPSTREAM_PGRN_L3=peer + SLIPSTREAM_PGRN_PEER_BASE=http://host:8765. See docs/P2P_MVP.md § L3.</p>
+          </details>
+          <div id="p2pPanel" hidden>
+            <div class="ctrl-grid">
+              <div class="ctrl">
+                <div class="ctrl-head"><label for="p2pListen"><span data-i18n="lbl.p2pListen">Listen address</span></label></div>
+                <input type="text" id="p2pListen" spellcheck="false" value="127.0.0.1:9002" />
+              </div>
+              <div class="ctrl">
+                <div class="ctrl-head"><label for="p2pEngine"><span data-i18n="lbl.p2pEngine">Engine</span></label></div>
+                <select id="p2pEngine">
+                  <option value="mock">mock</option>
+                  <option value="auto">auto</option>
+                  <option value="mlx">mlx</option>
+                  <option value="llama">llama</option>
+                </select>
+              </div>
+            </div>
+            <div class="p2p-actions">
+              <button id="p2pStart" class="btn btn-primary" data-i18n="btn.p2pStart">Start node</button>
+              <button id="p2pStop" class="btn" data-i18n="btn.p2pStop">Stop</button>
+            </div>
+            <div class="kv"><span data-i18n="lbl.p2pNodeId">Node ID</span><code id="p2pNodeId">–</code>
+              <button type="button" id="p2pCopyId" class="btn btn-ghost" data-i18n="btn.copy">Copy</button></div>
+            <div class="kv"><span data-i18n="lbl.p2pListenShort">Listen</span><code id="p2pListenDisp">–</code></div>
+            <div class="kv"><span data-i18n="lbl.p2pEngine">Engine</span><code id="p2pEngineDisp">mock</code></div>
+            <div class="kv"><span data-i18n="lbl.p2pState">Listener</span><code id="p2pState">stopped</code></div>
+            <div class="kv"><span data-i18n="lbl.p2pCredits">Credits</span><code id="p2pCredits">0</code>
+              <button type="button" id="p2pRefreshCredits" class="btn btn-ghost" data-i18n="btn.p2pCredits">Refresh</button></div>
+            <div class="kv"><span data-i18n="lbl.p2pSettlement">Last settle</span><code id="p2pSettlement">–</code></div>
+
+            <div class="ctrl stack-gap-lg">
+              <div class="ctrl-head"><label for="p2pBootstrap"><span data-i18n="lbl.p2pBootstrap">Bootstrap peers</span></label></div>
+              <input type="text" id="p2pBootstrap" spellcheck="false" data-i18n-ph="ph.p2pBootstrap" placeholder="127.0.0.1:9001 (comma-separated)" />
+            </div>
+            <div class="ctrl">
+              <div class="ctrl-head"><label for="p2pPeer"><span data-i18n="lbl.p2pPeer">Peer address</span></label></div>
+              <input type="text" id="p2pPeer" spellcheck="false" data-i18n-ph="ph.p2pPeer" placeholder="empty = this node / in-process loopback" />
+            </div>
+            <div class="p2p-actions">
+              <button id="p2pProbe" class="btn" data-i18n="btn.p2pProbe">Probe peers</button>
+            </div>
+            <pre id="p2pPeersOut" class="p2p-peers-out" hidden></pre>
+            <div class="ctrl stack-gap">
+              <div class="ctrl-head"><span data-i18n="lbl.p2pRecent">Recent peers</span></div>
+              <ul id="p2pRecentList" class="p2p-peer-list"></ul>
+              <p class="hint" id="p2pRecentEmpty" data-i18n="hint.p2pRecentEmpty">No peers yet — probe an address or send a job.</p>
+            </div>
+
+            <div class="ctrl-grid stack-gap-lg">
+              <div class="ctrl">
+                <div class="ctrl-head"><label for="p2pModel"><span data-i18n="lbl.p2pModel">Model</span></label></div>
+                <input type="text" id="p2pModel" spellcheck="false" value="mock" />
+              </div>
+              <div class="ctrl">
+                <div class="ctrl-head"><label for="p2pMaxTokens"><span data-i18n="lbl.p2pMaxTokens">Max tokens</span></label></div>
+                <input type="number" id="p2pMaxTokens" min="1" max="512" value="32" />
+              </div>
+            </div>
+            <div class="ctrl">
+              <div class="ctrl-head"><label for="p2pAskPrompt"><span data-i18n="lbl.p2pAskPrompt">Prompt</span></label></div>
+              <input type="text" id="p2pAskPrompt" spellcheck="true" data-i18n-ph="ph.p2pAsk" placeholder="hello slipstream p2p" />
+            </div>
+            <div class="p2p-actions">
+              <button id="p2pSendJob" class="btn" data-i18n="btn.p2pSendJob">Send job</button>
+              <button id="p2pAsk" class="btn btn-primary" data-i18n="btn.p2pAsk">Ask</button>
+            </div>
+            <details class="paths">
+              <summary data-i18n="adv.p2pHelp">How to use</summary>
+              <div class="hint-stack">
+                <p class="hint" data-i18n="hint.p2pEngine">mock = in-process (safe default). mlx/llama/auto = HTTP infer to local Slipstream (:8080) if already running — UI never spawns engines.</p>
+                <p class="hint" data-i18n="hint.p2pMulti">Two machines: Start node on each (different listen ports), put the other host:port in Bootstrap/Peer, Probe, then Ask. Keep engine=mock until :8080 is already up.</p>
+                <p class="hint" data-i18n="hint.p2pAsk">When the local server is stopped, Chat also routes here if P2P is enabled.</p>
+              </div>
+            </details>
+            <p class="hint p2p-note" id="p2pNote"></p>
+          </div>
+        </div>
       </section>
 
       <!-- ============ LOGS ============ -->
@@ -298,7 +525,7 @@
         <div class="card">
           <div class="card-head">
             <h2 data-i18n="sec.logs">Logs &amp; Diagnose</h2>
-            <div style="display:flex;gap:10px;align-items:center">
+            <div class="card-tools">
               <select id="logSrc">
                 <option value="server" data-i18n="logs.server">Server</option>
                 <option value="download" data-i18n="logs.download">Download</option>
@@ -316,15 +543,126 @@
       <section class="panel" data-panel="settings" hidden>
         <div class="card">
           <h2 data-i18n="sec.settings">Einstellungen</h2>
+          <div class="ctrl">
+            <div class="ctrl-head"><label for="backendSel"><span data-i18n="lbl.backend">Backend</span> <span class="info" data-i18n-tip="tip.backend">ⓘ</span></label></div>
+            <select id="backendSel">
+              <option value="auto" data-i18n="backend.auto">Auto (hybrid)</option>
+              <option value="metal" data-i18n="backend.metal">llama.cpp · Metal + PGRN (SSD-Streaming)</option>
+              <option value="mlx" data-i18n="backend.mlx">MLX + SSD PGRN (wenn Sidecar gebündelt)</option>
+            </select>
+            <div class="hint-stack">
+              <p class="hint" id="productSsdLine" data-i18n="hint.ssdStream">Modelle größer als RAM streamen von der SSD.</p>
+              <p class="hint" id="backendNote" data-i18n="hint.backend">Auto: kurz/warm → MLX wenn experts.pgrn, langer Prefill → Metal. Explizite Wahl bleibt sticky.</p>
+              <p class="hint" data-i18n="hint.codingPreset">Coding-Preset: Thinking aus, greedy (temp 0).</p>
+              <p class="hint" data-i18n="hint.startPath">Models folder → Backend Auto → Start</p>
+            </div>
+            <p class="hint" id="mlxCapNote" hidden></p>
+            <button type="button" id="mlxRuntimeBtn" class="btn stack-gap" hidden data-i18n="btn.mlxRuntime">MLX-Runtime installieren</button>
+          </div>
+          <!-- Secondary paths collapsed: primary Models folder lives on Models tab. -->
+          <details class="paths" id="pathOverridesAdvanced">
+            <summary data-i18n="adv.paths">Advanced: optional overflow / path overrides</summary>
+            <p class="hint" data-i18n="hint.pathOverrides">Only if GGUF or MLX live outside the Models folder (second SSD / custom layout).</p>
+            <div class="ctrl" id="mlxDirWrap" hidden>
+              <div class="ctrl-head"><label for="pMlx"><span data-i18n="lbl.mlxDir">MLX directory (override)</span></label></div>
+              <input type="text" id="pMlx" spellcheck="false" placeholder="~/Modelle/mlx" />
+              <p class="hint" data-i18n="hint.mlxDir">Optional override. Default is &lt;Models folder&gt;/mlx. Leave alone unless MLX trees live elsewhere.</p>
+            </div>
+            <div class="ctrl stack-gap" id="extBaseWrap">
+              <div class="ctrl-head"><label for="extBase"><span data-i18n="lbl.extBase">GGUF on second SSD (optional overflow)</span> <span class="info" data-i18n-tip="tip.extBase">ⓘ</span></label></div>
+              <input type="text" id="extBase" spellcheck="false" placeholder="/Volumes/…/Modelle" />
+              <p class="hint" data-i18n="hint.extBase">Optional overflow. Empty = GGUF next to PGRN in the Models folder.</p>
+            </div>
+          </details>
+          <div class="ctrl" id="mlxToolsSettingsWrap" hidden>
+            <div class="ctrl-head">
+              <label class="chk">
+                <input type="checkbox" id="settingsMlxTools" />
+                <span data-i18n="lbl.mlxTools">Enable tools (MLX)</span>
+                <span class="info" data-i18n-tip="tip.mlxTools">ⓘ</span>
+              </label>
+            </div>
+            <p class="hint" data-i18n="hint.mlxTools">When on, chat completions send a small tools array to oMLX (time + calculator). Chat toolbar checkbox stays in sync. Metal path unchanged.</p>
+          </div>
+          <div class="ctrl" id="mlxLeverNote" hidden>
+            <p class="hint" data-i18n="hint.mlxLevers">MLX uses Tools / JSON / Schema in the Chat bar. Compact + Grammar drafts are Metal-only; choose Metal or Auto for those.</p>
+          </div>
+          <!-- MLX-only SLIPSTREAM_PGRN_* levers — Advanced disclosure; smart defaults stay. -->
+          <div class="ctrl" id="mlxPgrnSettingsWrap" hidden>
+            <p class="hint" data-i18n="hint.mlxPgrnDefaults">MLX-Defaults: touch · cold_io=0 · balanced · keep-hot. Selten nötig zu ändern.</p>
+            <details class="paths" id="mlxPgrnAdvanced">
+              <summary data-i18n="adv.mlxPgrn">Advanced: Profil / Residency / L3 / MCP</summary>
+              <div class="ctrl-head stack-gap">
+                <label for="pgrnProfile">
+                  <span data-i18n="sec.mlxPgrn">Slipstream Settings (MLX)</span>
+                  <span class="info" data-i18n-tip="tip.mlxPgrn">ⓘ</span>
+                </label>
+              </div>
+              <div class="hint-stack">
+                <p class="hint" data-i18n="hint.mlxPgrn">Passed as SLIPSTREAM_PGRN_* on MLX start. Default: touch + keep-hot + io16 (no cold boost). mlock opt-in. Prefetch stays off unless set outside the app.</p>
+                <p class="hint" data-i18n="hint.mlxMemGuard">Memory guard: default is --memory-guard-gb = total RAM − 3 GiB headroom. Long coding/full-PGRN can hit the Metal wired cap (~28 GiB) and fail with prefill_memory_exceeded — close apps, shrink context, enable “Memory guard off” below, or raise iogpu.wired_limit_mb (sudo). Cold-io stays 0 (profile io16). Start refuses if free+inactive &lt; 4 GiB; warns below 8 GiB.</p>
+              </div>
+              <div class="ctrl-head stack-gap">
+                <label class="chk">
+                  <input type="checkbox" id="memoryGuardOff" />
+                  <span data-i18n="lbl.memoryGuardOff">Memory guard off</span>
+                  <span class="info" data-i18n-tip="tip.memoryGuardOff">ⓘ</span>
+                </label>
+              </div>
+              <div class="ctrl-grid stack-gap">
+                <div class="ctrl">
+                  <div class="ctrl-head"><label for="pgrnProfile"><span data-i18n="lbl.pgrnProfile">Profile</span></label></div>
+                  <select id="pgrnProfile">
+                    <option value="balanced" data-i18n="pgrn.profile.balanced">balanced (default)</option>
+                    <option value="quality" data-i18n="pgrn.profile.quality">quality</option>
+                    <option value="fast" data-i18n="pgrn.profile.fast">fast</option>
+                  </select>
+                  <p class="hint" id="pgrnProfileHint" data-i18n="hint.pgrnProfileBalanced">Caps: capacity 4096 · hot 2048 · io_width 16</p>
+                </div>
+                <div class="ctrl">
+                  <div class="ctrl-head"><label for="pgrnResidency"><span data-i18n="lbl.pgrnResidency">Residency</span> <span class="info" data-i18n-tip="tip.pgrnResidency">ⓘ</span></label></div>
+                  <select id="pgrnResidency">
+                    <option value="touch" data-i18n="pgrn.residency.touch" selected>touch (default)</option>
+                    <option value="mlock" data-i18n="pgrn.residency.mlock">mlock (opt-in)</option>
+                    <option value="off" data-i18n="pgrn.residency.off">off</option>
+                  </select>
+                </div>
+              </div>
+              <div class="ctrl-head stack-gap">
+                <label class="chk">
+                  <input type="checkbox" id="pgrnKeepHot" checked />
+                  <span data-i18n="lbl.pgrnKeepHot">Keep hot (MX protect)</span>
+                  <span class="info" data-i18n-tip="tip.pgrnKeepHot">ⓘ</span>
+                </label>
+              </div>
+              <div class="ctrl-head stack-gap">
+                <label class="chk">
+                  <input type="checkbox" id="pgrnWarmup" checked />
+                  <span data-i18n="lbl.pgrnWarmup">Warmup on load</span>
+                  <span class="info" data-i18n-tip="tip.pgrnWarmup">ⓘ</span>
+                </label>
+              </div>
+              <div class="ctrl stack-gap">
+                <div class="ctrl-head"><label for="pgrnPeerBase"><span data-i18n="lbl.pgrnPeerBase">L3 peer base (optional)</span> <span class="info" data-i18n-tip="tip.pgrnPeerBase">ⓘ</span></label></div>
+                <input type="text" id="pgrnPeerBase" spellcheck="false" data-i18n-ph="ph.pgrnPeerBase" placeholder="http://192.168.1.10:8765" />
+                <p class="hint" data-i18n="hint.pgrnPeerBase">Empty = L3 OFF. Non-empty sets SLIPSTREAM_PGRN_L3=peer + PEER_BASE on MLX start.</p>
+              </div>
+              <div class="ctrl stack-gap">
+                <div class="ctrl-head"><label for="mcpConfig"><span data-i18n="lbl.mcpConfig">MCP config (optional)</span> <span class="info" data-i18n-tip="tip.mcpConfig">ⓘ</span></label></div>
+                <input type="text" id="mcpConfig" spellcheck="false" data-i18n-ph="ph.mcpConfig" placeholder="/path/to/mcp.json" />
+                <p class="hint" data-i18n="hint.mcpConfig">Empty = MCP OFF. Non-empty sets OMLX_MCP_CONFIG + --mcp-config so oMLX merges server tools into chat/messages/responses.</p>
+              </div>
+            </details>
+          </div>
           <div class="reco">
-            <div class="reco-icon">✨</div>
+            <div class="reco-mark" aria-hidden="true"></div>
             <div class="reco-body">
               <div class="reco-title" data-i18n="reco.title">Auto-Empfehlung für deinen Mac</div>
               <div id="recoText" class="hint">Ermittle Werte…</div>
             </div>
             <button id="applyReco" class="btn btn-primary" data-i18n="btn.applyBest">Beste anwenden</button>
           </div>
-          <div class="ctrl">
+          <div class="ctrl" id="metalCacheCtrl">
             <div class="ctrl-head">
               <label for="cache"><span data-i18n="lbl.cache">Cache-Größe</span> <span class="info" data-i18n-tip="tip.cache">ⓘ</span></label>
               <span class="val"><span id="cacheVal">10</span> GiB</span>
@@ -344,40 +682,77 @@
             </div>
             <div class="ctrl">
               <div class="ctrl-head"><label class="chk"><input type="checkbox" id="specMtp" checked /> <span data-i18n="lbl.mtp">MTP-Speed</span> <span class="info" data-i18n-tip="tip.mtp">ⓘ</span></label></div>
-              <div class="ctrl-head" style="margin-top:10px"><label class="chk"><input type="checkbox" id="thinking" /> <span data-i18n="lbl.thinking">Thinking</span> <span class="info" data-i18n-tip="tip.thinking">ⓘ</span></label></div>
+              <div class="ctrl-head stack-gap"><label class="chk"><input type="checkbox" id="thinking" /> <span data-i18n="lbl.thinking">Thinking</span> <span class="info" data-i18n-tip="tip.thinking">ⓘ</span></label></div>
             </div>
-            <div class="ctrl">
+            <div class="ctrl" id="metalDraftCtrl">
               <div class="ctrl-head"><label class="chk"><input type="checkbox" id="compactSlots" checked /> <span data-i18n="lbl.compact">Compact (schneller)</span> <span class="info" data-i18n-tip="tip.compact">ⓘ</span></label></div>
-              <div class="ctrl-head" style="margin-top:10px"><label class="chk"><input type="checkbox" id="grammarDraft" checked /> <span data-i18n="lbl.grammar">Grammar-Drafts (JSON/Tools)</span> <span class="info" data-i18n-tip="tip.grammar">ⓘ</span></label></div>
+              <div class="ctrl-head stack-gap"><label class="chk"><input type="checkbox" id="grammarDraft" checked /> <span data-i18n="lbl.grammar">Grammar-Drafts (JSON/Tools)</span> <span class="info" data-i18n-tip="tip.grammar">ⓘ</span></label></div>
             </div>
           </div>
-          <div class="ctrl" style="margin-top:14px">
-            <div class="ctrl-head"><label for="extBase"><span data-i18n="lbl.extBase">GGUF-Verzeichnis (zweite SSD, optional)</span> <span class="info" data-i18n-tip="tip.extBase">ⓘ</span></label></div>
-            <input type="text" id="extBase" spellcheck="false" placeholder="/Volumes/…/Modelle" />
-            <p class="hint" data-i18n="hint.extBase">Leer lassen, wenn alles auf einer Platte liegt.</p>
+        </div>
+
+        <!-- Soft-secondary: not on primary click journey; still accessible. -->
+        <details class="card soft-secondary" id="p2pSettingsSoft">
+          <summary class="soft-secondary-summary">
+            <span data-i18n="sec.p2p">P2P node</span>
+            <span class="soft-secondary-tag" data-i18n="journey.optional">optional</span>
+          </summary>
+          <div class="ctrl-head">
+            <label class="chk">
+              <input type="checkbox" id="p2pEnableSettings" />
+              <span data-i18n="lbl.p2pEnable">Enable Slipstream P2P (experimental)</span>
+            </label>
           </div>
+          <p class="hint" data-i18n="hint.p2pSettings">Start/stop, peers, jobs, and credits are on the Cluster tab.</p>
+          <button id="p2pGotoCluster" type="button" class="btn" data-i18n="btn.p2pGotoCluster">Open Cluster</button>
+        </details>
+
+        <!-- These four used to sit in the Streaming panel, mixed in with its
+             readings. They steer the next server start; the live view only
+             watches, so they belong here. -->
+        <div class="card" id="metalStreamingCard">
+          <div class="card-head"><h2 data-i18n="sec.streaming">SSD-Streaming</h2></div>
+          <div class="ctrl-grid">
+            <div class="ctrl">
+              <div class="ctrl-head"><label for="io"><span data-i18n="lbl.io">I/O-Threads</span> <span class="info" data-i18n-tip="tip.io">ⓘ</span></label></div>
+              <select id="io">
+                <option value="1">1</option>
+                <option value="4">4</option>
+                <option value="8" selected>8</option>
+                <option value="16">16</option>
+              </select>
+            </div>
+          </div>
+          <details class="paths">
+            <summary data-i18n="adv.summary">Advanced: I/O-Hebel</summary>
+            <label class="adv-label"><span data-i18n="adv.mirror">Advanced: 2. SSD-Mirror (Dual-SSD)</span> <span class="info" data-i18n-tip="tip.mirror">ⓘ</span></label>
+            <input type="text" id="pMirror" spellcheck="false" data-i18n-ph="adv.mirrorPh" />
+            <div class="adv-warn" data-i18n="adv.mirrorWarn">⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.</div>
+            <label class="chk adv-chk"><input type="checkbox" id="bufferedReads" /> <span data-i18n="adv.buffered">Advanced: gepufferte Reads (Nicht-NVMe-Laufwerke)</span></label>
+            <label class="chk adv-chk"><input type="checkbox" id="onlinePredict" /> <span data-i18n="adv.predict">Advanced: Predictive Prefetch (experimentell)</span> <span class="info" data-i18n-tip="tip.predict">ⓘ</span></label>
+          </details>
         </div>
 
         <div class="card">
           <h2 data-i18n="sec.connectAgent">Coding-Agent verbinden</h2>
-          <p class="hint" style="margin-top:0" data-i18n="agent.intro">…</p>
+          <p class="hint section-lead" data-i18n="agent.intro">…</p>
           <div class="kv"><span>Base URL</span><code id="kUrl">http://127.0.0.1:8080/v1</code><button class="btn btn-ghost copy" data-i18n="btn.copy" data-copy="kUrl">Kopieren</button></div>
           <div class="kv"><span>Model</span><code>slipstream</code><button class="btn btn-ghost copy" data-i18n="btn.copy" data-copy-text="slipstream">Kopieren</button></div>
           <div class="kv"><span>API Key</span><code>sk-local</code><button class="btn btn-ghost copy" data-i18n="btn.copy" data-copy-text="sk-local">Kopieren</button></div>
           <div id="agentList" class="agents"></div>
-          <div id="agentNote" class="hint" style="margin-top:12px; min-height:16px"></div>
+          <div id="agentNote" class="hint stack-gap" style="min-height:16px"></div>
         </div>
 
         <div class="card">
           <div class="card-head">
             <h2><span data-i18n="sec.indexing">Indexierung</span> <span class="info" data-i18n-tip="tip.indexing">ⓘ</span></h2>
-            <div style="display:flex;gap:10px;align-items:center">
+            <div class="card-tools">
               <span id="idxBadge" class="badge">–</span>
               <button id="idxSetup" class="btn btn-primary" data-mode="start">Einrichten &amp; starten</button>
             </div>
           </div>
-          <p class="hint" style="margin-top:0" data-i18n="idx.intro">…</p>
-          <div id="idxStep" class="tile-note" style="min-height:15px;color:var(--accent-soft)"></div>
+          <p class="hint section-lead" data-i18n="idx.intro">…</p>
+          <div id="idxStep" class="tile-note idx-step"></div>
 
           <div class="svc">
             <div class="svc-info">
@@ -406,6 +781,7 @@
         </div>
       </section>
     </main>
+    </div>
   </div>
 
   <div id="toast" class="toast"></div>

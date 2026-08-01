@@ -1,0 +1,21 @@
+[package]
+name = "p2p-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Inference engine adapters for Slipstream P2P (mock, MLX/oMLX, llama-PGRN)"
+
+[features]
+default = []
+# Real process launch for oMLX / llama-server. Off by default — CI and local
+# tests stay mock-safe (no GPU, no child process spawn).
+launch = []
+
+[dependencies]
+p2p-core = { workspace = true }
+serde_json = { workspace = true }
+# json only; localhost Slipstream is http:// (no TLS required for MVP).
+ureq = { version = "2", default-features = false, features = ["json"] }
+
+[dev-dependencies]
+tempfile = "3"

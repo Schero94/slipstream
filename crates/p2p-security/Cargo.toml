@@ -1,0 +1,16 @@
+[package]
+name = "p2p-security"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Documentation-driven security contracts and attack-scenario tests for Slipstream P2P"
+
+[dependencies]
+thiserror = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+p2p-core = { workspace = true }
+p2p-crypto = { workspace = true }
+hex = "0.4"

@@ -1,7 +1,13 @@
 # build artifacts
+target/
 app/src-tauri/target/
 app/src-tauri/gen/
+# engine binaries staged locally for bundle (not in git)
 app/src-tauri/resources/llama-server
+app/src-tauri/resources/pgrn-convert
+app/src-tauri/resources/omlx-pgrn/omlx/
+app/src-tauri/resources/omlx-pgrn/libpgrn_host.dylib
+app/src-tauri/resources/omlx-pgrn/*.dylib
 llama.cpp-slipstream/
 build-static/
 # os / editor

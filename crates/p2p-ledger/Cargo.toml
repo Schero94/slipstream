@@ -1,0 +1,15 @@
+[package]
+name = "p2p-ledger"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Credits ledger for P2P inference: credit providers, debit consumers, idempotent settlement"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = { workspace = true }

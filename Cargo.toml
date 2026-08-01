@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/p2p-node",
+  "crates/p2p-core",
+  "crates/p2p-crypto",
+  "crates/p2p-engine",
+  "crates/p2p-router",
+  "crates/p2p-ledger",
+  "crates/p2p-net",
+  "crates/p2p-security",
+]
+exclude = ["app/src-tauri"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.2.31"
+
+[workspace.dependencies]
+p2p-core = { path = "crates/p2p-core" }
+p2p-crypto = { path = "crates/p2p-crypto" }
+p2p-engine = { path = "crates/p2p-engine" }
+p2p-router = { path = "crates/p2p-router" }
+p2p-ledger = { path = "crates/p2p-ledger" }
+p2p-net = { path = "crates/p2p-net" }
+p2p-security = { path = "crates/p2p-security" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }

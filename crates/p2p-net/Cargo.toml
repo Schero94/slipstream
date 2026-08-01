@@ -1,0 +1,24 @@
+[package]
+name = "p2p-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LAN/dev TCP transport for Slipstream P2P token-torrent (length-prefixed frames)"
+
+[features]
+default = []
+# Optional LAN discovery via mDNS (mdns-sd). Bootstrap list remains primary.
+mdns = ["dep:mdns-sd"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+p2p-security = { workspace = true }
+hex = "0.4"
+mdns-sd = { version = "0.11", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+p2p-security = { workspace = true }

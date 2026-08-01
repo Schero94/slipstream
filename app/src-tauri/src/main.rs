@@ -5,11 +5,15 @@ use serde_json::{json, Map, Value};
 use std::fs::OpenOptions;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
-    tray::TrayIconBuilder,
-    Manager, State,
-};
+
+mod mlx;
+mod p2p;
+mod servestats;
+mod sysstats;
+mod teardown;
+mod tray;
+
+use tauri::{Manager, State};
 
 const LOG_PATH: &str = "/tmp/peregrine-control-server.log";
 const DL_LOG: &str = "/tmp/peregrine-download.log";
@@ -34,6 +38,124 @@ struct AppState {
     setup: Mutex<Option<Child>>,
 }
 
+/// The readings the menubar poller takes, held where the window can read them
+/// too. One sampler for both means the menu and the Status panel cannot disagree,
+/// and that opening a panel costs no extra `/metrics` request.
+struct Live {
+    serving: Mutex<servestats::Store>,
+    system: Mutex<sysstats::SysSnapshot>,
+    /// oMLX `/api/status` extras (PGRN hit-rate, RSS) — filled by the tray poller.
+    api_extras: Mutex<servestats::ApiExtras>,
+}
+
+/// Everything the Status panel draws, in one call.
+#[tauri::command]
+fn live_stats(live: State<Live>, state: State<AppState>) -> Value {
+    // Hold Live mutexes only long enough to copy. Expert-cache parsing and any
+    // other I/O stays outside — the tray poller used to nest HTTP under these
+    // same locks and hang the window (main thread waiting on live_stats).
+    let (system, session, alltime, serving_available, extras) = {
+        let serving = live
+            .serving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let system = live
+            .system
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let extras = live
+            .api_extras
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        (
+            system,
+            serving.session(),
+            serving.alltime(),
+            serving.has_reading(),
+            extras,
+        )
+    };
+    // Metal: last decode line from the engine log. MLX: lifetime avg from /api/status
+    // when the log has no eval-time / output= line.
+    let last_tps = last_tps().or(extras.avg_generation_tps);
+    let experts = tray::expert_cache(&state).or_else(|| {
+        extras.has_pgrn().then(|| tray::ExpertCache {
+            hits: extras.pgrn_hits.unwrap_or(0),
+            misses: extras.pgrn_misses.unwrap_or(0),
+            hit_rate: extras.pgrn_hit_rate.unwrap_or(0.0),
+        })
+    });
+    // Prefer oMLX-reported RSS; else `ps` on the child we own (Metal path has no
+    // /api/status). Never invent a number — UI shows "–" when both are absent.
+    let process_rss = extras
+        .process_rss_bytes
+        .or_else(|| server_child_rss_bytes(&state));
+    let (rss_bytes, rss_source) = match (process_rss, extras.model_memory_bytes) {
+        (Some(b), _) => (Some(b), Some("process")),
+        (None, Some(b)) => (Some(b), Some("model_memory")),
+        _ => (None, None),
+    };
+    json!({
+        "system": system,
+        "session": session,
+        "alltime": alltime,
+        // False until a server answered /metrics: the panel then says so instead
+        // of drawing a row of zeroes that look like a measurement.
+        "serving_available": serving_available,
+        // Hit rate and misses in one object: the window draws the rate and derives
+        // SSD throughput from the miss delta, both off this single parse.
+        "experts": experts,
+        // Last completed decode (Metal/oMLX log) or oMLX avg_generation_tps fallback.
+        "last_tps": last_tps,
+        "model_memory_bytes": extras.model_memory_bytes,
+        "process_rss_bytes": process_rss,
+        // Unified RSS for the status strip: process preferred, model_memory fallback.
+        "rss_bytes": rss_bytes,
+        "rss_source": rss_source,
+        "pgrn_high_water_bytes": extras.pgrn_high_water_bytes,
+        "pgrn_mx_size": extras.pgrn_mx_size,
+    })
+}
+
+/// Current RSS of the server child this app spawned (`ps` KiB → bytes).
+/// None when we do not own the process or `ps` fails — honest empty for UI.
+fn server_child_rss_bytes(state: &AppState) -> Option<u64> {
+    let pid = {
+        let guard = state.server.lock().ok()?;
+        guard.as_ref().map(|c| c.id())?
+    };
+    let out = Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let kib: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+    (kib > 0).then_some(kib.saturating_mul(1024))
+}
+
+/// Resets one scope. The session is ours to offset; the all-time total is ours to
+/// delete. Neither touches the running server.
+#[tauri::command]
+fn clear_stats(scope: String, live: State<Live>) -> Result<(), String> {
+    let mut serving = live
+        .serving
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match scope.as_str() {
+        "session" => serving.clear_session(),
+        "alltime" => {
+            serving.clear_alltime();
+            serving.persist();
+        }
+        other => return Err(format!("unknown scope: {other}")),
+    }
+    Ok(())
+}
+
 /// HTTP status code of a GET (via curl), or 0 if the connection was refused.
 /// Used to detect a live/ready server we may not own the child handle for.
 fn http_status(url: &str) -> u16 {
@@ -43,6 +165,18 @@ fn http_status(url: &str) -> u16 {
         .ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u16>().ok())
         .unwrap_or(0)
+}
+
+/// Body of a GET, or None if the request failed. Same curl route as
+/// `http_status` so there is one HTTP mechanism in this app, not two.
+fn http_body(url: &str) -> Option<String> {
+    let out = Command::new("curl")
+        .args(["-s", "-m", "2", "--fail", url])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// True if anything is listening on 127.0.0.1:port (llama.cpp answers /health
@@ -84,12 +218,8 @@ fn alive(slot: &Mutex<Option<Child>>) -> bool {
 }
 
 fn kill(slot: &Mutex<Option<Child>>) {
-    if let Ok(mut g) = slot.lock() {
-        if let Some(mut c) = g.take() {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-    }
+    // SIGTERM first so launcher EXIT traps (oMLX lock release) can run.
+    let _ = teardown::kill_child_graceful(slot, 2000);
 }
 
 // ---------------------------------------------------------------- server ----
@@ -119,16 +249,76 @@ struct ServerConfig {
     grammar_draft: bool, // default-on: grammar-forced drafts for structured output (JSON/tool-calls); adaptive-guarded + lossless. Measured +45% tok/s fetch-bound on rigid schemas, neutral on easy JSON (guard stands down)
     #[serde(default = "default_kv_quant")]
     kv_quant: String, // per-model KV type: "q8_0" for full-attention models (KV-RAM becomes cache headroom), "f16" for hybrids (S1 measured q8-KV at -12..-28% decode on the resident hybrid 35B; its linear-attention KV is tiny, so q8 buys nothing there)
+    /// "metal" | "mlx" | "auto" | "heuristic". Auto/heuristic resolved at start (see mlx::resolve_backend).
+    #[serde(default = "default_backend")]
+    backend: String,
+    /// Parent directory of MLX model subdirs (`--model-dir`). Empty → default SSD path.
+    #[serde(default)]
+    mlx_dir: String,
+    /// Optional absolute path to the `omlx` binary.
+    #[serde(default)]
+    omlx_bin: String,
+    /// Estimated prompt size (chars) for Auto hybrid: long → Metal, short/warm → MLX.
+    #[serde(default)]
+    prompt_chars: usize,
+    /// MLX-only: `SLIPSTREAM_PGRN_PROFILE` (`balanced` | `quality` | `fast`).
+    #[serde(default = "default_pgrn_profile")]
+    pgrn_profile: String,
+    /// MLX-only: `SLIPSTREAM_PGRN_RESIDENCY` (`mlock` | `touch` | `off`).
+    #[serde(default = "default_pgrn_residency")]
+    pgrn_residency: String,
+    /// MLX-only: `SLIPSTREAM_PGRN_KEEP_HOT` (default on).
+    #[serde(default = "default_true")]
+    pgrn_keep_hot: bool,
+    /// MLX-only: `SLIPSTREAM_PGRN_WARMUP` (default on).
+    #[serde(default = "default_true")]
+    pgrn_warmup: bool,
+    /// MLX-only: when set → `SLIPSTREAM_PGRN_L3=peer` + `PEER_BASE`. Metal ignores.
+    #[serde(default)]
+    pgrn_l3_peer_base: String,
+    /// MLX-only: path to MCP JSON/YAML → `OMLX_MCP_CONFIG` + `--mcp-config`.
+    /// Empty (default) → MCP OFF (no server-side tool merge).
+    #[serde(default)]
+    mcp_config: String,
+    /// MLX-only: Settings opt-in → `--memory-guard off` (Metal wired ~28 GiB escape).
+    /// Default false → `--memory-guard-gb` = total − headroom.
+    #[serde(default)]
+    memory_guard_off: bool,
+}
+
+fn annotate_auto_backend(preference: &str, effective: &str, msg: String) -> String {
+    if matches!(preference, "auto" | "heuristic") {
+        format!("Auto → {effective}: {msg}")
+    } else {
+        msg
+    }
 }
 
 fn default_true() -> bool { true }
 fn default_kv_quant() -> String { "q8_0".into() }
+fn default_backend() -> String { "metal".into() }
+fn default_pgrn_profile() -> String { "balanced".into() }
+fn default_pgrn_residency() -> String { "touch".into() }
 
 #[tauri::command]
-fn start_server(cfg: ServerConfig, state: State<AppState>) -> Result<String, String> {
+fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>) -> Result<String, String> {
     let mut guard = state.server.lock().map_err(|e| e.to_string())?;
     if guard.is_some() {
         return Err("Server läuft bereits - erst stoppen.".into());
+    }
+    let mlx_model_dir = {
+        let trimmed = cfg.mlx_dir.trim();
+        if trimmed.is_empty() {
+            mlx::default_model_dir()
+        } else {
+            std::path::PathBuf::from(trimmed)
+        }
+    };
+    let has_experts = mlx::any_experts_sidecar(&mlx_model_dir);
+    let effective = mlx::resolve_backend(&cfg.backend, cfg.prompt_chars, has_experts);
+    if effective == "mlx" {
+        let msg = start_mlx_server(&app, &cfg, &mut *guard)?;
+        return Ok(annotate_auto_backend(&cfg.backend, effective, msg));
     }
     if file_size(&cfg.model) == 0 {
         return Err("Modell (.gguf) fehlt - erst herunterladen.".into());
@@ -179,6 +369,8 @@ fn start_server(cfg: ServerConfig, state: State<AppState>) -> Result<String, Str
         "--host", "127.0.0.1",
         "--port", &cfg.port.to_string(),
         "--no-warmup",
+        // Serving counters for the menubar's Serving Stats submenu.
+        "--metrics",
     ]);
     // KV type per model family: f16 = engine default (skip the flags entirely).
     if !cfg.kv_quant.is_empty() && cfg.kv_quant != "f16" {
@@ -198,10 +390,15 @@ fn start_server(cfg: ServerConfig, state: State<AppState>) -> Result<String, Str
     if cfg.io_threads > 1 {
         cmd.arg("--pgrn-io-threads").arg(cfg.io_threads.to_string());
     }
-    // Speculative decoding is model-specific: Qwen ships an MTP head (no draft
+    // Speculative decoding is model-specific: Qwen Q4 ships an MTP head (no draft
     // file); Laguna uses a separate DFlash draft. "none" disables it.
-    if cfg.spec_type != "none" && !cfg.spec_type.is_empty() {
-        cmd.args(["--spec-type", &cfg.spec_type, "--spec-draft-n-max", "4"]);
+    // UD-Q5_K_XL / UD-Q6 have no MTP layers — draft-max=4 aborts load (MTP context).
+    let model_lc = cfg.model.to_ascii_lowercase();
+    let no_mtp_quant = model_lc.contains("ud-q5") || model_lc.contains("ud-q6")
+        || model_lc.contains("q5_k_xl") || model_lc.contains("q6_k_xl");
+    let spec_type = if no_mtp_quant { "none".to_string() } else { cfg.spec_type.clone() };
+    if spec_type != "none" && !spec_type.is_empty() {
+        cmd.args(["--spec-type", &spec_type, "--spec-draft-n-max", "4"]);
         if !cfg.draft_model.is_empty() && file_size(&cfg.draft_model) > 0 {
             cmd.args(["--model-draft", &cfg.draft_model, "--spec-draft-ngl", "99"]);
         }
@@ -224,18 +421,182 @@ fn start_server(cfg: ServerConfig, state: State<AppState>) -> Result<String, Str
     cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log_err));
     let child = cmd.spawn().map_err(|e| format!("Start fehlgeschlagen: {e}"))?;
     *guard = Some(child);
-    Ok("Server gestartet - lädt Modell (~60s)...".into())
+    Ok(annotate_auto_backend(
+        &cfg.backend,
+        "metal",
+        "Server gestartet - lädt Modell (~60s)...".into(),
+    ))
+}
+
+fn resource_dir_of(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().resource_dir().ok()
+}
+
+/// MLX via forked oMLX + PGRN when the launcher is present; else stock resident
+/// `omlx serve`. Memory ceiling comes from Slipstream (`headroom_gb`).
+fn start_mlx_server(
+    app: &tauri::AppHandle,
+    cfg: &ServerConfig,
+    slot: &mut Option<Child>,
+) -> Result<String, String> {
+    let model_dir = {
+        let trimmed = cfg.mlx_dir.trim();
+        if trimmed.is_empty() {
+            mlx::default_model_dir()
+        } else {
+            std::path::PathBuf::from(trimmed)
+        }
+    };
+    let rd = resource_dir_of(app);
+    let rd_ref = rd.as_deref();
+    let streaming_launcher = mlx::pgrn_launcher(rd_ref).is_some();
+    let has_sidecar = mlx::any_experts_sidecar(&model_dir);
+    let need = mlx::largest_model_gib(&model_dir);
+    let total_gib = sysctl_total_gib().unwrap_or(36.0);
+    let free_gib = vm_stat_free_inactive_gib().unwrap_or(0.0);
+    let ceiling = (total_gib - cfg.headroom_gb).max(1.0);
+    if free_gib > 0.0 && free_gib < mlx::MLX_MIN_FREE_GIB {
+        return Err(mlx::mlx_critical_free_refuse_msg(free_gib, mlx::MLX_MIN_FREE_GIB));
+    }
+    // Streaming: expert banks stay on SSD — do not refuse on full safetensors size.
+    // Resident: refuse when the largest model cannot fit under the memory ceiling.
+    if !(streaming_launcher && has_sidecar) {
+        if need > 0.0 && need + 1.0 > ceiling {
+            return Err(mlx::mlx_resident_refuse_msg(
+                need,
+                ceiling,
+                cfg.headroom_gb,
+                free_gib,
+            ));
+        }
+    }
+    // PGRN launcher uses Slipstream mlx-runtime (or legacy oMLX.app) — stock
+    // `omlx` binary only needed for resident fallback without the launcher.
+    let omlx = if streaming_launcher {
+        std::path::PathBuf::from("omlx-unused")
+    } else {
+        mlx::resolve_omlx(&cfg.omlx_bin)?
+    };
+    let pgrn_env = mlx::PgrnMlxEnv::from_parts(
+        &cfg.pgrn_profile,
+        &cfg.pgrn_residency,
+        cfg.pgrn_keep_hot,
+        cfg.pgrn_warmup,
+        cfg.pgrn_online,
+        &cfg.pgrn_l3_peer_base,
+        &cfg.mcp_config,
+    );
+    let (mut cmd, streaming) = mlx::serve_command(
+        &omlx,
+        &model_dir,
+        cfg.port,
+        ceiling,
+        rd_ref,
+        Some(&pgrn_env),
+        cfg.memory_guard_off,
+    )?;
+    let log = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(LOG_PATH)
+        .map_err(|e| format!("Log-Fehler: {e}"))?;
+    let log_err = log.try_clone().map_err(|e| e.to_string())?;
+    cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log_err));
+    if streaming && !mlx::python_runtime_available() {
+        return Err(
+            "MLX runtime missing — Settings → Install MLX runtime (one-time wheels), or install oMLX.app as fallback."
+                .into(),
+        );
+    }
+    let child = cmd.spawn().map_err(|e| format!("MLX start failed: {e}"))?;
+    *slot = Some(child);
+    let guard_note = if cfg.memory_guard_off {
+        " · memory-guard off"
+    } else {
+        ""
+    };
+    let soft = mlx::mlx_low_free_soft_tip(free_gib, &pgrn_env.residency).unwrap_or_default();
+    Ok(if streaming && has_sidecar {
+        format!(
+            "MLX+PGRN started (SSD expert streaming, ~{need:.0} GiB on disk; free ≈ {free:.0} GiB{guard}) — first chat loads…{soft}",
+            free = free_gib,
+            guard = guard_note,
+            soft = soft,
+        )
+    } else if streaming {
+        format!(
+            "MLX started via PGRN launcher but experts.pgrn missing — resident fallback (~{need:.0} GiB, free ≈ {free:.0} GiB{guard}). Add experts.pgrn next to the model for SSD streaming.{soft}",
+            free = free_gib,
+            guard = guard_note,
+            soft = soft,
+        )
+    } else {
+        format!(
+            "MLX server started (resident, ~{need:.0} GiB, free ≈ {free:.0} GiB{guard}) — first chat loads the model…{soft}",
+            free = free_gib,
+            guard = guard_note,
+            soft = soft,
+        )
+    })
+}
+
+#[tauri::command]
+fn mlx_capability(app: tauri::AppHandle, mlx_dir: String) -> mlx::MlxCapability {
+    let dir = {
+        let trimmed = mlx_dir.trim();
+        if trimmed.is_empty() {
+            mlx::default_model_dir()
+        } else {
+            std::path::PathBuf::from(trimmed)
+        }
+    };
+    mlx::capability(resource_dir_of(&app).as_deref(), &dir)
+}
+
+#[tauri::command]
+fn mlx_runtime_status(app: tauri::AppHandle) -> Result<String, String> {
+    mlx::runtime_status_json(resource_dir_of(&app).as_deref())
+}
+
+#[tauri::command]
+fn install_mlx_runtime(app: tauri::AppHandle) -> Result<String, String> {
+    mlx::start_runtime_install(resource_dir_of(&app).as_deref())
+}
+
+fn sysctl_total_gib() -> Option<f64> {
+    let out = Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()?;
+    let bytes: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+    Some(bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+}
+
+/// free + inactive pages (Mach-visible), same basis as Settings memory panel.
+fn vm_stat_free_inactive_gib() -> Option<f64> {
+    let out = Command::new("vm_stat").output().ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    let get = |k: &str| -> f64 {
+        s.lines()
+            .find(|l| l.contains(k))
+            .and_then(|l| l.split_whitespace().last())
+            .and_then(|v| v.trim_end_matches('.').parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    Some((get("Pages free:") + get("Pages inactive:")) * 16384.0 / 1_073_741_824.0)
 }
 
 fn stop_server_impl(state: &AppState) {
-    kill(&state.server);
-    // Fallback: also reap a server we may not own the handle for (e.g. one
-    // spawned by a previous app instance) so the port frees up.
-    if port_alive(SERVER_PORT) {
-        let _ = Command::new("pkill")
-            .args(["-f", &format!("llama-server.*--port {SERVER_PORT}")])
-            .status();
-    }
+    // Owned PID → lockfile holder → port-scoped llama → lsof listeners.
+    // No broad `pkill -f omlx-server` (CRASH_AVOIDANCE).
+    teardown::stop_server(
+        &state.server,
+        SERVER_PORT,
+        port_alive,
+        &teardown::default_lock_path(),
+        &teardown::default_hands_off_path(),
+    );
 }
 
 #[tauri::command]
@@ -246,22 +607,9 @@ fn stop_server(state: State<AppState>) -> Result<String, String> {
 
 /// Last decode tok/s parsed from the server log tail (llama.cpp "eval time").
 fn last_tps() -> Option<f64> {
-    let s = std::fs::read_to_string(LOG_PATH).ok()?;
-    let mut tps = None;
-    for line in s.lines() {
-        if let Some(idx) = line.find("tokens per second") {
-            // number immediately before the phrase
-            let head = line[..idx].trim_end();
-            if let Some(num) = head.rsplit(|c: char| c == ' ' || c == '(').next() {
-                if let Ok(v) = num.trim().parse::<f64>() {
-                    if line.contains("eval time") {
-                        tps = Some(v);
-                    }
-                }
-            }
-        }
-    }
-    tps
+    // Tail only — a multi-hour engine log must not be slurped on the menubar tick.
+    let s = tray::log_tail(LOG_PATH, 256 * 1024)?;
+    servestats::parse_last_tps(&s)
 }
 
 /// Compact menubar status line: state plus last decode speed when running.
@@ -429,7 +777,7 @@ fn shard_expand(s: &str) -> Vec<String> {
     let (Ok(_no), Ok(of)) = (no_str.parse::<u32>(), of_str.parse::<u32>()) else {
         return vec![s.to_string()];
     };
-    if of < 2 || of > 999 {
+    if !(2..=999).contains(&of) {
         return vec![s.to_string()];
     }
     let prefix = &s[..pos - 5];
@@ -457,6 +805,30 @@ fn model_status(gguf: String, pgrn: String, dir: String, state: State<AppState>)
             .unwrap_or(false),
         resume: conv_resume(&pgrn),
     }
+}
+
+/// True when `path` exists and is a directory (UI path defaults / pickers).
+#[tauri::command]
+fn path_is_dir(path: String) -> bool {
+    std::path::Path::new(&path).is_dir()
+}
+
+/// Mounted volumes that already have a `Modelle/` tree — candidates for the
+/// optional second-disk GGUF base (`extBase` in the UI).
+#[tauri::command]
+fn list_ext_model_bases() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/Volumes") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for e in entries.flatten() {
+        let p = e.path().join("Modelle");
+        if p.is_dir() {
+            out.push(p.to_string_lossy().into_owned());
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Content-Length of the (redirect-followed) URL, summed across all shards for
@@ -684,6 +1056,99 @@ fn tail_file(path: String, max_lines: usize) -> String {
     let lines: Vec<&str> = s.lines().collect();
     let start = lines.len().saturating_sub(max_lines);
     lines[start..].join("\n")
+}
+
+/// MIME for chat attach data URLs (images → `image_url`; docs → oMLX `file` parts).
+/// Matches oMLX MarkItDown attachment extensions (+ common image types).
+fn chat_attach_mime(ext: &str) -> Option<&'static str> {
+    match ext {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "pdf" => Some("application/pdf"),
+        "txt" => Some("text/plain"),
+        "md" | "markdown" => Some("text/markdown"),
+        "docx" => Some(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        "pptx" => Some(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
+        _ => None,
+    }
+}
+
+/// Read a local image or document as a `data:<mime>;base64,…` URL for
+/// OpenAI-compatible chat parts (`image_url` / oMLX MarkItDown `file`).
+#[tauri::command]
+fn read_file_data_url(path: String) -> Result<String, String> {
+    // Align with oMLX `markitdown_max_file_size_mb` default (25).
+    const MAX_BYTES: u64 = 25 * 1024 * 1024;
+    let p = std::path::Path::new(path.trim());
+    if !p.is_file() {
+        return Err(format!("Datei fehlt: {}", p.display()));
+    }
+    let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+    if meta.len() > MAX_BYTES {
+        return Err(format!(
+            "Datei zu groß ({:.1} MiB) — max. {} MiB.",
+            meta.len() as f64 / (1024.0 * 1024.0),
+            MAX_BYTES / (1024 * 1024)
+        ));
+    }
+    let bytes = std::fs::read(p).map_err(|e| format!("Lesen: {e}"))?;
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = chat_attach_mime(&ext).ok_or_else(|| {
+        format!(
+            "Nicht unterstützter Typ: .{ext} (Bilder: png/jpg/gif/webp/bmp; \
+             Docs: pdf/md/txt/docx/pptx)"
+        )
+    })?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{mime};base64,{b64}"))
+}
+
+#[cfg(test)]
+mod chat_attach_mime_tests {
+    use super::chat_attach_mime;
+
+    #[test]
+    fn images_and_docs() {
+        assert_eq!(chat_attach_mime("png"), Some("image/png"));
+        assert_eq!(chat_attach_mime("pdf"), Some("application/pdf"));
+        assert_eq!(chat_attach_mime("md"), Some("text/markdown"));
+        assert_eq!(chat_attach_mime("txt"), Some("text/plain"));
+        assert!(chat_attach_mime("docx").unwrap().contains("wordprocessingml"));
+        assert!(chat_attach_mime("pptx").unwrap().contains("presentationml"));
+        assert_eq!(chat_attach_mime("xlsx"), None);
+        assert_eq!(chat_attach_mime("exe"), None);
+    }
+
+    #[test]
+    fn image_aliases_and_extra_docs() {
+        assert_eq!(chat_attach_mime("jpg"), Some("image/jpeg"));
+        assert_eq!(chat_attach_mime("jpeg"), Some("image/jpeg"));
+        assert_eq!(chat_attach_mime("gif"), Some("image/gif"));
+        assert_eq!(chat_attach_mime("webp"), Some("image/webp"));
+        assert_eq!(chat_attach_mime("bmp"), Some("image/bmp"));
+        assert_eq!(chat_attach_mime("markdown"), Some("text/markdown"));
+        assert_eq!(chat_attach_mime(""), None);
+        assert_eq!(chat_attach_mime("PNG"), None); // caller lowercases; map is lowercase-only
+    }
+
+    #[test]
+    fn rejects_unsupported_office_web_and_archives() {
+        for ext in ["html", "htm", "svg", "zip", "xlsx", "csv", "json", "rtf"] {
+            assert_eq!(chat_attach_mime(ext), None, "ext={ext}");
+        }
+    }
 }
 
 // ------------------------------------------------------------- indexing ----
@@ -947,53 +1412,25 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .manage(p2p::P2pState::default())
         .invoke_handler(tauri::generate_handler![
             start_server, stop_server, is_running, server_state, read_log, system_stats,
-            model_status, remote_size, start_download, cancel_download,
+            model_status, path_is_dir, list_ext_model_bases, remote_size, start_download, cancel_download,
             start_convert, cancel_convert, discard_convert, convert_progress, tail_file, patch_kilo_config, defaults,
-            start_embedder, stop_embedder, install_qdrant, start_qdrant, stop_qdrant, index_status
+            start_embedder, stop_embedder, install_qdrant, start_qdrant, stop_qdrant, index_status,
+            live_stats, clear_stats, mlx_capability, mlx_runtime_status, install_mlx_runtime,
+            read_file_data_url,
+            // Slipstream P2P (UI gate: localStorage `slipstream.p2p`; Cluster tab)
+            p2p::p2p_status, p2p::p2p_start, p2p::p2p_stop, p2p::p2p_send_test_job,
+            p2p::p2p_chat, p2p::p2p_peers, p2p::p2p_recent_peers, p2p::p2p_credits
         ])
         .setup(|app| {
-            // --- macOS menubar (tray): open, stop server, quit + live status ---
-            let open_i = MenuItem::with_id(app, "open", "Slipstream öffnen", true, None::<&str>)?;
-            let stop_i = MenuItem::with_id(app, "stop", "Server stoppen", true, None::<&str>)?;
-            let quit_i = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
-            let sep = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&open_i, &stop_i, &sep, &quit_i])?;
-
-            let mut tray = TrayIconBuilder::with_id("slipstream-tray")
-                .tooltip("Slipstream")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => show_main(app),
-                    "stop" => stop_server_impl(&app.state::<AppState>()),
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    use tauri::tray::TrayIconEvent;
-                    if let TrayIconEvent::Click { button, .. } = event {
-                        if button == tauri::tray::MouseButton::Left {
-                            show_main(&tray.app_handle());
-                        }
-                    }
-                });
-            if let Some(icon) = app.default_window_icon().cloned() {
-                tray = tray.icon(icon);
-            }
-            let tray = tray.build(app)?;
-
-            // Live status poller: refresh the tray tooltip every 3 s so the
-            // menubar reflects state + tok/s without opening the window.
-            let handle = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                if let Some(t) = handle.tray_by_id("slipstream-tray") {
-                    let _ = t.set_tooltip(Some(tray_status_line()));
-                }
+            app.manage(Live {
+                serving: Mutex::new(servestats::Store::load()),
+                system: Mutex::new(sysstats::SysSnapshot::default()),
+                api_extras: Mutex::new(servestats::ApiExtras::default()),
             });
-            let _ = tray;
+            tray::install(app)?;
             Ok(())
         })
         .on_window_event(|window, event| {

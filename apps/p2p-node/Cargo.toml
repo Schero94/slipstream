@@ -1,0 +1,45 @@
+[package]
+name = "p2p-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Standalone Slipstream P2P CLI: start node, list peers, send sealed jobs, show credits"
+default-run = "p2p-node"
+
+[lib]
+name = "p2p_node"
+path = "src/lib.rs"
+
+[[bin]]
+name = "p2p-node"
+path = "src/main.rs"
+
+[features]
+default = []
+# Real oMLX / llama-server process spawn via p2p-engine. Off by default —
+# CI and `serve --mock` stay mock-safe. Enable with:
+#   cargo run -p p2p-node --features launch -- serve --engine mlx --spawn-engine
+launch = ["p2p-engine/launch"]
+
+[dependencies]
+p2p-core = { workspace = true }
+p2p-crypto = { workspace = true }
+p2p-engine = { workspace = true }
+p2p-ledger = { workspace = true }
+p2p-net = { workspace = true }
+p2p-router = { workspace = true }
+p2p-security = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+hex = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true }
+p2p-engine = { workspace = true }
+p2p-router = { workspace = true }
