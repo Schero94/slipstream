@@ -95,7 +95,7 @@ async fn sealed_job_mock_infer_and_settle() {
     assert_eq!(route.listen_addr.parse::<SocketAddr>().unwrap(), addr);
 
     let recipient = NodeId::from_hex(&remote.node_id).unwrap();
-    let result = send_sealed_job(&mut session, &job, &recipient)
+    let result = send_sealed_job(&mut session, &job, &recipient, &client_kp)
         .await
         .unwrap();
     assert!(result.ok, "result={result:?}");
@@ -160,13 +160,13 @@ async fn duplicate_job_id_is_rejected_by_recv_with_replay() {
         prompt: "once".into(),
         max_tokens: 2,
     };
-    let first = send_sealed_job(&mut session, &job, &provider)
+    let first = send_sealed_job(&mut session, &job, &provider, &client_kp)
         .await
         .unwrap();
     assert!(first.ok);
 
     // Same job_id again → worker nacks via ReplayCache on EncryptedJob.
-    let second = send_sealed_job(&mut session, &job, &provider)
+    let second = send_sealed_job(&mut session, &job, &provider, &client_kp)
         .await
         .unwrap();
     assert!(!second.ok);

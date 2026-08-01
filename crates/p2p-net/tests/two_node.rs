@@ -36,7 +36,7 @@ async fn two_nodes_capability_and_mock_job() {
         assert_eq!(peer_cap.node_id, "node-a");
         assert_eq!(peer_cap.backend, "mock");
 
-        // Expect a mock encrypted job, reply with JobResult.
+        // Expect a mock encrypted job, reply with EncryptedJobResult (sealed shape).
         match session.recv().await.expect("recv job") {
             NetMessage::EncryptedJob {
                 job_id,
@@ -46,12 +46,11 @@ async fn two_nodes_capability_and_mock_job() {
                 assert_eq!(job_id, "job-42");
                 assert_eq!(ciphertext, b"mock-sealed-prompt");
                 session
-                    .send(&NetMessage::JobResult {
+                    .send(&NetMessage::EncryptedJobResult {
                         job_id,
-                        ok: true,
-                        text: "mock-completion".into(),
-                        tokens: 3,
-                        error: None,
+                        ciphertext: b"mock-sealed-completion".to_vec(),
+                        nonce: vec![],
+                        ephemeral_pubkey: vec![0u8; 32],
                     })
                     .await
                     .expect("send result");
@@ -89,20 +88,17 @@ async fn two_nodes_capability_and_mock_job() {
         .expect("send job");
 
     match client.recv().await.expect("recv result") {
-        NetMessage::JobResult {
+        NetMessage::EncryptedJobResult {
             job_id,
-            ok,
-            text,
-            tokens,
-            error,
+            ciphertext,
+            ephemeral_pubkey,
+            ..
         } => {
             assert_eq!(job_id, "job-42");
-            assert!(ok);
-            assert_eq!(text, "mock-completion");
-            assert_eq!(tokens, 3);
-            assert!(error.is_none());
+            assert_eq!(ciphertext, b"mock-sealed-completion");
+            assert_eq!(ephemeral_pubkey.len(), 32);
         }
-        other => panic!("expected JobResult, got {other:?}"),
+        other => panic!("expected EncryptedJobResult, got {other:?}"),
     }
 
     client

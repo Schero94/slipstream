@@ -5,7 +5,9 @@
 //! Engine selection (default **mock**):
 //! - `--engine mock|auto|mlx|llama` or env `SLIPSTREAM_P2P_ENGINE`
 //! - `--dry-run-engine` prints the exact argv that would be launched (no spawn)
-//! - `--spawn-engine` starts that process (requires `--features launch`)
+//! - `--spawn-engine` starts that process (requires `--features launch`);
+//!   **DANGER** — refuses if the oMLX/PGRN lock is live or `:8080` (configured
+//!   endpoint) already serves; dual heavy serve can freeze the Mac
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -72,7 +74,11 @@ enum Commands {
         /// Validate + print the exact engine serve argv, then exit (no listen / no spawn).
         #[arg(long, default_value_t = false)]
         dry_run_engine: bool,
-        /// Spawn the planned engine process before listening (needs `--features launch`).
+        /// DANGER: spawn a heavy oMLX/llama serve (needs `--features launch`).
+        /// Refuses if `/tmp/slipstream-omlx-pgrn.lock` holds a live pid, or if
+        /// port 8080 / the configured endpoint already has a healthy
+        /// Slipstream/llama/omlx serve. Dual serve can freeze the Mac — prefer
+        /// attaching to an already-running Slipstream (omit this flag).
         #[arg(long, default_value_t = false)]
         spawn_engine: bool,
     },
@@ -342,7 +348,7 @@ async fn cmd_send_job(
         "sending sealed job_id={job_id} to {} via {peer}",
         recipient.as_hex()
     );
-    let result = send_sealed_job(&mut session, &request, &recipient).await?;
+    let result = send_sealed_job(&mut session, &request, &recipient, &keypair).await?;
     if result.ok {
         println!("ok tokens={} text={}", result.tokens, result.text);
     } else {

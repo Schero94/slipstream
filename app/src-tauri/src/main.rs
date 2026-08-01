@@ -296,7 +296,7 @@ fn annotate_auto_backend(preference: &str, effective: &str, msg: String) -> Stri
 
 fn default_true() -> bool { true }
 fn default_kv_quant() -> String { "q8_0".into() }
-fn default_backend() -> String { "metal".into() }
+fn default_backend() -> String { "auto".into() }
 fn default_pgrn_profile() -> String { "balanced".into() }
 fn default_pgrn_residency() -> String { "touch".into() }
 

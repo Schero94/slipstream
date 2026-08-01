@@ -32,7 +32,18 @@ pub enum NetMessage {
         /// Sender ephemeral X25519 public key (32 bytes when real crypto is wired).
         ephemeral_pubkey: Vec<u8>,
     },
-    /// Worker → client inference result (cleartext model output for MVP).
+    /// Worker → client sealed inference result (`p2p-crypto::seal_job_result`).
+    EncryptedJobResult {
+        job_id: String,
+        /// Opaque AEAD ciphertext (+ tag); transport does not interpret.
+        ciphertext: Vec<u8>,
+        /// Nonce / IV bytes for the AEAD (empty when HKDF-derived, same as EncryptedJob).
+        nonce: Vec<u8>,
+        /// Sender ephemeral X25519 public key (32 bytes).
+        ephemeral_pubkey: Vec<u8>,
+    },
+    /// Cleartext result — **loopback / transport-unit tests only** (TM-007).
+    /// Product respond path must send [`Self::EncryptedJobResult`].
     JobResult {
         job_id: String,
         ok: bool,
@@ -50,6 +61,7 @@ impl NetMessage {
         match self {
             Self::Hello { .. } => "hello",
             Self::EncryptedJob { .. } => "encrypted_job",
+            Self::EncryptedJobResult { .. } => "encrypted_job_result",
             Self::JobResult { .. } => "job_result",
             Self::Heartbeat { .. } => "heartbeat",
         }
@@ -96,7 +108,14 @@ mod tests {
             nonce: vec![1, 2, 3],
             ephemeral_pubkey: vec![9; 32],
         };
-        let result = NetMessage::JobResult {
+        let sealed_result = NetMessage::EncryptedJobResult {
+            job_id: "j-1".into(),
+            ciphertext: b"sealed-out".to_vec(),
+            nonce: vec![],
+            ephemeral_pubkey: vec![8; 32],
+        };
+        // Cleartext JobResult remains for loopback/unit-test exception (TM-007).
+        let clear = NetMessage::JobResult {
             job_id: "j-1".into(),
             ok: true,
             text: "pong".into(),
@@ -105,9 +124,10 @@ mod tests {
         };
         assert_eq!(NetMessage::decode(&job.encode().unwrap()).unwrap(), job);
         assert_eq!(
-            NetMessage::decode(&result.encode().unwrap()).unwrap(),
-            result
+            NetMessage::decode(&sealed_result.encode().unwrap()).unwrap(),
+            sealed_result
         );
+        assert_eq!(NetMessage::decode(&clear.encode().unwrap()).unwrap(), clear);
     }
 
     #[test]
@@ -134,6 +154,16 @@ mod tests {
             }
             .wire_type(),
             "encrypted_job"
+        );
+        assert_eq!(
+            NetMessage::EncryptedJobResult {
+                job_id: "j".into(),
+                ciphertext: vec![],
+                nonce: vec![],
+                ephemeral_pubkey: vec![],
+            }
+            .wire_type(),
+            "encrypted_job_result"
         );
         assert_eq!(
             NetMessage::JobResult {

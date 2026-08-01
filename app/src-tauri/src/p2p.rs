@@ -756,7 +756,7 @@ async fn send_job_to(addr: SocketAddr, params: &JobParams) -> Result<P2pJobOutco
         max_tokens: params.max_tokens.max(1),
     };
     let recipient = NodeId::from_hex(&remote.node_id).map_err(|e| format!("peer id: {e}"))?;
-    let result = send_sealed_job(&mut session, &job, &recipient)
+    let result = send_sealed_job(&mut session, &job, &recipient, &client_kp)
         .await
         .map_err(|e| format!("job: {e}"))?;
     remember_peer_addr(&addr.to_string());

@@ -2,6 +2,9 @@
 //!
 //! Real engine process spawn is opt-in (`EngineChoice` + `--spawn-engine` +
 //! `p2p-engine`/`p2p-node` `launch` feature). Default remains mock.
+//!
+//! `--spawn-engine` refuses when the oMLX/PGRN serve lock is live or the
+//! configured infer endpoint already answers (dual-serve freeze risk).
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -9,8 +12,10 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
 
-use p2p_core::{local_capability, BackendKind, Capability, InferenceEngine, JobRequest, NodeId};
-use p2p_crypto::{open_job_request, NodeKeypair};
+use p2p_core::{
+    local_capability, BackendKind, Capability, InferenceEngine, JobRequest, JobResult, NodeId,
+};
+use p2p_crypto::{open_job_request, open_job_result, seal_job_result, NodeKeypair};
 use p2p_engine::{
     launch_serve_plan, open_engine_for_choice_at, plan_serve_for_choice, stop_child, EngineChoice,
 };
@@ -21,7 +26,10 @@ use p2p_security::ReplayCache;
 use thiserror::Error;
 use tracing::{info, warn};
 
-use crate::wire::{net_to_sealed, WireError};
+use crate::spawn_guard::{
+    check_spawn_engine_safe, default_lock_path, resolve_guard_endpoint,
+};
+use crate::wire::{net_to_sealed, sealed_result_to_net, WireError};
 
 /// MVP faucet: auto-fund consumers so settle stubs always succeed in local demos.
 const FAUCET_CREDITS: u64 = 1_000;
@@ -107,9 +115,21 @@ impl RunningNode {
                         .into(),
                 ));
             }
+            // Freeze contract: never dual-serve against a live product/oMLX lock or
+            // an already-healthy Slipstream/llama endpoint.
+            let guard_endpoint =
+                resolve_guard_endpoint(config.engine, &config.capability.os);
+            check_spawn_engine_safe(&default_lock_path(), &guard_endpoint)
+                .map_err(RuntimeError::Engine)?;
             let plan = plan_serve_for_choice(config.engine, &config.capability.os)
                 .map_err(RuntimeError::Engine)?;
             infer_endpoint = plan.http_endpoint();
+            if let Some(ref ep) = infer_endpoint {
+                if crate::spawn_guard::normalize_endpoint(ep) != guard_endpoint {
+                    check_spawn_engine_safe(&default_lock_path(), ep)
+                        .map_err(RuntimeError::Engine)?;
+                }
+            }
             info!(
                 plan = %plan.display(),
                 endpoint = infer_endpoint.as_deref().unwrap_or("(unknown)"),
@@ -252,6 +272,9 @@ async fn handle_session(
 
     // MVP faucet so settle stubs work without a separate wallet CLI.
     let _ = ledger.fund(&remote.node_id, FAUCET_CREDITS);
+    let consumer = NodeId::from_hex(&remote.node_id).map_err(|e| {
+        RuntimeError::Protocol(format!("peer Hello node_id not a valid NodeId: {e}"))
+    })?;
     let mut replay = ReplayCache::with_default_ttl();
 
     loop {
@@ -259,15 +282,15 @@ async fn handle_session(
             Ok(m) => m,
             Err(e) if e.is_replay() => {
                 warn!(error = %e, "replay rejected");
-                let _ = session
-                    .send(&NetMessage::JobResult {
-                        job_id: "replay".into(),
-                        ok: false,
-                        text: String::new(),
-                        tokens: 0,
-                        error: Some("replay".into()),
-                    })
-                    .await;
+                let nack = JobResult::failure("replay", "replay");
+                match seal_result_message(&nack, &consumer) {
+                    Ok(msg) => {
+                        let _ = session.send(&msg).await;
+                    }
+                    Err(seal_err) => {
+                        warn!(error = %seal_err, "failed to seal replay nack");
+                    }
+                }
                 continue;
             }
             Err(_) => break,
@@ -292,15 +315,9 @@ async fn handle_session(
                     &remote.node_id,
                     &provider_id,
                 );
-                session
-                    .send(&NetMessage::JobResult {
-                        job_id: result.job_id.clone(),
-                        ok: result.ok,
-                        text: result.text.clone(),
-                        tokens: result.tokens,
-                        error: result.error.clone(),
-                    })
-                    .await?;
+                // TM-007: seal JobResult to the consumer (never cleartext on product path).
+                let msg = seal_result_message(&result, &consumer)?;
+                session.send(&msg).await?;
             }
             NetMessage::Hello { capability } => {
                 peers
@@ -308,12 +325,21 @@ async fn handle_session(
                     .expect("peers")
                     .insert(capability.node_id.clone(), capability);
             }
-            NetMessage::JobResult { .. } => {
+            NetMessage::EncryptedJobResult { .. } | NetMessage::JobResult { .. } => {
                 // Ignore unexpected results on the worker.
             }
         }
     }
     Ok(())
+}
+
+/// Seal a [`JobResult`] into [`NetMessage::EncryptedJobResult`] for `consumer`.
+fn seal_result_message(
+    result: &JobResult,
+    consumer: &NodeId,
+) -> Result<NetMessage, RuntimeError> {
+    let sealed = seal_job_result(result, consumer)?;
+    Ok(sealed_result_to_net(&result.job_id, &sealed)?)
 }
 
 fn process_job(
@@ -325,14 +351,14 @@ fn process_job(
     ledger: &Ledger,
     consumer_id: &str,
     provider_id: &str,
-) -> p2p_core::JobResult {
+) -> JobResult {
     let sealed = match net_to_sealed(ciphertext, ephemeral_pubkey) {
         Ok(s) => s,
-        Err(e) => return p2p_core::JobResult::failure(job_id, e.to_string()),
+        Err(e) => return JobResult::failure(job_id, e.to_string()),
     };
     let request = match open_job_request(&sealed, keypair) {
         Ok(r) => r,
-        Err(e) => return p2p_core::JobResult::failure(job_id, e.to_string()),
+        Err(e) => return JobResult::failure(job_id, e.to_string()),
     };
     // Prefer wire job_id if present; fall back to plaintext.
     let mut request = request;
@@ -404,24 +430,48 @@ pub async fn client_hello(
     Ok((session, remote))
 }
 
+/// Seal + send a job; open the sealed [`NetMessage::EncryptedJobResult`] reply.
+///
+/// `opener` is the consumer identity (must match the Hello `node_id` the worker
+/// sealed to). Cleartext [`NetMessage::JobResult`] is accepted only as a
+/// loopback/test exception (TM-007); product workers always seal.
 pub async fn send_sealed_job(
     session: &mut PeerSession,
     request: &JobRequest,
     recipient: &NodeId,
-) -> Result<p2p_core::JobResult, RuntimeError> {
+    opener: &NodeKeypair,
+) -> Result<JobResult, RuntimeError> {
     use p2p_crypto::seal_job_request;
 
     let sealed = seal_job_request(request, recipient)?;
     let msg = crate::wire::sealed_to_net(&request.job_id, &sealed)?;
     session.send(&msg).await?;
     match session.recv().await? {
+        NetMessage::EncryptedJobResult {
+            job_id,
+            ciphertext,
+            ephemeral_pubkey,
+            ..
+        } => {
+            let envelope = net_to_sealed(&ciphertext, &ephemeral_pubkey)?;
+            let result = open_job_result(&envelope, opener)?;
+            // TM-010: bind wire job_id to opened payload.
+            if result.job_id != job_id {
+                return Err(RuntimeError::Protocol(format!(
+                    "sealed result job_id mismatch: wire={job_id} payload={}",
+                    result.job_id
+                )));
+            }
+            Ok(result)
+        }
+        // Loopback / unit-test exception — do not use on LAN product path.
         NetMessage::JobResult {
             job_id,
             ok,
             text,
             tokens,
             error,
-        } => Ok(p2p_core::JobResult {
+        } => Ok(JobResult {
             job_id,
             ok,
             text,
@@ -429,7 +479,8 @@ pub async fn send_sealed_job(
             error,
         }),
         other => Err(RuntimeError::Protocol(format!(
-            "expected JobResult, got {other:?}"
+            "expected EncryptedJobResult, got {}",
+            other.wire_type()
         ))),
     }
 }

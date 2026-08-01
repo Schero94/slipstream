@@ -1,6 +1,6 @@
 [package]
 name = "peregrine-control"
-version = "0.2.31"
+version = "0.2.32"
 edition = "2021"
 description = "Native control panel for Slipstream — SSD-streaming MoE on Apple Silicon"
 default-run = "peregrine-control"

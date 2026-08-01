@@ -401,7 +401,7 @@ const I18N = {
     "btn.start": "Start", "btn.stop": "Stop", "tile.usability": "Usability",
     "amp.smooth": "Smooth", "amp.borderline": "Borderline", "amp.pressure": "Pressure", "srv.noModel": "no model", "reco.for": "For your Mac", "reco.free": "free", "reco.with": "with", "reco.pgrnFast": "PGRN on fastest SSD (streamed)", "sec.settings": "Settings", "sec.selectModel": "Choose model",
     "sec.connectAgent": "Connect coding agent", "sec.indexing": "Indexing", "sec.test": "Test", "sec.logs": "Logs & diagnostics",
-    "reco.title": "Best settings for your Mac", "btn.applyBest": "Apply best",
+    "reco.title": "Best settings for your Mac", "btn.applyBest": "Apply best", "btn.applyPeak": "Metal Peak", "btn.goodTokens": "Good tokens",
     "lbl.cache": "Cache size", "lbl.context": "Context", "lbl.io": "I/O threads", "lbl.thinking": "Thinking", "lbl.mtp": "MTP speed", "lbl.compact": "Compact (faster)", "lbl.grammar": "Grammar drafts (JSON/tools)", "lbl.model": "Model",
     "lbl.extBase": "GGUF on second SSD (optional overflow)",
     "hint.extBase": "Optional overflow. Empty = GGUF next to PGRN in the Models folder.",
@@ -410,7 +410,7 @@ const I18N = {
     "hint.p2p": "Off by default. Local Metal/MLX path unchanged.",
     "hint.p2pL3": "L3 expert peer mirror (separate from sealed jobs; default OFF): host — l3_expert_mirror.py export-mirror then serve-mirror; consumer — SLIPSTREAM_PGRN_L3=peer + SLIPSTREAM_PGRN_PEER_BASE=http://host:8765. See docs/P2P_MVP.md § L3.",
     "hint.p2pSettings": "Start/stop, peers, jobs, and credits are on the Cluster tab.",
-    "hint.p2pEngine": "mock = in-process (safe default). mlx/llama/auto = HTTP infer to local Slipstream (:8080) if already running — UI never spawns engines.",
+    "hint.p2pEngine": "mock = in-process demo (safe default). mlx/llama/auto = HTTP attach to an already-running Slipstream on :8080 — Start the app serve first; UI never spawns engines.",
     "hint.p2pMulti": "Two machines: Start node on each (different listen ports), put the other host:port in Bootstrap/Peer, Probe, then Ask. Keep engine=mock until :8080 is already up.",
     "hint.p2pRecentEmpty": "No peers yet — probe an address or send a job.",
     "btn.p2pGotoCluster": "Open Cluster",
@@ -519,7 +519,7 @@ const I18N = {
     "amp.smooth": "Flüssig", "amp.borderline": "Grenzwertig", "amp.pressure": "Druck", "srv.noModel": "kein Modell",
     "reco.for": "Für deinen Mac", "reco.free": "frei", "reco.with": "mit", "reco.pgrnFast": "PGRN auf die schnellste SSD (gestreamt)", "sec.settings": "Einstellungen", "sec.selectModel": "Modell wählen",
     "sec.connectAgent": "Coding-Agent verbinden", "sec.indexing": "Indexierung", "sec.test": "Test", "sec.logs": "Logs & Diagnose",
-    "reco.title": "Auto-Empfehlung für deinen Mac", "btn.applyBest": "Beste anwenden",
+    "reco.title": "Auto-Empfehlung für deinen Mac", "btn.applyBest": "Beste anwenden", "btn.applyPeak": "Metal Peak", "btn.goodTokens": "Gute Tokens",
     "lbl.cache": "Cache-Größe", "lbl.context": "Kontext", "lbl.io": "I/O-Threads", "lbl.thinking": "Thinking", "lbl.mtp": "MTP-Speed", "lbl.compact": "Compact (schneller)", "lbl.grammar": "Grammar-Drafts (JSON/Tools)", "lbl.model": "Modell",
     "lbl.extBase": "GGUF auf zweiter SSD (optionaler Overflow)",
     "hint.extBase": "Optionaler Overflow. Leer = GGUF neben PGRN im Modellordner.",
@@ -528,7 +528,7 @@ const I18N = {
     "hint.p2p": "Standard aus. Lokaler Metal/MLX-Pfad unverändert.",
     "hint.p2pL3": "L3-Experten-Peer-Mirror (getrennt von versiegelten Jobs; Standard AUS): Host — l3_expert_mirror.py export-mirror, dann serve-mirror; Consumer — SLIPSTREAM_PGRN_L3=peer + SLIPSTREAM_PGRN_PEER_BASE=http://host:8765. Siehe docs/P2P_MVP.md § L3.",
     "hint.p2pSettings": "Start/Stop, Peers, Jobs und Credits sind im Cluster-Tab.",
-    "hint.p2pEngine": "mock = lokal im Prozess (sicherer Default). mlx/llama/auto = HTTP-Infer gegen lokales Slipstream (:8080), falls schon laufend — die UI spawnt keine Engines.",
+    "hint.p2pEngine": "mock = In-Prozess-Demo (sicherer Default). mlx/llama/auto = HTTP-Attach an schon laufendes Slipstream auf :8080 — Serve zuerst starten; UI spawnt keine Engines.",
     "hint.p2pMulti": "Zwei Macs: auf jedem Node starten (andere Listen-Ports), die andere host:port in Bootstrap/Peer, Peers prüfen, dann Fragen. engine=mock lassen, bis :8080 schon läuft.",
     "hint.p2pRecentEmpty": "Noch keine Peers — Adresse prüfen oder Job senden.",
     "btn.p2pGotoCluster": "Cluster öffnen",
@@ -583,7 +583,7 @@ const I18N_EXT = {
     "chart.ssd": "SSD throughput", "chart.ssdNote": "experts streamed from SSD",
     "chart.arena": "Expert cache — live", "arena.resident": "resident hit", "arena.stream": "streaming from SSD",
     "chart.hit": "Cache hit-rate", "chart.hitNote": "served resident (no SSD read)",
-    "reco.computing": "Computing…", "toast.noSys": "No system data yet", "toast.applied": "Best settings applied",
+    "reco.computing": "Computing…", "toast.noSys": "No system data yet", "toast.applied": "Best settings applied", "toast.peakApplied": "Metal Peak: cache 14 · io 4 · headroom 3", "toast.goodTokens": "Good tokens: thinking off · temp 0 on send", "warn.peakNeeds17": "Metal Peak needs ≥17 GiB free (prefer ≥22). Close apps or use Apply best.", "confirm.peakMarginal": "Free RAM is under 22 GiB — peak is marginal (admission/stall risk). Continue with cache=14 anyway?", "hint.p2pFreeze": "Does not spawn a second heavy serve. Start Slipstream first for mlx/llama/auto; one Metal or oMLX process only.",
     "path.gguf": "GGUF folder", "path.pgrn": "PGRN path (streamed)",
     "path.source": "Download source (HuggingFace repo/URL)", "path.binary": "Server binary (our llama.cpp engine)",
     "adv.mirror": "Advanced: 2nd SSD mirror (dual-SSD)", "adv.mirrorPh": "path to a byte-identical .pgrn copy on a 2nd fast disk", "adv.mirrorWarn": "⚠ Only helps with two equally-fast SSDs (2× NVMe or TB4). On internal + slow USB it's slower — leave empty.", "adv.buffered": "Advanced: buffered reads (non-NVMe drives)", "adv.predict": "Advanced: predictive prefetch (experimental)",
@@ -616,7 +616,7 @@ const I18N_EXT = {
     "st.dlRunning": "Download running…", "st.convRunning": "Converting… (GGUF -> PGRN)",
     "reco.cons": "Conservative — runs on 16 GiB Macs, more SSD reads.", "reco.rec": "<b>Recommended</b> for interactive coding on 36 GiB — Mac stays smooth.",
     "models.group.rec": "Recommended for coding", "models.group.xl": "XL giants (advanced)",
-    "reco.fast": "Fast — needs lots of free RAM; close apps first.", "reco.aggr": "Aggressive — only with lots of free RAM, else swapping.",
+    "reco.peak": "<b>Metal Peak (qualified)</b> — 14 GiB + io=4; needs ≥17 GiB free (prefer ≥22). Measured ~18–19 tok/s warm.", "reco.fast": "Fast — needs lots of free RAM; close apps first.", "reco.aggr": "Aggressive — only with lots of free RAM, else swapping.",
     "act.prefill": "Prefill — reading the prompt", "act.decode": "Generating answer", "act.idleReady": "Ready — waiting for a request", "act.stopped": "Server stopped", "act.running": "running…", "act.tokens": "tokens",
     "note.qwen36": "Strongest compatible coder with MTP speed.", "note.qwen30": "Smaller, no MTP — good for weaker Macs.",
     "note.deepseek": "Small & fast, lowest RAM need.", "note.glm": "Large, lots of disk — strong quality.",
@@ -668,7 +668,7 @@ const I18N_EXT = {
     "stats.noExperts": "– (no streaming run)",
     "chat.metaLive": "live",
     "chat.metaLast": "last",
-    "obs.tps": "tok/s", "obs.cache": "cache", "obs.rss": "RSS",
+    "obs.tps": "tok/s", "obs.cache": "cache", "obs.rss": "RSS", "obs.cfg": "cfg",
     "obs.downTip": "Server down — tok/s, cache hit, and RSS show – until Start",
     "obs.upTip": "Last decode tok/s · cache hit (expert or KV) · process RSS (or model memory)",
     "lbl.backend": "Backend", "backend.metal": "llama.cpp · Metal + PGRN (SSD streaming)",
@@ -699,7 +699,7 @@ const I18N_EXT = {
     "chart.ssd": "SSD-Durchsatz", "chart.ssdNote": "Experten von SSD gestreamt",
     "chart.arena": "Experten-Cache — live", "arena.resident": "resident (Treffer)", "arena.stream": "streamt von SSD",
     "chart.hit": "Cache-Hit-Rate", "chart.hitNote": "resident bedient (kein SSD-Read)",
-    "reco.computing": "Ermittle Werte…", "toast.noSys": "Noch keine Systemdaten", "toast.applied": "Beste Einstellungen angewendet",
+    "reco.computing": "Ermittle Werte…", "toast.noSys": "Noch keine Systemdaten", "toast.applied": "Beste Einstellungen angewendet", "toast.peakApplied": "Metal Peak: Cache 14 · io 4 · Headroom 3", "toast.goodTokens": "Gute Tokens: Thinking aus · temp 0 beim Senden", "warn.peakNeeds17": "Metal Peak braucht ≥17 GiB frei (besser ≥22). Apps schließen oder Beste anwenden.", "confirm.peakMarginal": "Weniger als 22 GiB frei — Peak ist grenzwertig (Admission/Stall-Risiko). Trotzdem Cache=14?", "hint.p2pFreeze": "Startet keinen zweiten Heavy-Serve. Für mlx/llama/auto zuerst Slipstream starten; nur ein Metal- oder oMLX-Prozess.",
     "path.gguf": "GGUF-Ordner", "path.pgrn": "PGRN-Pfad (gestreamt)",
     "path.source": "Download-Quelle (HuggingFace-Repo/URL)", "path.binary": "Server-Binary (unsere llama.cpp-Engine)",
     "adv.mirror": "Advanced: 2. SSD-Mirror (Dual-SSD)", "adv.mirrorPh": "Pfad zu einer byte-identischen .pgrn-Kopie auf einer 2. schnellen Disk", "adv.mirrorWarn": "⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.", "adv.buffered": "Advanced: gepufferte Reads (Nicht-NVMe-Laufwerke)", "adv.predict": "Advanced: Predictive Prefetch (experimentell)",
@@ -732,7 +732,7 @@ const I18N_EXT = {
     "st.dlRunning": "Download läuft…", "st.convRunning": "Konvertierung läuft… (GGUF -> PGRN)",
     "reco.cons": "Konservativ — läuft auf 16 GiB Macs, mehr SSD-Reads.", "reco.rec": "<b>Empfohlen</b> für interaktives Coding auf 36 GiB — Mac bleibt flüssig.",
     "models.group.rec": "Empfohlen fürs Coding", "models.group.xl": "XL-Riesen (fortgeschritten)",
-    "reco.fast": "Schnell — braucht viel freien RAM; erst Apps schließen.", "reco.aggr": "Aggressiv — nur bei viel freiem RAM, sonst Swapping.",
+    "reco.peak": "<b>Metal Peak (qualifiziert)</b> — 14 GiB + io=4; braucht ≥17 GiB frei (besser ≥22). Gemessen ~18–19 tok/s warm.", "reco.fast": "Schnell — braucht viel freien RAM; erst Apps schließen.", "reco.aggr": "Aggressiv — nur bei viel freiem RAM, sonst Swapping.",
     "act.prefill": "Prefill — Prompt wird gelesen", "act.decode": "Antwort wird generiert", "act.idleReady": "Bereit — wartet auf Anfrage", "act.stopped": "Server gestoppt", "act.running": "läuft…", "act.tokens": "Tokens",
     "note.qwen36": "Stärkster kompatibler Coder mit MTP-Speed.", "note.qwen30": "Kleiner, ohne MTP — gut für schwächere Macs.",
     "note.deepseek": "Klein & schnell, geringster RAM-Bedarf.", "note.glm": "Groß, viel Disk — starke Qualität.",
@@ -784,7 +784,7 @@ const I18N_EXT = {
     "stats.noExperts": "– (kein Streaming-Lauf)",
     "chat.metaLive": "live",
     "chat.metaLast": "zuletzt",
-    "obs.tps": "tok/s", "obs.cache": "cache", "obs.rss": "RSS",
+    "obs.tps": "tok/s", "obs.cache": "cache", "obs.rss": "RSS", "obs.cfg": "cfg",
     "obs.downTip": "Server aus — tok/s, Cache-Hit und RSS zeigen – bis Start",
     "obs.upTip": "Letztes Decode tok/s · Cache-Hit (Experte oder KV) · Prozess-RSS (oder Modell-RAM)",
     "lbl.backend": "Backend", "backend.metal": "llama.cpp · Metal + PGRN (SSD-Streaming)",
@@ -821,9 +821,9 @@ const TIPS = {
   en: {
     "tip.usability": "Green = Mac stays smooth. Yellow/red = memory pressure / swapping — shrink the cache.",
     "tip.liveMonitor": "Real values from the streaming kernel log — not an estimate.",
-    "tip.cache": "How many experts stay resident in RAM. Bigger = faster (more hits) but needs more free RAM.",
+    "tip.cache": "How many experts stay resident in RAM. Bigger = faster (more hits) but needs more free RAM. Measured Metal peak: 14 GiB + io=4 (~18–19 tok/s) when free ≥22 GiB; safe warm: 10 GiB + io=4.",
     "tip.ctx": "Window for prompt + history. Coding agents send ~30k+ tokens, so 40k is the best compromise. 32k can overflow; 64k causes memory pressure.",
-    "tip.io": "Parallel SSD read threads for fetching experts. 8 = much faster prefill (large agent prompts); 1 = conservative.",
+    "tip.io": "Parallel SSD read threads for fetching experts. Default 4 = 2×-qualified Metal balanced recipe. 1 = serial path; 8/16 = optional wider fetch (not requalified as product default).",
     "tip.mirror": "Stripe expert reads across two disks, split by measured bandwidth. Wins only with two comparably-fast, independent SSDs; a slow USB drive makes it slower. Parity is CRC-checked.",
     "tip.predict": "Learns which experts co-fire between layers and warms the next layer's likely experts (cache only — parity-safe). Metal: PGRN_ONLINE_PREDICT. MLX/oMLX: SLIPSTREAM_PGRN_ONLINE. Default off; experimental — measure A/B before leaving on.",
     "tip.mtp": "Speculative decoding via multi-token prediction. Only for models with an MTP/DFlash draft; off otherwise.",
@@ -849,9 +849,9 @@ const TIPS = {
   de: {
     "tip.usability": "Grün = Mac bleibt flüssig. Gelb/Rot = Speicherdruck / Swapping — Cache verkleinern.",
     "tip.liveMonitor": "Echte Werte aus dem Streaming-Kernel-Log — keine Schätzung.",
-    "tip.cache": "Wie viele Experten resident im RAM bleiben. Größer = schneller (mehr Treffer), braucht aber mehr freien RAM.",
+    "tip.cache": "Wie viele Experten resident im RAM bleiben. Größer = schneller (mehr Treffer), braucht aber mehr freien RAM. Gemessenes Metal-Peak: 14 GiB + io=4 (~18–19 tok/s) bei ≥22 GiB frei; sicheres Warm: 10 GiB + io=4.",
     "tip.ctx": "Fenster für Prompt + Verlauf. Coding-Agenten schicken ~30k+ Tokens, daher ist 40k der beste Kompromiss. 32k kann überlaufen; 64k erzeugt Speicherdruck.",
-    "tip.io": "Parallele SSD-Lesethreads beim Experten-Holen. 8 = deutlich schnellerer Prefill (große Agenten-Prompts); 1 = konservativ.",
+    "tip.io": "Parallele SSD-Lesethreads beim Experten-Holen. Standard 4 = 2×-qualifiziertes Metal-balanced-Rezept. 1 = serieller Pfad; 8/16 = optional breiter (nicht als Produktdefault requalifiziert).",
     "tip.mirror": "Verteilt Experten-Reads bandbreiten-proportional über zwei Disks. Gewinnt nur mit zwei ähnlich schnellen, unabhängigen SSDs; eine langsame USB-Disk macht es langsamer. Parity ist CRC-geprüft.",
     "tip.predict": "Lernt, welche Experten zwischen Layern gemeinsam feuern, und wärmt die nächsten wahrscheinlichen Experten (nur Cache — parity-safe). Metal: PGRN_ONLINE_PREDICT. MLX/oMLX: SLIPSTREAM_PGRN_ONLINE. Standard aus; experimentell — vor Dauerbetrieb A/B messen.",
     "tip.mtp": "Spekulatives Decoding via Multi-Token-Prediction. Nur bei Modellen mit MTP/DFlash-Draft; sonst automatisch aus.",
@@ -1703,6 +1703,15 @@ async function startServer() {
     if (guard.warnKey) toast(t(guard.warnKey), true);
     if (guard.confirmKey && !confirm(t(guard.confirmKey))) return;
   }
+  // Metal peak gate: cache≥14 needs ≥17 GiB free (prefer ≥22). Mirror MLX soft band.
+  if (!goingMlx && cfg.cache_gb >= 14) {
+    const freeM = state.sys && typeof state.sys.free_gib === "number" ? state.sys.free_gib : null;
+    if (freeM != null && freeM < 17) {
+      toast(t("warn.peakNeeds17"), true);
+      return;
+    }
+    if (freeM != null && freeM < 22 && !confirm(t("confirm.peakMarginal"))) return;
+  }
   try {
     const msg = await invoke("start_server", { cfg });
     state.resolvedBackend = isAutoBackend() ? resolved : null;
@@ -1742,6 +1751,7 @@ function updateCacheRec() {
   let rec = "";
   if (c <= 6) rec = t("reco.cons");
   else if (c <= 12) rec = t("reco.rec");
+  else if (c === 14) rec = t("reco.peak");
   else if (c <= 18) rec = t("reco.fast");
   else rec = t("reco.aggr");
   $("cacheRec").innerHTML = rec;
@@ -1757,18 +1767,28 @@ function computeReco() {
     ? (st.gguf_bytes - st.pgrn_bytes) / GiB : m.gb * 0.12;
   const pgrnGb = (st && st.pgrn_bytes) ? st.pgrn_bytes / GiB : m.gb * 0.88;
   const draftGb = m.draft ? 2.2 : 0;
-  const avail = (s.free_gib && s.free_gib > 6 ? s.free_gib : s.total_gib) - resident - draftGb - 3 /*headroom*/ - 2 /*reserve*/;
-  let cache = Math.max(4, Math.min(Math.floor(avail), 24, Math.ceil(pgrnGb)));
+  const free = typeof s.free_gib === "number" ? s.free_gib : 0;
+  // Qualified Metal bands (HANDOVER / METAL_PEAK_VS_SMOKE). Headroom fixed at 3 GiB;
+  // keep post-load free estimate ≥ 2 GiB. io=4 is the 2×-qualified balanced width.
+  const headroom = 3;
+  const postFloor = 2;
+  let cache, band;
+  if (free >= 22) { cache = 14; band = "peak"; }
+  else if (free >= 17) { cache = 10; band = "warm"; }
+  else if (free >= 12) { cache = 8; band = "cons"; }
+  else if (free >= 8) { cache = 6; band = "cons"; }
+  else { cache = 4; band = "tight"; }
+  const maxByFloor = Math.floor(free - resident - draftGb - headroom - postFloor);
+  if (Number.isFinite(maxByFloor)) cache = Math.min(cache, Math.max(4, maxByFloor));
+  cache = Math.max(4, Math.min(cache, 24, Math.ceil(pgrnGb) || cache));
   // context: derived from BOTH total and free RAM (KV cache grows with context), snapped to options.
   const ctxOpts = [16384, 32768, 40960, 65536];
   const ctxCeil = s.total_gib >= 48 ? 65536 : s.total_gib >= 32 ? 40960 : s.total_gib >= 20 ? 32768 : 16384;
-  const freeCap = s.free_gib >= 20 ? 65536 : s.free_gib >= 12 ? 40960 : s.free_gib >= 7 ? 32768 : 16384;
+  const freeCap = free >= 20 ? 65536 : free >= 12 ? 40960 : free >= 7 ? 32768 : 16384;
   let ctx = Math.min(ctxCeil, freeCap);
   if (!ctxOpts.includes(ctx)) ctx = ctxOpts.filter((o) => o <= ctx).pop() || 16384;
-  // io threads: parallel cold-reads per layer stream -> scale with performance (P-)cores.
-  const pcores = s.perf_cores || Math.round((s.cores || 8) * 0.6);
-  const io = pcores <= 4 ? 4 : 8;
-  return { cache, ctx, io, resident, pgrnGb };
+  const io = 4;
+  return { cache, ctx, io, resident, pgrnGb, band, headroom };
 }
 function updateReco() {
   const r = computeReco();
@@ -1829,8 +1849,34 @@ function applyReco() {
   if ($("thinking")) $("thinking").checked = false;
   if ($("chatThink")) $("chatThink").checked = false;
   toast(`${t("toast.applied")}: Cache ${r.cache} · ${r.ctx / 1024}k · io ${r.io}`); renderSpeed();
+  renderObsStrip(state.live || {});
+}
+function applyPeak() {
+  // Qualified Metal Peak: cache=14 · headroom=3 · io=4 (~18–19 tok/s warm when free allows).
+  const free = state.sys && typeof state.sys.free_gib === "number" ? state.sys.free_gib : null;
+  if (free != null && free < 17) {
+    toast(t("warn.peakNeeds17"), true);
+    return;
+  }
+  if (free != null && free < 22 && !confirm(t("confirm.peakMarginal"))) return;
+  $("cache").value = 14; $("cacheVal").textContent = "14"; updateCacheRec();
+  if ($("io")) $("io").value = "4";
+  if ($("compactSlots")) $("compactSlots").checked = true;
+  if ($("thinking")) $("thinking").checked = false;
+  if ($("chatThink")) $("chatThink").checked = false;
+  toast(t("toast.peakApplied"));
+  renderSpeed();
+  renderObsStrip(state.live || {});
+}
+function applyGoodTokens() {
+  // Shared coding path: temperature 0 + thinking off (Metal + oMLX).
+  if ($("thinking")) $("thinking").checked = false;
+  if ($("chatThink")) $("chatThink").checked = false;
+  toast(t("toast.goodTokens"));
 }
 $("applyReco").onclick = applyReco;
+if ($("applyPeak")) $("applyPeak").onclick = applyPeak;
+if ($("applyGoodTokens")) $("applyGoodTokens").onclick = applyGoodTokens;
 
 // ---- expected speed (calibrated to our measurements) -----------------------
 // Anchors (internal PGRN, decode tok/s): 3B-active @cache10 ~= 13, @cache2 ~= 5.5;
@@ -2523,6 +2569,12 @@ function formatObsRss(bytes) {
   return gib >= 10 ? `${Math.round(gib)} GiB` : `${dec(gib, 1)} GiB`;
 }
 
+function formatObsCfg() {
+  const c = $("cache") ? $("cache").value : null;
+  const io = $("io") ? $("io").value : null;
+  if (c == null || io == null) return "–";
+  return `${c}/${io}/3`;
+}
 function renderObsStrip(live) {
   const pick = pickObsStrip(live, state.running);
   const paint = (id, text) => {
@@ -2534,8 +2586,12 @@ function renderObsStrip(live) {
   paint("obsTps", formatObsTps(pick.tps));
   paint("obsCache", formatObsCache(pick.cachePct));
   paint("obsRss", formatObsRss(pick.rssBytes));
+  paint("obsCfg", formatObsCfg());
   const strip = $("obsStrip");
-  if (strip) strip.title = state.running ? t("obs.upTip") : t("obs.downTip");
+  if (strip) {
+    const cfg = formatObsCfg();
+    strip.title = (state.running ? t("obs.upTip") : t("obs.downTip")) + (cfg !== "–" ? ` · ${cfg}` : "");
+  }
 }
 
 function renderLive(live) {

@@ -23,6 +23,8 @@
         <span class="obs-item"><span class="obs-k" data-i18n="obs.cache">cache</span> <span id="obsCache" class="obs-v">–</span></span>
         <span class="obs-sep" aria-hidden="true">·</span>
         <span class="obs-item"><span class="obs-k" data-i18n="obs.rss">RSS</span> <span id="obsRss" class="obs-v">–</span></span>
+        <span class="obs-sep" aria-hidden="true">·</span>
+        <span class="obs-item"><span class="obs-k" data-i18n="obs.cfg">cfg</span> <span id="obsCfg" class="obs-v">–</span></span>
       </div>
       <div class="top-cluster">
         <select id="lang" class="langsel" title="Language" aria-label="Language">
@@ -511,6 +513,7 @@
               <summary data-i18n="adv.p2pHelp">How to use</summary>
               <div class="hint-stack">
                 <p class="hint" data-i18n="hint.p2pEngine">mock = in-process (safe default). mlx/llama/auto = HTTP infer to local Slipstream (:8080) if already running — UI never spawns engines.</p>
+                <p class="hint" data-i18n="hint.p2pFreeze">Does not spawn a second heavy serve. Start Slipstream first for mlx/llama/auto; one Metal or oMLX process only.</p>
                 <p class="hint" data-i18n="hint.p2pMulti">Two machines: Start node on each (different listen ports), put the other host:port in Bootstrap/Peer, Probe, then Ask. Keep engine=mock until :8080 is already up.</p>
                 <p class="hint" data-i18n="hint.p2pAsk">When the local server is stopped, Chat also routes here if P2P is enabled.</p>
               </div>
@@ -660,7 +663,11 @@
               <div class="reco-title" data-i18n="reco.title">Auto-Empfehlung für deinen Mac</div>
               <div id="recoText" class="hint">Ermittle Werte…</div>
             </div>
-            <button id="applyReco" class="btn btn-primary" data-i18n="btn.applyBest">Beste anwenden</button>
+            <div class="reco-actions">
+              <button id="applyReco" class="btn btn-primary" data-i18n="btn.applyBest">Beste anwenden</button>
+              <button id="applyPeak" type="button" class="btn" data-i18n="btn.applyPeak">Metal Peak</button>
+              <button id="applyGoodTokens" type="button" class="btn" data-i18n="btn.goodTokens">Good tokens</button>
+            </div>
           </div>
           <div class="ctrl" id="metalCacheCtrl">
             <div class="ctrl-head">
@@ -717,8 +724,8 @@
               <div class="ctrl-head"><label for="io"><span data-i18n="lbl.io">I/O-Threads</span> <span class="info" data-i18n-tip="tip.io">ⓘ</span></label></div>
               <select id="io">
                 <option value="1">1</option>
-                <option value="4">4</option>
-                <option value="8" selected>8</option>
+                <option value="4" selected>4</option>
+                <option value="8">8</option>
                 <option value="16">16</option>
               </select>
             </div>

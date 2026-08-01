@@ -620,3 +620,5 @@ details summary { cursor: pointer; font-size: 12px; color: var(--muted); margin-
   .chat-schema-label::before { transition: none; }
   .meter-fill, .stack > i { transition: none; }
 }
+
+.reco-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
