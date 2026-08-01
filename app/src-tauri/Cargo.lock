@@ -2345,7 +2345,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "p2p-core"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "hex",
  "rand",
@@ -2356,7 +2356,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-crypto"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "chacha20poly1305",
  "hex",
@@ -2373,7 +2373,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-engine"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "p2p-core",
  "serde_json",
@@ -2382,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-ledger"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "rusqlite",
  "serde",
@@ -2391,7 +2391,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-net"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "hex",
  "p2p-security",
@@ -2403,7 +2403,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-node"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "clap",
  "hex",
@@ -2424,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-router"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "p2p-core",
  "serde",
@@ -2432,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-security"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "hex",
  "sha2",
@@ -2495,7 +2495,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "peregrine-control"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "base64 0.22.1",
  "core-foundation",

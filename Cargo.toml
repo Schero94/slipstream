@@ -15,7 +15,7 @@ exclude = ["app/src-tauri"]
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "0.2.32"
+version = "0.2.33"
 
 [workspace.dependencies]
 p2p-core = { path = "crates/p2p-core" }

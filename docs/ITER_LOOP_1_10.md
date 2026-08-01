@@ -166,3 +166,9 @@ Absolute tok/s reconfirm of ~18.9 still needs a quiet ≥22 GiB free window with
 - Installed: `/Applications/Slipstream.app` (CFBundleShortVersionString 0.2.32)
 - Asset: `Slipstream_0.2.32_aarch64.zip` (app-only bundle; no notarization)
 - LLM-BOOM keeps artifacts + control mirror; not the release remote
+
+---
+
+## 0.2.33 — Peak free tolerance (same day)
+
+Hard ≥22 peak abort at free **21.81** was wrong. Prefer quiet **≥22**; admit band **≥21.5** (0.5 GiB tolerance). Smoke + UI Peak Start / `computeReco` aligned. Live peak retry at free **24.74**: cache=14 · io=4 · headroom=3 → **8.37** tok/s first short (`--no-warmup`); Stop OK; swap flat. Not claiming historical ~18.9 warm.

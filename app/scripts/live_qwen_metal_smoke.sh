@@ -10,7 +10,8 @@ SERVER="${SLIPSTREAM_LLAMA_SERVER:-/Applications/Slipstream.app/Contents/Resourc
 PORT="${PORT:-8080}"
 # PROFILE=path (default): cache=6 io=1 ctx=4k — Start/Stop path smoke, not peak.
 # PROFILE=warm: cache=10 io=4 — safe warm when free≥17.
-# PROFILE=peak: cache=14 io=4 — only when free≥17 (prefer ≥22).
+# PROFILE=peak: cache=14 io=4 — preferred quiet ≥PEAK_FREE_GIB (22); admit band
+#   ≥ PEAK_FREE_GIB - PEAK_FREE_TOLERANCE_GIB (21.5). Hard C-admission floor still 17.
 PROFILE="${PROFILE:-path}"
 case "$PROFILE" in
   peak) CACHE_GB="${CACHE_GB:-14}"; IO_THREADS="${IO_THREADS:-4}"; CTX="${CTX:-4096}" ;;
@@ -18,10 +19,16 @@ case "$PROFILE" in
   *)    CACHE_GB="${CACHE_GB:-6}";  IO_THREADS="${IO_THREADS:-1}"; CTX="${CTX:-4096}" ;;
 esac
 HEADROOM_GB="${HEADROOM_GB:-3}"
+# Preferred quiet window for peak (comfortable 2× requal); tolerance avoids aborting
+# near-misses like 21.81. Effective admit = 22 - 0.5 = 21.5. Safety: 14+3=17 still
+# leaves ≥2 GiB post-load estimate at 21.5 (21.5-17=4.5 ≥ MIN_FREE).
+PEAK_FREE_GIB="${PEAK_FREE_GIB:-22}"
+PEAK_FREE_TOLERANCE_GIB="${PEAK_FREE_TOLERANCE_GIB:-0.5}"
 LOG="/tmp/slipstream-qwen-metal-smoke.log"
 ARTIFACT_DIR="${ARTIFACT_DIR:-/Users/schero/Desktop/Privat.nosync/LLM-BOOM/docs/pgrn-mlx/artifacts}"
 ART="${ARTIFACT_DIR}/QWEN36_INTERNAL_SMOKE_$(date +%Y%m%d-%H%M%S).md"
 MIN_FREE=2.0
+HARD_ADMIT_GIB=17.0
 
 mach_free() {
   /usr/bin/python3 - <<'PY'
@@ -83,9 +90,21 @@ ARGS=(
 if [[ "${IO_THREADS}" -gt 1 ]]; then
   ARGS+=(--pgrn-io-threads "$IO_THREADS")
 fi
-# Peak/warm preflight: prefer ≥17 GiB free+inactive (admission); hard floor still 2 GiB.
+# Peak/warm preflight. Hard C-admission floor ≥17; peak also uses preferred quiet
+# window PEAK_FREE_GIB with PEAK_FREE_TOLERANCE_GIB (effective admit ≥21.5).
+# Hard safety: refuse if free < cache+headroom+MIN_FREE (post-load ≥2 estimate).
 if [[ "$PROFILE" == "peak" || "$PROFILE" == "warm" ]]; then
-  awk -v f="$FREE0" 'BEGIN{ if (f+0 < 17.0) exit 1 }'     || die "PROFILE=$PROFILE needs ≥17 GiB free+inactive (have ${FREE0}); use PROFILE=path or free RAM"
+  awk -v f="$FREE0" -v h="$HARD_ADMIT_GIB" 'BEGIN{ if (f+0 < h+0) exit 1 }' \
+    || die "PROFILE=$PROFILE needs ≥${HARD_ADMIT_GIB} GiB free+inactive for C admission (have ${FREE0}); use PROFILE=path or free RAM"
+fi
+if [[ "$PROFILE" == "peak" ]]; then
+  PEAK_ADMIT=$(awk -v p="$PEAK_FREE_GIB" -v t="$PEAK_FREE_TOLERANCE_GIB" 'BEGIN{ printf "%.2f", p-t }')
+  NEED_FLOOR=$(awk -v c="$CACHE_GB" -v h="$HEADROOM_GB" -v m="$MIN_FREE" 'BEGIN{ printf "%.2f", c+h+m }')
+  echo "peak gate: preferred quiet ≥${PEAK_FREE_GIB} GiB; admit band ≥${PEAK_ADMIT} (tolerance ${PEAK_FREE_TOLERANCE_GIB}); hard floor cache+headroom+${MIN_FREE}=${NEED_FLOOR}" | tee -a "$ART"
+  awk -v f="$FREE0" -v a="$PEAK_ADMIT" 'BEGIN{ if (f+0 < a+0) exit 1 }' \
+    || die "PROFILE=peak free+inactive ${FREE0} < admit band ${PEAK_ADMIT} (preferred ${PEAK_FREE_GIB} − tol ${PEAK_FREE_TOLERANCE_GIB}); wait for quieter window"
+  awk -v f="$FREE0" -v n="$NEED_FLOOR" 'BEGIN{ if (f+0 < n+0) exit 1 }' \
+    || die "PROFILE=peak free+inactive ${FREE0} < cache+headroom+floor ${NEED_FLOOR} (would leave <${MIN_FREE} GiB)"
 fi
 if [[ -f "${ROOT}/partition-weights.txt" ]]; then
   ARGS+=(--pgrn-partition-weights "${ROOT}/partition-weights.txt")
@@ -166,7 +185,10 @@ print(f"usage={usage}")
 PY
 
 # tok/s from log if present
-TPS=$(rg -o 'eval time = .*? / *([0-9.]+) tokens per second' -r '$1' "$LOG" | tail -1 || true)
+# Log line: "eval time = N ms / M tokens ( ... X.XX tokens per second)"
+TPS=$(rg -o 'eval time =.*?([0-9.]+) tokens per second' -r '$1' "$LOG" | tail -1 || true)
+HIT=$(rg -o 'PGRN cache = .*?\(([0-9.]+)%\)' -r '$1' "$LOG" | tail -1 || true)
+[[ -n "$HIT" ]] && echo "pgrn_hit_rate_pct=$HIT" | tee -a "$ART" || true
 [[ -n "$TPS" ]] && echo "last_eval_tps=$TPS" | tee -a "$ART" || echo "last_eval_tps=n/a" | tee -a "$ART"
 
 # RSS of owned pid

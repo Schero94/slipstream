@@ -583,7 +583,7 @@ const I18N_EXT = {
     "chart.ssd": "SSD throughput", "chart.ssdNote": "experts streamed from SSD",
     "chart.arena": "Expert cache — live", "arena.resident": "resident hit", "arena.stream": "streaming from SSD",
     "chart.hit": "Cache hit-rate", "chart.hitNote": "served resident (no SSD read)",
-    "reco.computing": "Computing…", "toast.noSys": "No system data yet", "toast.applied": "Best settings applied", "toast.peakApplied": "Metal Peak: cache 14 · io 4 · headroom 3", "toast.goodTokens": "Good tokens: thinking off · temp 0 on send", "warn.peakNeeds17": "Metal Peak needs ≥17 GiB free (prefer ≥22). Close apps or use Apply best.", "confirm.peakMarginal": "Free RAM is under 22 GiB — peak is marginal (admission/stall risk). Continue with cache=14 anyway?", "hint.p2pFreeze": "Does not spawn a second heavy serve. Start Slipstream first for mlx/llama/auto; one Metal or oMLX process only.",
+    "reco.computing": "Computing…", "toast.noSys": "No system data yet", "toast.applied": "Best settings applied", "toast.peakApplied": "Metal Peak: cache 14 · io 4 · headroom 3", "toast.goodTokens": "Good tokens: thinking off · temp 0 on send", "warn.peakNeeds17": "Metal Peak needs ≥17 GiB free (prefer ≥22; admit ≥21.5). Close apps or use Apply best.", "confirm.peakMarginal": "Free RAM is under 21.5 GiB — peak is marginal (admission/stall risk). Preferred quiet is ≥22. Continue with cache=14 anyway?", "hint.p2pFreeze": "Does not spawn a second heavy serve. Start Slipstream first for mlx/llama/auto; one Metal or oMLX process only.",
     "path.gguf": "GGUF folder", "path.pgrn": "PGRN path (streamed)",
     "path.source": "Download source (HuggingFace repo/URL)", "path.binary": "Server binary (our llama.cpp engine)",
     "adv.mirror": "Advanced: 2nd SSD mirror (dual-SSD)", "adv.mirrorPh": "path to a byte-identical .pgrn copy on a 2nd fast disk", "adv.mirrorWarn": "⚠ Only helps with two equally-fast SSDs (2× NVMe or TB4). On internal + slow USB it's slower — leave empty.", "adv.buffered": "Advanced: buffered reads (non-NVMe drives)", "adv.predict": "Advanced: predictive prefetch (experimental)",
@@ -616,7 +616,7 @@ const I18N_EXT = {
     "st.dlRunning": "Download running…", "st.convRunning": "Converting… (GGUF -> PGRN)",
     "reco.cons": "Conservative — runs on 16 GiB Macs, more SSD reads.", "reco.rec": "<b>Recommended</b> for interactive coding on 36 GiB — Mac stays smooth.",
     "models.group.rec": "Recommended for coding", "models.group.xl": "XL giants (advanced)",
-    "reco.peak": "<b>Metal Peak (qualified)</b> — 14 GiB + io=4; needs ≥17 GiB free (prefer ≥22). Measured ~18–19 tok/s warm.", "reco.fast": "Fast — needs lots of free RAM; close apps first.", "reco.aggr": "Aggressive — only with lots of free RAM, else swapping.",
+    "reco.peak": "<b>Metal Peak (qualified)</b> — 14 GiB + io=4; needs ≥17 GiB free (prefer ≥22; admit ≥21.5). Measured ~18–19 tok/s warm.", "reco.fast": "Fast — needs lots of free RAM; close apps first.", "reco.aggr": "Aggressive — only with lots of free RAM, else swapping.",
     "act.prefill": "Prefill — reading the prompt", "act.decode": "Generating answer", "act.idleReady": "Ready — waiting for a request", "act.stopped": "Server stopped", "act.running": "running…", "act.tokens": "tokens",
     "note.qwen36": "Strongest compatible coder with MTP speed.", "note.qwen30": "Smaller, no MTP — good for weaker Macs.",
     "note.deepseek": "Small & fast, lowest RAM need.", "note.glm": "Large, lots of disk — strong quality.",
@@ -699,7 +699,7 @@ const I18N_EXT = {
     "chart.ssd": "SSD-Durchsatz", "chart.ssdNote": "Experten von SSD gestreamt",
     "chart.arena": "Experten-Cache — live", "arena.resident": "resident (Treffer)", "arena.stream": "streamt von SSD",
     "chart.hit": "Cache-Hit-Rate", "chart.hitNote": "resident bedient (kein SSD-Read)",
-    "reco.computing": "Ermittle Werte…", "toast.noSys": "Noch keine Systemdaten", "toast.applied": "Beste Einstellungen angewendet", "toast.peakApplied": "Metal Peak: Cache 14 · io 4 · Headroom 3", "toast.goodTokens": "Gute Tokens: Thinking aus · temp 0 beim Senden", "warn.peakNeeds17": "Metal Peak braucht ≥17 GiB frei (besser ≥22). Apps schließen oder Beste anwenden.", "confirm.peakMarginal": "Weniger als 22 GiB frei — Peak ist grenzwertig (Admission/Stall-Risiko). Trotzdem Cache=14?", "hint.p2pFreeze": "Startet keinen zweiten Heavy-Serve. Für mlx/llama/auto zuerst Slipstream starten; nur ein Metal- oder oMLX-Prozess.",
+    "reco.computing": "Ermittle Werte…", "toast.noSys": "Noch keine Systemdaten", "toast.applied": "Beste Einstellungen angewendet", "toast.peakApplied": "Metal Peak: Cache 14 · io 4 · Headroom 3", "toast.goodTokens": "Gute Tokens: Thinking aus · temp 0 beim Senden", "warn.peakNeeds17": "Metal Peak braucht ≥17 GiB frei (besser ≥22; Zulassung ≥21.5). Apps schließen oder Beste anwenden.", "confirm.peakMarginal": "Weniger als 21.5 GiB frei — Peak ist grenzwertig (Admission/Stall-Risiko). Bevorzugtes ruhiges Fenster ≥22. Trotzdem Cache=14?", "hint.p2pFreeze": "Startet keinen zweiten Heavy-Serve. Für mlx/llama/auto zuerst Slipstream starten; nur ein Metal- oder oMLX-Prozess.",
     "path.gguf": "GGUF-Ordner", "path.pgrn": "PGRN-Pfad (gestreamt)",
     "path.source": "Download-Quelle (HuggingFace-Repo/URL)", "path.binary": "Server-Binary (unsere llama.cpp-Engine)",
     "adv.mirror": "Advanced: 2. SSD-Mirror (Dual-SSD)", "adv.mirrorPh": "Pfad zu einer byte-identischen .pgrn-Kopie auf einer 2. schnellen Disk", "adv.mirrorWarn": "⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.", "adv.buffered": "Advanced: gepufferte Reads (Nicht-NVMe-Laufwerke)", "adv.predict": "Advanced: Predictive Prefetch (experimentell)",
@@ -732,7 +732,7 @@ const I18N_EXT = {
     "st.dlRunning": "Download läuft…", "st.convRunning": "Konvertierung läuft… (GGUF -> PGRN)",
     "reco.cons": "Konservativ — läuft auf 16 GiB Macs, mehr SSD-Reads.", "reco.rec": "<b>Empfohlen</b> für interaktives Coding auf 36 GiB — Mac bleibt flüssig.",
     "models.group.rec": "Empfohlen fürs Coding", "models.group.xl": "XL-Riesen (fortgeschritten)",
-    "reco.peak": "<b>Metal Peak (qualifiziert)</b> — 14 GiB + io=4; braucht ≥17 GiB frei (besser ≥22). Gemessen ~18–19 tok/s warm.", "reco.fast": "Schnell — braucht viel freien RAM; erst Apps schließen.", "reco.aggr": "Aggressiv — nur bei viel freiem RAM, sonst Swapping.",
+    "reco.peak": "<b>Metal Peak (qualifiziert)</b> — 14 GiB + io=4; braucht ≥17 GiB frei (besser ≥22; Zulassung ≥21.5). Gemessen ~18–19 tok/s warm.", "reco.fast": "Schnell — braucht viel freien RAM; erst Apps schließen.", "reco.aggr": "Aggressiv — nur bei viel freiem RAM, sonst Swapping.",
     "act.prefill": "Prefill — Prompt wird gelesen", "act.decode": "Antwort wird generiert", "act.idleReady": "Bereit — wartet auf Anfrage", "act.stopped": "Server gestoppt", "act.running": "läuft…", "act.tokens": "Tokens",
     "note.qwen36": "Stärkster kompatibler Coder mit MTP-Speed.", "note.qwen30": "Kleiner, ohne MTP — gut für schwächere Macs.",
     "note.deepseek": "Klein & schnell, geringster RAM-Bedarf.", "note.glm": "Groß, viel Disk — starke Qualität.",
@@ -821,7 +821,7 @@ const TIPS = {
   en: {
     "tip.usability": "Green = Mac stays smooth. Yellow/red = memory pressure / swapping — shrink the cache.",
     "tip.liveMonitor": "Real values from the streaming kernel log — not an estimate.",
-    "tip.cache": "How many experts stay resident in RAM. Bigger = faster (more hits) but needs more free RAM. Measured Metal peak: 14 GiB + io=4 (~18–19 tok/s) when free ≥22 GiB; safe warm: 10 GiB + io=4.",
+    "tip.cache": "How many experts stay resident in RAM. Bigger = faster (more hits) but needs more free RAM. Measured Metal peak: 14 GiB + io=4 (~18–19 tok/s) when free ≥22 GiB preferred (admit ≥21.5); safe warm: 10 GiB + io=4.",
     "tip.ctx": "Window for prompt + history. Coding agents send ~30k+ tokens, so 40k is the best compromise. 32k can overflow; 64k causes memory pressure.",
     "tip.io": "Parallel SSD read threads for fetching experts. Default 4 = 2×-qualified Metal balanced recipe. 1 = serial path; 8/16 = optional wider fetch (not requalified as product default).",
     "tip.mirror": "Stripe expert reads across two disks, split by measured bandwidth. Wins only with two comparably-fast, independent SSDs; a slow USB drive makes it slower. Parity is CRC-checked.",
@@ -849,7 +849,7 @@ const TIPS = {
   de: {
     "tip.usability": "Grün = Mac bleibt flüssig. Gelb/Rot = Speicherdruck / Swapping — Cache verkleinern.",
     "tip.liveMonitor": "Echte Werte aus dem Streaming-Kernel-Log — keine Schätzung.",
-    "tip.cache": "Wie viele Experten resident im RAM bleiben. Größer = schneller (mehr Treffer), braucht aber mehr freien RAM. Gemessenes Metal-Peak: 14 GiB + io=4 (~18–19 tok/s) bei ≥22 GiB frei; sicheres Warm: 10 GiB + io=4.",
+    "tip.cache": "Wie viele Experten resident im RAM bleiben. Größer = schneller (mehr Treffer), braucht aber mehr freien RAM. Gemessenes Metal-Peak: 14 GiB + io=4 (~18–19 tok/s) bei ≥22 GiB frei bevorzugt (Zulassung ≥21.5); sicheres Warm: 10 GiB + io=4.",
     "tip.ctx": "Fenster für Prompt + Verlauf. Coding-Agenten schicken ~30k+ Tokens, daher ist 40k der beste Kompromiss. 32k kann überlaufen; 64k erzeugt Speicherdruck.",
     "tip.io": "Parallele SSD-Lesethreads beim Experten-Holen. Standard 4 = 2×-qualifiziertes Metal-balanced-Rezept. 1 = serieller Pfad; 8/16 = optional breiter (nicht als Produktdefault requalifiziert).",
     "tip.mirror": "Verteilt Experten-Reads bandbreiten-proportional über zwei Disks. Gewinnt nur mit zwei ähnlich schnellen, unabhängigen SSDs; eine langsame USB-Disk macht es langsamer. Parity ist CRC-geprüft.",
@@ -1703,14 +1703,15 @@ async function startServer() {
     if (guard.warnKey) toast(t(guard.warnKey), true);
     if (guard.confirmKey && !confirm(t(guard.confirmKey))) return;
   }
-  // Metal peak gate: cache≥14 needs ≥17 GiB free (prefer ≥22). Mirror MLX soft band.
+  // Metal peak gate: cache≥14 needs ≥17 GiB free (prefer ≥22; admit ≥21.5 = 22−0.5 tol).
   if (!goingMlx && cfg.cache_gb >= 14) {
     const freeM = state.sys && typeof state.sys.free_gib === "number" ? state.sys.free_gib : null;
+    const peakAdmit = 22 - 0.5; // PEAK_FREE_GIB − PEAK_FREE_TOLERANCE_GIB
     if (freeM != null && freeM < 17) {
       toast(t("warn.peakNeeds17"), true);
       return;
     }
-    if (freeM != null && freeM < 22 && !confirm(t("confirm.peakMarginal"))) return;
+    if (freeM != null && freeM < peakAdmit && !confirm(t("confirm.peakMarginal"))) return;
   }
   try {
     const msg = await invoke("start_server", { cfg });
@@ -1770,10 +1771,12 @@ function computeReco() {
   const free = typeof s.free_gib === "number" ? s.free_gib : 0;
   // Qualified Metal bands (HANDOVER / METAL_PEAK_VS_SMOKE). Headroom fixed at 3 GiB;
   // keep post-load free estimate ≥ 2 GiB. io=4 is the 2×-qualified balanced width.
+  // Peak preferred quiet ≥22; admit band ≥21.5 (0.5 GiB tolerance) so 21.81 is not refused.
   const headroom = 3;
   const postFloor = 2;
+  const peakAdmit = 22 - 0.5;
   let cache, band;
-  if (free >= 22) { cache = 14; band = "peak"; }
+  if (free >= peakAdmit) { cache = 14; band = "peak"; }
   else if (free >= 17) { cache = 10; band = "warm"; }
   else if (free >= 12) { cache = 8; band = "cons"; }
   else if (free >= 8) { cache = 6; band = "cons"; }
@@ -1853,12 +1856,14 @@ function applyReco() {
 }
 function applyPeak() {
   // Qualified Metal Peak: cache=14 · headroom=3 · io=4 (~18–19 tok/s warm when free allows).
+  // Preferred quiet ≥22; admit ≥21.5 (0.5 tol) without confirm; confirm only below admit band.
   const free = state.sys && typeof state.sys.free_gib === "number" ? state.sys.free_gib : null;
+  const peakAdmit = 22 - 0.5;
   if (free != null && free < 17) {
     toast(t("warn.peakNeeds17"), true);
     return;
   }
-  if (free != null && free < 22 && !confirm(t("confirm.peakMarginal"))) return;
+  if (free != null && free < peakAdmit && !confirm(t("confirm.peakMarginal"))) return;
   $("cache").value = 14; $("cacheVal").textContent = "14"; updateCacheRec();
   if ($("io")) $("io").value = "4";
   if ($("compactSlots")) $("compactSlots").checked = true;
