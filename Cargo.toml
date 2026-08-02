@@ -9,6 +9,7 @@ members = [
   "crates/p2p-ledger",
   "crates/p2p-net",
   "crates/p2p-security",
+  "crates/p2p-libp2p",
 ]
 exclude = ["app/src-tauri"]
 
@@ -25,6 +26,7 @@ p2p-router = { path = "crates/p2p-router" }
 p2p-ledger = { path = "crates/p2p-ledger" }
 p2p-net = { path = "crates/p2p-net" }
 p2p-security = { path = "crates/p2p-security" }
+p2p-libp2p = { path = "crates/p2p-libp2p" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
