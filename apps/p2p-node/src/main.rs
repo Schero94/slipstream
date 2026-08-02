@@ -14,13 +14,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
+use libp2p::Multiaddr;
 use p2p_core::{JobRequest, NodeId};
 use p2p_crypto::NodeKeypair;
 use p2p_engine::{plan_serve_for_choice, resolve_engine_choice, EngineChoice};
 use p2p_ledger::Ledger;
 use p2p_node::{
     capability_for_engine, capability_to_advert, client_hello, default_capability, send_sealed_job,
-    NodeConfig, NodeMode, NodePolicy, RunningNode,
+    mesh::{send_mesh_job, serve_mesh}, NodeConfig, NodeMode, NodePolicy, RunningNode,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -88,6 +89,36 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         spawn_engine: bool,
     },
+    /// Serve sealed inference over direct libp2p QUIC.
+    ///
+    /// Traffic and payloads are encrypted in transit; the selected worker sees plaintext
+    /// during inference. Community capacity donation remains explicit and bounded.
+    MeshServe {
+        /// QUIC listen multiaddress.
+        #[arg(long, default_value = "/ip4/127.0.0.1/udp/0/quic-v1")]
+        listen: Multiaddr,
+        /// Exposure mode: local | private | community.
+        #[arg(long, default_value = "local")]
+        mode: NodeMode,
+        /// Donate bounded inference capacity. Valid only with --mode community.
+        #[arg(long, default_value_t = false)]
+        donate_capacity: bool,
+        /// Persistent node key (generated if missing).
+        #[arg(long, default_value = "node.key")]
+        key: PathBuf,
+        /// Models to advertise (comma-separated).
+        #[arg(long, default_value = "mock")]
+        models: String,
+        /// Engine: mock | auto | mlx | llama.
+        #[arg(long, default_value = "mock")]
+        engine: String,
+        /// Optional SQLite ledger (community free mode does not settle credits).
+        #[arg(long)]
+        ledger: Option<PathBuf>,
+        /// Spawn the selected heavy engine (requires the launch feature).
+        #[arg(long, default_value_t = false)]
+        spawn_engine: bool,
+    },
     /// Dial peers, exchange Hello, print capabilities.
     Peers {
         /// Comma-separated peer addresses.
@@ -123,6 +154,28 @@ enum Commands {
         #[arg(long, default_value_t = 8)]
         max_tokens: u32,
         /// Optional job id (random if omitted).
+        #[arg(long)]
+        job_id: Option<String>,
+    },
+    /// Send one sealed job over direct libp2p QUIC.
+    MeshSendJob {
+        /// Worker QUIC multiaddress printed by mesh-serve.
+        #[arg(long)]
+        peer: Multiaddr,
+        /// Optional pinned Ed25519 worker identity (64 lowercase hex chars).
+        #[arg(long)]
+        expected_peer_id: Option<String>,
+        /// Persistent client key (generated if missing).
+        #[arg(long, default_value = "client.key")]
+        key: PathBuf,
+        #[arg(long, default_value = "hello mesh")]
+        prompt: String,
+        #[arg(long, default_value = "")]
+        system: String,
+        #[arg(long, default_value = "mock")]
+        model: String,
+        #[arg(long, default_value_t = 8)]
+        max_tokens: u32,
         #[arg(long)]
         job_id: Option<String>,
     },
@@ -181,6 +234,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         }
+        Commands::MeshServe {
+            listen,
+            mode,
+            donate_capacity,
+            key,
+            models,
+            engine,
+            ledger,
+            spawn_engine,
+        } => {
+            let choice = EngineChoice::parse(&engine)?;
+            cmd_mesh_serve(
+                listen,
+                mode,
+                donate_capacity,
+                key,
+                models,
+                choice,
+                ledger,
+                spawn_engine,
+            )
+            .await?;
+        }
         Commands::Peers { addrs, key, models } => cmd_peers(addrs, key, models).await?,
         Commands::SendJob {
             peer,
@@ -193,6 +269,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             job_id,
         } => {
             cmd_send_job(
+                peer,
+                expected_peer_id,
+                key,
+                prompt,
+                system,
+                model,
+                max_tokens,
+                job_id,
+            )
+            .await?
+        }
+        Commands::MeshSendJob {
+            peer,
+            expected_peer_id,
+            key,
+            prompt,
+            system,
+            model,
+            max_tokens,
+            job_id,
+        } => {
+            cmd_mesh_send_job(
                 peer,
                 expected_peer_id,
                 key,
@@ -324,6 +422,40 @@ async fn cmd_serve(
     Ok(())
 }
 
+async fn cmd_mesh_serve(
+    listen: Multiaddr,
+    mode: NodeMode,
+    donate_capacity: bool,
+    key: PathBuf,
+    models: String,
+    engine: EngineChoice,
+    ledger: Option<PathBuf>,
+    spawn_engine: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut policy = NodePolicy::for_mode(mode);
+    policy.donate_capacity = donate_capacity;
+    policy.validate()?;
+    let keypair = Arc::new(load_or_create_key(&key)?);
+    let capability = capability_for_engine(
+        default_capability(parse_models(&models), engine.is_mock()),
+        engine,
+    );
+    let node = RunningNode::open(NodeConfig {
+        // The QUIC multiaddress is validated by serve_mesh. This loopback value
+        // keeps the shared engine/policy runtime independent of TCP binding.
+        listen: "127.0.0.1:0".parse()?,
+        keypair,
+        capability,
+        engine,
+        spawn_engine,
+        ledger_path: ledger,
+        bootstrap: Vec::new(),
+        policy,
+    })?;
+    serve_mesh(node, listen).await?;
+    Ok(())
+}
+
 async fn cmd_peers(
     addrs: String,
     key: PathBuf,
@@ -392,6 +524,60 @@ async fn cmd_send_job(
         println!(
             "fail error={}",
             result.error.unwrap_or_else(|| "unknown".into())
+        );
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn cmd_mesh_send_job(
+    peer: Multiaddr,
+    expected_peer_id: Option<String>,
+    key: PathBuf,
+    prompt: String,
+    system: String,
+    model: String,
+    max_tokens: u32,
+    job_id: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let keypair = load_or_create_key(&key)?;
+    let generated_id = || {
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        format!("mesh-{}-{millis}", &keypair.node_id().as_hex()[..8])
+    };
+    let request = JobRequest {
+        job_id: job_id.unwrap_or_else(generated_id),
+        model,
+        system,
+        prompt,
+        max_tokens,
+    };
+    eprintln!(
+        "privacy: encrypted in transit; selected worker sees plaintext during inference"
+    );
+    let outcome = send_mesh_job(
+        peer,
+        &keypair,
+        &request,
+        expected_peer_id.as_deref(),
+    )
+    .await?;
+    println!(
+        "worker identity={} encryption={} transport={}",
+        outcome.worker_identity, outcome.worker_encryption_id, outcome.transport_peer_id
+    );
+    if outcome.result.ok {
+        println!(
+            "ok tokens={} text={}",
+            outcome.result.tokens, outcome.result.text
+        );
+    } else {
+        println!(
+            "fail error={}",
+            outcome.result.error.unwrap_or_else(|| "unknown".into())
         );
         std::process::exit(1);
     }

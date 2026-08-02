@@ -36,6 +36,15 @@ impl SigningIdentity {
         hex::encode(self.public_bytes())
     }
 
+    /// Return a copy of the domain-separated Ed25519 seed.
+    ///
+    /// This exists so an authenticated transport (for example libp2p QUIC)
+    /// can use the same persistent identity as signed Slipstream Hello frames.
+    /// Callers must erase the returned copy after importing it.
+    pub fn secret_seed(&self) -> [u8; 32] {
+        self.signing.to_bytes()
+    }
+
     pub fn sign(&self, payload: &[u8]) -> Vec<u8> {
         self.signing.sign(payload).to_bytes().to_vec()
     }

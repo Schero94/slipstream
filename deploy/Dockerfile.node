@@ -13,6 +13,6 @@ RUN apt-get update \
 COPY --from=builder /src/target/release/slipstream-node /usr/local/bin/slipstream-node
 USER slipstream
 WORKDIR /var/lib/slipstream
-EXPOSE 9002/tcp
+EXPOSE 9003/udp
 ENTRYPOINT ["/usr/local/bin/slipstream-node"]
-CMD ["serve", "--listen", "0.0.0.0:9002", "--mode", "private", "--key", "node.key", "--ledger", "ledger.db", "--models", "slipstream", "--engine", "auto"]
+CMD ["mesh-serve", "--listen", "/ip4/0.0.0.0/udp/9003/quic-v1", "--mode", "private", "--key", "node.key", "--ledger", "ledger.db", "--models", "slipstream", "--engine", "auto"]

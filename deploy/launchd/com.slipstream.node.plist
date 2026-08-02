@@ -7,9 +7,9 @@
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/slipstream-node</string>
-    <string>serve</string>
+    <string>mesh-serve</string>
     <string>--listen</string>
-    <string>127.0.0.1:9002</string>
+    <string>/ip4/127.0.0.1/udp/9003/quic-v1</string>
     <string>--mode</string>
     <string>local</string>
     <string>--key</string>

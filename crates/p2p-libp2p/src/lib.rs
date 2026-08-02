@@ -4,6 +4,7 @@
 
 use std::convert::Infallible;
 use std::io;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -122,7 +123,8 @@ impl MeshBehaviour {
             inference: request_response::Behaviour::with_codec(
                 BoundedBytesCodec,
                 protocols,
-                request_response::Config::default(),
+                request_response::Config::default()
+                    .with_request_timeout(Duration::from_secs(60 * 60)),
             ),
         }
     }
@@ -164,7 +166,14 @@ impl From<request_response::Event<Vec<u8>, Vec<u8>>> for MeshEvent {
 /// Construct a QUIC swarm with an authenticated ephemeral libp2p identity.
 /// Persistent identity injection is added by the node integration layer.
 pub fn build_quic_swarm() -> Result<Swarm<MeshBehaviour>, Infallible> {
-    let swarm = SwarmBuilder::with_new_identity()
+    build_quic_swarm_with_identity(libp2p::identity::Keypair::generate_ed25519())
+}
+
+/// Construct a QUIC swarm with a caller-provided persistent identity.
+pub fn build_quic_swarm_with_identity(
+    identity: libp2p::identity::Keypair,
+) -> Result<Swarm<MeshBehaviour>, Infallible> {
+    let swarm = SwarmBuilder::with_existing_identity(identity)
         .with_tokio()
         .with_quic()
         .with_behaviour(|_| MeshBehaviour::new())

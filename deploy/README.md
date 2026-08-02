@@ -28,13 +28,13 @@ sudo systemctl enable --now slipstream-node
 sudo journalctl -u slipstream-node -f
 ```
 
-The example binds private mode to port 9002. Restrict that port with the host firewall to intended peers until the authenticated libp2p WAN transport is enabled.
+The example binds authenticated QUIC private mode to UDP port 9003. Restrict that port with the host firewall to intended peers until public discovery and relay fallback are enabled.
 
 ## Container
 
 ```bash
 docker build -f deploy/Dockerfile.node -t slipstream-node .
-docker run --rm -p 9002:9002 -v slipstream-data:/var/lib/slipstream slipstream-node
+docker run --rm -p 9003:9003/udp -v slipstream-data:/var/lib/slipstream slipstream-node
 ```
 
 The final image runs as the unprivileged `slipstream` user. Connect the container to an inference endpoint explicitly; it does not bundle model weights.
@@ -48,7 +48,10 @@ The plist is a reviewable template for the upcoming in-app installer. Replace `R
 Only use the following combination after reviewing the limits and plaintext-worker disclosure:
 
 ```bash
-slipstream-node serve --listen 0.0.0.0:9002 --mode community --donate-capacity --models slipstream --engine auto
+slipstream-node mesh-serve \
+  --listen /ip4/0.0.0.0/udp/9003/quic-v1 \
+  --mode community --donate-capacity \
+  --models slipstream --engine auto
 ```
 
-This currently enables the hardened direct protocol, not global discovery/NAT traversal. Public WAN operation remains disabled until the libp2p QUIC/Noise, bootstrap, AutoNAT/DCUtR, and relay validation gates pass.
+This enables the authenticated direct libp2p QUIC path. Copy the complete multiaddress and signing identity printed by the worker into `mesh-send-job`; see `docs/COMMUNITY_MESH_OPERATIONS.md`. Automatic public discovery, NAT traversal, and relay fallback are not enabled yet.

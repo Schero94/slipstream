@@ -2041,11 +2041,14 @@ name = "p2p-node"
 version = "0.2.34"
 dependencies = [
  "clap",
+ "futures",
  "hex",
+ "libp2p",
  "p2p-core",
  "p2p-crypto",
  "p2p-engine",
  "p2p-ledger",
+ "p2p-libp2p",
  "p2p-net",
  "p2p-router",
  "p2p-security",

@@ -198,6 +198,71 @@ impl RunningNode {
             .collect()
     }
 
+    /// Process one authenticated mesh job with the same replay, admission,
+    /// encryption, engine, and settlement policy as the direct TCP runtime.
+    pub fn process_mesh_job(
+        &self,
+        remote: &CapabilityAdvert,
+        message: &NetMessage,
+    ) -> Result<NetMessage, RuntimeError> {
+        let consumer = NodeId::from_hex(&remote.node_id).map_err(|e| {
+            RuntimeError::Protocol(format!("peer Hello node_id not a valid NodeId: {e}"))
+        })?;
+        self.peers
+            .lock()
+            .expect("peers")
+            .insert(remote.node_id.clone(), remote.clone());
+
+        let replay_result = {
+            let mut replay = self.replay.lock().expect("replay cache");
+            p2p_net::admit_encrypted_job(message, &mut replay)
+        };
+        if let Err(error) = replay_result {
+            if error.is_replay() {
+                return seal_result_message(
+                    &JobResult::failure("replay", "replay"),
+                    &consumer,
+                );
+            }
+            return Err(error.into());
+        }
+
+        let NetMessage::EncryptedJob {
+            job_id,
+            ciphertext,
+            nonce,
+            ephemeral_pubkey,
+        } = message
+        else {
+            return Err(RuntimeError::Protocol(format!(
+                "expected EncryptedJob, got {}",
+                message.wire_type()
+            )));
+        };
+        let frame_bytes = sealed_job_frame_bytes(job_id, ciphertext, nonce, ephemeral_pubkey);
+        let community_free = self.config.policy.mode == NodeMode::Community;
+        if !community_free {
+            let _ = self.ledger.fund(&remote.node_id, FAUCET_CREDITS);
+        }
+        let result = match self.admission.validate_frame(frame_bytes) {
+            Ok(()) => process_job(
+                job_id,
+                ciphertext,
+                ephemeral_pubkey,
+                self.config.keypair.as_ref(),
+                self.engine.as_ref(),
+                &self.ledger,
+                &remote.node_id,
+                self.config.keypair.node_id().as_hex(),
+                &self.admission,
+                frame_bytes,
+                community_free,
+            ),
+            Err(rejection) => JobResult::failure(job_id, rejection.as_code()),
+        };
+        seal_result_message(&result, &consumer)
+    }
+
     /// Bind, print `listening <addr>`, then accept forever.
     pub async fn serve(mut self) -> Result<(), RuntimeError> {
         let (listener, addr) = self.bind().await?;
@@ -512,7 +577,7 @@ pub async fn client_hello(
     Ok((session, remote))
 }
 
-fn signed_hello(
+pub fn signed_hello(
     capability: CapabilityAdvert,
     keypair: &NodeKeypair,
     response_to: Vec<u8>,
@@ -520,6 +585,14 @@ fn signed_hello(
     let mut nonce = [0u8; 32];
     OsRng.fill_bytes(&mut nonce);
     signed_hello_at(capability, keypair, response_to, unix_now(), nonce)
+}
+
+pub fn verify_signed_hello(
+    message: &NetMessage,
+    expected_response: Option<&[u8]>,
+    expected_identity: Option<&str>,
+) -> Result<CapabilityAdvert, RuntimeError> {
+    verify_signed_hello_at(message, expected_response, expected_identity, unix_now())
 }
 
 pub fn signed_hello_at(
@@ -609,7 +682,7 @@ pub fn verify_signed_hello_at(
     Ok(capability.clone())
 }
 
-fn hello_nonce(message: &NetMessage) -> Result<Vec<u8>, RuntimeError> {
+pub fn hello_nonce(message: &NetMessage) -> Result<Vec<u8>, RuntimeError> {
     let NetMessage::Hello {
         auth: Some(auth), ..
     } = message

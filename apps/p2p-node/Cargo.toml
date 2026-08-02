@@ -31,6 +31,7 @@ p2p-crypto = { workspace = true }
 p2p-engine = { workspace = true }
 p2p-ledger = { workspace = true }
 p2p-net = { workspace = true }
+p2p-libp2p = { workspace = true }
 p2p-router = { workspace = true }
 p2p-security = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
@@ -42,6 +43,8 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures = "0.3"
+libp2p = { version = "0.56", default-features = false, features = ["tokio", "quic", "request-response", "macros", "ed25519"] }
 
 [dev-dependencies]
 tempfile = "3"
