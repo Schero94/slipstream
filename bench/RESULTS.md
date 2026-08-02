@@ -3050,3 +3050,18 @@ The run also exposed the next safety task: oMLX's `auto` prefix-cache budget is
 SSD had only about 10 GiB free. This did not grow during the short qualification,
 but it is not a safe long-running product default and must be capped against
 current free space plus a reserve before release.
+
+### Follow-up: free-space-aware SSD cache guard — PASS
+
+The launcher now resolves only the upstream `auto` policy at every start. Its
+total cache cap is `min(10% filesystem capacity, existing cache + free space −
+3 GiB reserve)`. An explicit CLI, environment, or `settings.json` limit remains
+authoritative; disabled and hot-only caches are also left alone. If no free
+space remains above the reserve, Slipstream starts inference with the SSD prefix
+cache disabled instead of risking a full system volume.
+
+The real restart on the same nearly full internal SSD changed the initialized
+`PagedSSDCacheManager` from **46.04 GB** to **7.42 GB** with **10.43 GB** free.
+PGRN then loaded the same internal model and returned exact `42` at **5.56
+tok/s**; swap stayed at **1348.25 MiB**. Stop again released process, port, and
+lock. Evidence: `bench/results/omlx-ssd-cache-guard-20260802.json`.

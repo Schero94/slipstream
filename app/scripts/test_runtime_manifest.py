@@ -37,6 +37,7 @@ class RuntimeManifestTest(unittest.TestCase):
         required = (
             "omlx_launcher",
             "omlx_bootstrap",
+            "omlx_ssd_cache_budget",
             "omlx_uv",
             "omlx_runtime_lock",
             "omlx_fork",
@@ -54,6 +55,7 @@ class RuntimeManifestTest(unittest.TestCase):
             self.assertIs(components[name]["required"], True)
         self.assertIs(components["omlx_launcher"]["executable"], True)
         self.assertIs(components["omlx_bootstrap"]["executable"], True)
+        self.assertIs(components["omlx_ssd_cache_budget"]["executable"], True)
         self.assertIs(components["omlx_uv"]["executable"], True)
         self.assertEqual(
             components["omlx_launcher"]["minimum_system_version"], "14.0"

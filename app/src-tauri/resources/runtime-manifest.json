@@ -30,6 +30,13 @@
       "executable": true,
       "platform": "macos-arm64"
     },
+    "omlx_ssd_cache_budget": {
+      "path": "omlx-pgrn/ssd_cache_budget.py",
+      "kind": "file",
+      "required": true,
+      "executable": true,
+      "platform": "macos-arm64"
+    },
     "omlx_uv": {
       "path": "omlx-pgrn/uv",
       "kind": "file",

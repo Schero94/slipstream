@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "date": "2026-08-02",
+  "engine": "omlx-pgrn",
+  "model": "Qwen3.6-35B-A3B-4bit",
+  "filesystem": "internal-ssd",
+  "configured_policy": "auto",
+  "reserve_gib": 3,
+  "before": {
+    "upstream_auto_max_gb": 46.04,
+    "free_gb_at_observation": 10.43
+  },
+  "after": {
+    "resolved_max_bytes": 7972048896,
+    "manager_max_gb": 7.42,
+    "manager_disk_free_gb": 10.43
+  },
+  "live_smoke": {
+    "passed": true,
+    "response": "42",
+    "decode_tokens_per_second": 5.56,
+    "ttft_seconds_including_model_load": 10.593063,
+    "swap_used_mib_before": 1348.25,
+    "swap_used_mib_after": 1348.25,
+    "raw_artifact_sha256": "2dbac46ba6424b42186c9c1a83ed69ed8da90dbff5fb11b2ba62033266204a57"
+  },
+  "shutdown": {
+    "owned_process_stopped": true,
+    "port_released": true,
+    "lock_removed": true
+  }
+}

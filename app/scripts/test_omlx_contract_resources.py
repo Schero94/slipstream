@@ -16,6 +16,8 @@ STORE = RESOURCE / "omlx" / "pgrn" / "store.py"
 BOOTSTRAP = RESOURCE / "bootstrap_mlx_runtime.sh"
 UV_STAGER = ROOT / "scripts" / "stage_uv_runtime.sh"
 OMLX_OVERLAY_STAGER = ROOT / "scripts" / "apply_omlx_overlays.sh"
+SSD_CACHE_BUDGET = RESOURCE / "ssd_cache_budget.py"
+LAUNCHER = RESOURCE / "run_omlx_pgrn.sh"
 TOOL_CHOICE_PATCH = ROOT.parent / "patches" / "omlx" / "0001-enforce-openai-tool-choice.patch"
 RUNTIME_LOCK = RESOURCE / "requirements-mlx-runtime.lock"
 GRAMMAR_REQUIREMENTS = RESOURCE / "requirements-mlx-grammar.txt"
@@ -92,6 +94,15 @@ class ContractResourcesTest(unittest.TestCase):
         self.assertIn("0001-enforce-openai-tool-choice.patch", stager)
         self.assertIn("enforce_tool_choice", patch)
         self.assertIn('field="tool_choice"', patch)
+
+    def test_launcher_caps_upstream_auto_ssd_cache_with_a_disk_reserve(self) -> None:
+        launcher = LAUNCHER.read_text(encoding="utf-8")
+        self.assertTrue(SSD_CACHE_BUDGET.is_file())
+        self.assertIn("ssd_cache_budget.py", launcher)
+        self.assertIn('$("$PY" "$HERE/ssd_cache_budget.py"', launcher)
+        self.assertIn("SLIPSTREAM_OMLX_SSD_RESERVE_GIB:-3", launcher)
+        self.assertIn("--paged-ssd-cache-max-size", launcher)
+        self.assertIn("--no-cache", launcher)
 
 
 if __name__ == "__main__":

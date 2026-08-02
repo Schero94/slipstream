@@ -162,6 +162,65 @@ fi
 source "$HERE/pgrn_serve_lock.sh"
 
 if pgrn_serve_lock_is_serve_cmd "$@"; then
+  # oMLX's upstream `auto` prefix-cache limit is 10% of total filesystem
+  # capacity. On a nearly full internal SSD that can exceed current free space
+  # by tens of GiB. Preserve explicit user policy; otherwise cap the total
+  # cache against current free bytes while keeping a 3 GiB disk reserve.
+  _pgrn_cache_policy_explicit=0
+  _pgrn_cache_base=""
+  _pgrn_cache_dir="${OMLX_SSD_CACHE_DIR:-}"
+  _pgrn_prev=""
+  for _pgrn_arg in "$@"; do
+    if [[ "$_pgrn_prev" == "--base-path" ]]; then _pgrn_cache_base="$_pgrn_arg"; fi
+    if [[ "$_pgrn_prev" == "--paged-ssd-cache-dir" ]]; then _pgrn_cache_dir="$_pgrn_arg"; fi
+    case "$_pgrn_arg" in
+      --no-cache|--hot-cache-only|--paged-ssd-cache-max-size|--paged-ssd-cache-max-size=*)
+        _pgrn_cache_policy_explicit=1
+        ;;
+      --base-path=*) _pgrn_cache_base="${_pgrn_arg#*=}" ;;
+      --paged-ssd-cache-dir=*) _pgrn_cache_dir="${_pgrn_arg#*=}" ;;
+    esac
+    _pgrn_prev="$_pgrn_arg"
+  done
+  _pgrn_cache_enabled_lc="$(printf '%s' "${OMLX_CACHE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+  _pgrn_hot_only_lc="$(printf '%s' "${OMLX_HOT_CACHE_ONLY:-false}" | tr '[:upper:]' '[:lower:]')"
+  if [[ -n "${OMLX_SSD_CACHE_MAX_SIZE:-}" \
+     || "$_pgrn_cache_enabled_lc" =~ ^(false|0|no)$ \
+     || "$_pgrn_hot_only_lc" =~ ^(true|1|yes)$ ]]; then
+    _pgrn_cache_policy_explicit=1
+  fi
+  if [[ "$_pgrn_cache_policy_explicit" == "0" ]]; then
+    if [[ -z "$_pgrn_cache_base" ]]; then
+      if [[ -n "${OMLX_BASE_PATH:-}" ]]; then
+        _pgrn_cache_base="$OMLX_BASE_PATH"
+      elif [[ -s "${HOME}/Library/Application Support/oMLX/base-path" ]]; then
+        _pgrn_cache_base="$(<"${HOME}/Library/Application Support/oMLX/base-path")"
+      else
+        _pgrn_cache_base="${HOME}/.omlx"
+      fi
+    fi
+    _pgrn_budget_args=(--base-path "$_pgrn_cache_base" --reserve-gib "${SLIPSTREAM_OMLX_SSD_RESERVE_GIB:-3}")
+    if [[ -n "$_pgrn_cache_dir" ]]; then
+      _pgrn_budget_args+=(--cache-dir "$_pgrn_cache_dir")
+    fi
+    _pgrn_cache_action="$("$PY" "$HERE/ssd_cache_budget.py" "${_pgrn_budget_args[@]}")"
+    case "$_pgrn_cache_action" in
+      preserve) ;;
+      disable)
+        echo "Slipstream SSD cache: disabled (free space is at/below reserve)" >&2
+        set -- "$@" --no-cache
+        ;;
+      *[!0-9]*|'')
+        echo "invalid Slipstream SSD cache budget: $_pgrn_cache_action" >&2
+        exit 2
+        ;;
+      *)
+        echo "Slipstream SSD cache: capped at ${_pgrn_cache_action} bytes (reserve=${SLIPSTREAM_OMLX_SSD_RESERVE_GIB:-3} GiB)" >&2
+        set -- "$@" --paged-ssd-cache-max-size "${_pgrn_cache_action}B"
+        ;;
+    esac
+  fi
+
   _pgrn_port="$(pgrn_serve_lock_parse_port "$@")"
   _pgrn_own_lock=1
   if [[ "${SLIPSTREAM_PGRN_ALLOW_PARALLEL:-0}" == "1" ]]; then

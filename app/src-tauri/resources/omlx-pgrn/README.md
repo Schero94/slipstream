@@ -10,6 +10,11 @@ parent tree is ignored:
 - `omlx/pgrn/store.py` preserves active-bank experts during cache eviction.
 - `omlx/api/forced_tool_choice.py` enforces OpenAI required/specific tool calls.
 
+The launcher also resolves oMLX's `auto` prefix-cache limit against current
+free space. It preserves an explicit cache limit, otherwise keeps a 3 GiB disk
+reserve (`SLIPSTREAM_OMLX_SSD_RESERVE_GIB` overrides it) and disables the SSD
+prefix cache if the reserve is already exhausted.
+
 After refreshing the staged oMLX fork, restore these three tracked files before
 testing or building. The launcher, bootstrap, lock, dependency manifests, and
 runtime helpers beside this README are also versioned. Never stage private
