@@ -444,6 +444,7 @@ pub fn p2p_start(
                     spawn_engine: false,
                     ledger_path: Some(ledger_for_node),
                     bootstrap: bootstrap_addrs,
+                    policy: p2p_node::NodePolicy::default(),
                 }) {
                     Ok(n) => n,
                     Err(e) => {
@@ -786,6 +787,7 @@ async fn send_loopback_job(params: &JobParams) -> Result<P2pJobOutcome, String> 
         spawn_engine: false,
         ledger_path: Some(ledger),
         bootstrap: vec![],
+        policy: p2p_node::NodePolicy::default(),
     })
     .map_err(|e| format!("open: {e}"))?;
     let (listener, addr) = node.bind().await.map_err(|e| format!("bind: {e}"))?;
@@ -894,6 +896,7 @@ mod tests {
                 spawn_engine: false,
                 ledger_path: Some(dir.join("peers.db")),
                 bootstrap: vec![],
+                policy: p2p_node::NodePolicy::default(),
             })
             .expect("open");
             let (listener, addr) = node.bind().await.expect("bind");

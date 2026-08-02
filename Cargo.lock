@@ -847,6 +847,7 @@ dependencies = [
  "hex",
  "p2p-core",
  "p2p-crypto",
+ "serde",
  "sha2",
  "thiserror",
 ]

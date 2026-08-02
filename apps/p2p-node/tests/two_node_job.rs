@@ -34,6 +34,7 @@ async fn sealed_job_mock_infer_and_settle() {
         spawn_engine: false,
         ledger_path: Some(ledger_path.clone()),
         bootstrap: vec![],
+        policy: p2p_node::NodePolicy::default(),
     })
     .unwrap();
 
@@ -137,6 +138,7 @@ async fn duplicate_job_id_is_rejected_by_recv_with_replay() {
         spawn_engine: false,
         ledger_path: Some(dir.path().join("r.db")),
         bootstrap: vec![],
+        policy: p2p_node::NodePolicy::default(),
     })
     .unwrap();
     let (listener, addr) = node.bind().await.unwrap();

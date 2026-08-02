@@ -157,16 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cmd_dry_run_engine(choice)?;
                 return Ok(());
             }
-            cmd_serve(
-                listen,
-                key,
-                ledger,
-                bootstrap,
-                models,
-                choice,
-                spawn_engine,
-            )
-            .await?;
+            cmd_serve(listen, key, ledger, bootstrap, models, choice, spawn_engine).await?;
         }
         Commands::Peers { addrs, key, models } => cmd_peers(addrs, key, models).await?,
         Commands::SendJob {
@@ -216,10 +207,7 @@ fn cmd_dry_run_engine(choice: EngineChoice) -> Result<(), Box<dyn std::error::Er
     println!("program={}", plan.program.display());
     println!("argv={}", plan.argv().join(" "));
     println!("display={}", plan.display());
-    println!(
-        "launch_feature={}",
-        p2p_engine::launch_feature_enabled()
-    );
+    println!("launch_feature={}", p2p_engine::launch_feature_enabled());
     println!("# spawn with: cargo run -p p2p-node --features launch -- serve --engine {} --spawn-engine …", choice.as_str());
     Ok(())
 }
@@ -290,6 +278,7 @@ async fn cmd_serve(
         spawn_engine,
         ledger_path: ledger,
         bootstrap,
+        policy: p2p_node::NodePolicy::default(),
     })?;
     node.serve().await?;
     Ok(())

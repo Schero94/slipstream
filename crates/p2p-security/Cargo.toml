@@ -7,6 +7,7 @@ description = "Documentation-driven security contracts and attack-scenario tests
 
 [dependencies]
 thiserror = { workspace = true }
+serde = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"
 

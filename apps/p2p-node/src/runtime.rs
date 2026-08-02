@@ -26,10 +26,9 @@ use p2p_security::ReplayCache;
 use thiserror::Error;
 use tracing::{info, warn};
 
-use crate::spawn_guard::{
-    check_spawn_engine_safe, default_lock_path, resolve_guard_endpoint,
-};
+use crate::spawn_guard::{check_spawn_engine_safe, default_lock_path, resolve_guard_endpoint};
 use crate::wire::{net_to_sealed, sealed_result_to_net, WireError};
+use crate::NodePolicy;
 
 /// MVP faucet: auto-fund consumers so settle stubs always succeed in local demos.
 const FAUCET_CREDITS: u64 = 1_000;
@@ -65,6 +64,8 @@ pub struct NodeConfig {
     pub ledger_path: Option<PathBuf>,
     /// Comma-separated bootstrap peers (dialed at start for discovery).
     pub bootstrap: Vec<SocketAddr>,
+    /// Network exposure and resource policy. Safe default is local-only.
+    pub policy: NodePolicy,
 }
 
 impl NodeConfig {
@@ -93,6 +94,10 @@ impl Drop for RunningNode {
 
 impl RunningNode {
     pub fn open(config: NodeConfig) -> Result<Self, RuntimeError> {
+        config
+            .policy
+            .validate_for_listen(config.listen)
+            .map_err(|e| RuntimeError::Protocol(format!("invalid node policy: {e}")))?;
         let ledger = match &config.ledger_path {
             Some(path) => Ledger::open_sqlite(path)?,
             None => Ledger::open_memory()?,
@@ -117,8 +122,7 @@ impl RunningNode {
             }
             // Freeze contract: never dual-serve against a live product/oMLX lock or
             // an already-healthy Slipstream/llama endpoint.
-            let guard_endpoint =
-                resolve_guard_endpoint(config.engine, &config.capability.os);
+            let guard_endpoint = resolve_guard_endpoint(config.engine, &config.capability.os);
             check_spawn_engine_safe(&default_lock_path(), &guard_endpoint)
                 .map_err(RuntimeError::Engine)?;
             let plan = plan_serve_for_choice(config.engine, &config.capability.os)
@@ -236,7 +240,10 @@ impl RunningNode {
     }
 }
 
-async fn dial_hello(node: &RunningNode, addr: SocketAddr) -> Result<CapabilityAdvert, RuntimeError> {
+async fn dial_hello(
+    node: &RunningNode,
+    addr: SocketAddr,
+) -> Result<CapabilityAdvert, RuntimeError> {
     let mut session = p2p_net::connect(addr).await?;
     let remote = session.exchange_hello(node.advert()).await?;
     Ok(remote)
@@ -261,9 +268,7 @@ async fn handle_session(
         }
     };
     session
-        .send(&NetMessage::Hello {
-            capability: advert,
-        })
+        .send(&NetMessage::Hello { capability: advert })
         .await?;
     peers
         .lock()
@@ -334,10 +339,7 @@ async fn handle_session(
 }
 
 /// Seal a [`JobResult`] into [`NetMessage::EncryptedJobResult`] for `consumer`.
-fn seal_result_message(
-    result: &JobResult,
-    consumer: &NodeId,
-) -> Result<NetMessage, RuntimeError> {
+fn seal_result_message(result: &JobResult, consumer: &NodeId) -> Result<NetMessage, RuntimeError> {
     let sealed = seal_job_result(result, consumer)?;
     Ok(sealed_result_to_net(&result.job_id, &sealed)?)
 }
@@ -518,6 +520,7 @@ mod tests {
             spawn_engine: true,
             ledger_path: None,
             bootstrap: vec![],
+            policy: NodePolicy::default(),
         };
         match RunningNode::open(cfg) {
             Ok(_) => panic!("expected spawn open to fail without binaries / launch"),

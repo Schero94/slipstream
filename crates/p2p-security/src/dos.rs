@@ -3,6 +3,8 @@
 //! Complements `slipstream-mesh` `MAX_FRAME` (4 MiB) with job concurrency,
 //! per-peer rate, and max_tokens caps.
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdmissionDecision {
     Allow,
@@ -13,7 +15,8 @@ pub enum AdmissionDecision {
 }
 
 /// Configurable admission policy for a worker node.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DosLimits {
     pub max_concurrent_jobs: u32,
     pub max_tokens_per_job: u32,
