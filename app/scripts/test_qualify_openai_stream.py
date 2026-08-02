@@ -44,9 +44,13 @@ class FixtureHandler(BaseHTTPRequestHandler):
         size = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(size))
         if body.get("tools"):
+            prompt = str((body.get("messages") or [{}])[0].get("content") or "")
+            arguments = {"a": 20, "b": 22} if "20 + 22" in prompt else {"a": 19, "b": 23}
+            raw_arguments = json.dumps(arguments, separators=(",", ":"))
+            split = len(raw_arguments) // 2
             deltas = [
-                {"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "add", "arguments": "{\"a\":"}}]},
-                {"tool_calls": [{"index": 0, "function": {"arguments": "19,\"b\":23}"}}]},
+                {"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "add", "arguments": raw_arguments[:split]}}]},
+                {"tool_calls": [{"index": 0, "function": {"arguments": raw_arguments[split:]}}]},
             ]
             finish = "tool_calls"
         elif body.get("response_format"):
@@ -103,6 +107,19 @@ class QualificationHarnessTest(unittest.TestCase):
         call = result["tool_calls"][0]
         self.assertEqual(call["function"]["name"], "add")
         self.assertEqual(json.loads(call["function"]["arguments"]), {"a": 19, "b": 23})
+
+    def test_tool_case_accepts_an_explicit_schema_expectation(self) -> None:
+        body = qualify.build_case_body("fixture", "tool")
+        body["messages"][0]["content"] = "Use add to calculate 20 + 22."
+        result = qualify.run_case(
+            self.base_url,
+            "fixture",
+            "tool",
+            timeout=5,
+            body_override=body,
+            expected_tool_arguments={"a": 20, "b": 22},
+        )
+        self.assertTrue(result["passed"])
 
     def test_endpoint_probe_checks_health_and_models(self) -> None:
         result = qualify.probe_endpoints(self.base_url, timeout=5)

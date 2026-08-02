@@ -171,7 +171,13 @@ def _canonical_output(content: str, tool_calls: list[dict[str, Any]]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _validate_case(case: str, content: str, tool_calls: list[dict[str, Any]]) -> list[str]:
+def _validate_case(
+    case: str,
+    content: str,
+    tool_calls: list[dict[str, Any]],
+    expected_tool_name: str = "add",
+    expected_tool_arguments: dict[str, Any] | None = None,
+) -> list[str]:
     errors: list[str] = []
     if case == "plain":
         if content.strip() != "42":
@@ -185,18 +191,19 @@ def _validate_case(case: str, content: str, tool_calls: list[dict[str, Any]]) ->
             if parsed != {"answer": 42, "label": "ok"}:
                 errors.append(f"JSON output mismatch: {parsed!r}")
     elif case == "tool":
+        expected_arguments = expected_tool_arguments or {"a": 19, "b": 23}
         if len(tool_calls) != 1:
             errors.append(f"expected one tool call, got {len(tool_calls)}")
         else:
             function = tool_calls[0].get("function") or {}
-            if function.get("name") != "add":
+            if function.get("name") != expected_tool_name:
                 errors.append(f"tool name mismatch: {function.get('name')!r}")
             try:
                 arguments = json.loads(function.get("arguments") or "")
             except json.JSONDecodeError as error:
                 errors.append(f"tool arguments parse failed: {error}")
             else:
-                if arguments != {"a": 19, "b": 23}:
+                if arguments != expected_arguments:
                     errors.append(f"tool arguments mismatch: {arguments!r}")
     return errors
 
@@ -208,8 +215,11 @@ def run_case(
     timeout: float,
     max_ttft: float = 180.0,
     max_chunk_gap: float = 5.0,
+    body_override: dict[str, Any] | None = None,
+    expected_tool_name: str = "add",
+    expected_tool_arguments: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    body = build_case_body(model, case)
+    body = body_override if body_override is not None else build_case_body(model, case)
     raw_body = json.dumps(body, separators=(",", ":")).encode()
     request = Request(
         _url(base_url, "/v1/chat/completions"),
@@ -287,7 +297,15 @@ def run_case(
     ended = time.perf_counter()
     content = "".join(content_parts)
     tool_calls = [calls[index] for index in sorted(calls)]
-    errors.extend(_validate_case(case, content, tool_calls))
+    errors.extend(
+        _validate_case(
+            case,
+            content,
+            tool_calls,
+            expected_tool_name=expected_tool_name,
+            expected_tool_arguments=expected_tool_arguments,
+        )
+    )
     if not done:
         errors.append("SSE stream ended without [DONE]")
     if not usage or not isinstance(usage.get("completion_tokens"), int):

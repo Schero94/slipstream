@@ -132,6 +132,7 @@
       "baseline_sha": "89482bd665673362b59c57d63295bd7c8259af62",
       "candidate_sha": "0fac003ea693d6f48ccb49311a5cf12a6c8b996c",
       "command": [],
+      "triage": "Memory candidate only: mmap-backed checkpoints are created after an unseen schema has already been evaluated, so this cannot remove first-schema TTFT. Source review also found unfinished descriptor/handle and cache-file lifecycle cleanup; keep unqualified until upstream hardens it and a long-prompt RAM/swap A/B justifies a build.",
       "acceptance": {"min_tok_s_ratio": 0.98, "max_ttft_ratio": 0.85, "max_rss_ratio": 0.9, "max_swap_delta_mb": 0}
     },
     {

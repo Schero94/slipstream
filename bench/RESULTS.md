@@ -3144,3 +3144,45 @@ server-form reports do not apply to the static UI; and the DOMPurify advisory
 requires an option this UI does not enable. No applicable release-runtime path
 was demonstrated, but the raw count remains documented for future vendor
 refreshes.
+
+## llama.cpp tool-schema cache and RAM bound — 2026-08-02
+
+The post-release optimization loop isolated the 20-second first forced-tool
+delay instead of treating the warm second request as representative. One live
+Qwen3.6-35B-A3B/PGRN server received four valid OpenAI tool requests in order:
+a new `add` schema, the same schema with a different question, a new `multiply`
+schema, and a return to `add`. The 10 GiB expert-cache start was correctly
+refused when available RAM missed admission by 66 MiB, so the test used a 9 GiB
+expert cache and retained the 3 GiB system reserve.
+
+| Tool-schema state | TTFT, llama default 8192 MiB prompt cap | Cached tokens | TTFT, 512 MiB prompt cap |
+|---|---:|---:|---:|
+| first `add` | 25.13 s | 0 | 25.18 s |
+| same `add`, new question | 3.89 s | 271 | 3.88 s |
+| first `multiply` | 21.31 s | 0 | 21.39 s |
+| return to `add` | 3.64 s | 271 | 3.70 s |
+
+Both four-request runs passed exact tool-name/argument checks and SSE `[DONE]`.
+Swap remained exactly **1148.12 MiB** before and after each run. Trace-level
+engine evidence reports an `add` prompt-cache entry of **260.085 MiB** and the
+subsequent `multiply` entry of **196.604 MiB**; the 512 MiB cap retained the
+measured two-schema switch. Short-run RSS growth is intentionally not claimed
+as an improvement because PGRN expert warming dominates it. The improvement is
+the hard long-running bound: Slipstream now passes `--cache-ram 512` instead of
+allowing llama.cpp's 8192 MiB default to accumulate additional client prompts.
+
+The experiment also rejects a false optimization direction. llama.cpp PR
+#26408 writes already-created prompt checkpoints through an mmap-backed disk
+cache; it cannot make an unseen schema's first prefill disappear. Its current
+patch also leaves descriptor/handle and cache-file lifecycle work unfinished.
+It remains unqualified and unmerged. A future build is justified only for
+long-prompt memory density, not as a first-tool TTFT fix.
+
+Evidence:
+`bench/results/tool-schema-cache-llamacpp-20260802.json` (SHA-256
+`d3798e12…f5a7`) and
+`bench/results/tool-schema-cache-llamacpp-512m-20260802.json` (SHA-256
+`267f2211…35f3`). Harness and fixture tests are in
+`app/scripts/qualify_tool_schema_cache.py` and its test module. The expanded
+OpenAI harness has 8/8 tests; the schema-cache harness has 2/2; the native UI
+contract passes; and Tauri/Rust remains 96/96 after the launcher change.

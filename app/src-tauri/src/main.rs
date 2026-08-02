@@ -396,6 +396,11 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         "--host", "127.0.0.1",
         "--port", &cfg.port.to_string(),
         "--no-warmup",
+        // llama.cpp otherwise permits up to 8 GiB of extra prompt-cache state.
+        // Real Qwen3.6 tool-schema A/B: add=260 MiB, multiply=197 MiB; 512 MiB
+        // retained both warm prefixes (271 cached tokens, 3.7-3.9 s TTFT) while
+        // bounding long-running multi-client growth and preserving the RAM gate.
+        "--cache-ram", "512",
         // Serving counters for the menubar's Serving Stats submenu.
         "--metrics",
     ]);

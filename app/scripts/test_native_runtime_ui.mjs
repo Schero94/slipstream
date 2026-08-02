@@ -3,6 +3,7 @@ import fs from "node:fs";
 
 const html = fs.readFileSync(new URL("../dist/index.html", import.meta.url), "utf8");
 const js = fs.readFileSync(new URL("../dist/app.js", import.meta.url), "utf8");
+const rust = fs.readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 
 for (const id of [
   "runtimeStatusCard",
@@ -31,5 +32,6 @@ assert.match(js, /c\.name\.startsWith\("omlx_"\)/);
 assert.match(js, /c\.name\.startsWith\("pgrn_host"\)/);
 assert.doesNotMatch(html, /value=["']ollama["']/i);
 assert.doesNotMatch(js, /backend\.ollama|start_ollama|OLLAMA_MODELS/);
+assert.match(rust, /"--cache-ram",\s*"512"/);
 
 console.log("native runtime UI contract: PASS");
