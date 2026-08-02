@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 mod mlx;
 mod p2p;
+mod runtime;
 mod servestats;
 mod sysstats;
 mod teardown;
@@ -154,6 +155,16 @@ fn clear_stats(scope: String, live: State<Live>) -> Result<(), String> {
         other => return Err(format!("unknown scope: {other}")),
     }
     Ok(())
+}
+
+#[tauri::command]
+fn runtime_preflight(app: tauri::AppHandle) -> Result<runtime::RuntimeReport, String> {
+    let root = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("resources");
+    runtime::preflight(&root)
 }
 
 /// HTTP status code of a GET (via curl), or 0 if the connection was refused.
@@ -1418,7 +1429,7 @@ fn main() {
             model_status, path_is_dir, list_ext_model_bases, remote_size, start_download, cancel_download,
             start_convert, cancel_convert, discard_convert, convert_progress, tail_file, patch_kilo_config, defaults,
             start_embedder, stop_embedder, install_qdrant, start_qdrant, stop_qdrant, index_status,
-            live_stats, clear_stats, mlx_capability, mlx_runtime_status, install_mlx_runtime,
+            live_stats, clear_stats, runtime_preflight, mlx_capability, mlx_runtime_status, install_mlx_runtime,
             read_file_data_url,
             // Slipstream P2P (UI gate: localStorage `slipstream.p2p`; Cluster tab)
             p2p::p2p_status, p2p::p2p_start, p2p::p2p_stop, p2p::p2p_send_test_job,
