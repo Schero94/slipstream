@@ -3117,3 +3117,30 @@ carried macOS provenance xattrs and emitted thousands of harmless warnings in
 Linux. The exporter now applies the setting directly to `tar` and disables
 xattrs explicitly. A second complete gate passed with a clean log and a smaller
 archive (156 MiB instead of 160 MiB).
+
+## Slipstream 0.3.1 release qualification — 2026-08-02
+
+The native-runtime work was packaged and tested as version 0.3.1. Complete
+source gates passed: Rust workspace 183/183, Tauri/Rust 96/96, all canonical
+Python/Node/bootstrap contracts, and the Linux engine's 12/12 portable PGRN
+tests. The Pages update passed Chromium at 1440×1000 and 390×844 with zero
+horizontal overflow and zero console warnings/errors.
+
+The first DMG candidate was rejected because the preceding Python tests had
+recreated three ignored bytecode files inside the staged oMLX tree. After
+restaging, the second candidate passed DMG CRC, ZIP integrity, version and
+architecture checks with 477 resources and zero `.pyc`/`.pyo` files. Embedded
+llama-server SHA-256 is `0e765b50…e80`; pgrn-convert is `11e33db0…33a1`.
+
+The installed `/Applications/Slipstream.app` was upgraded from 0.3.0 to 0.3.1.
+Launch produced an on-screen 1000×800 window; controlled quit released the
+process and left ports 8080/8081 free. Final artifact hashes and sizes are in
+`docs/RELEASE_0.3.1.md`.
+
+The upstream llama UI development lock reports 21 npm advisories. Applicability
+was inspected rather than inferred from the aggregate: the critical Vitest
+entries and tar/sharp/Sass/PostCSS chains are build/test-only; SvelteKit's
+server-form reports do not apply to the static UI; and the DOMPurify advisory
+requires an option this UI does not enable. No applicable release-runtime path
+was demonstrated, but the raw count remains documented for future vendor
+refreshes.

@@ -32,7 +32,7 @@
   "@type": "SoftwareApplication",
   "name": "Slipstream",
   "url": "https://schero94.github.io/slipstream/",
-  "softwareVersion": "0.3.0",
+  "softwareVersion": "0.3.1",
   "downloadUrl": "https://github.com/Schero94/slipstream/releases/latest",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS 11+ (Apple Silicon), Linux (headless node)",
@@ -241,10 +241,10 @@
 
 <section style="padding-top:44px;padding-bottom:44px">
   <div class="wrap rv" style="padding:24px;border:1px solid var(--line2);border-radius:16px;background:linear-gradient(135deg,rgba(57,192,255,.08),rgba(255,157,47,.05))">
-    <div class="eyebrow">New in v0.3.0</div>
-    <h2 style="font-size:clamp(24px,3vw,34px);margin-top:10px">Turn a Mac mini or Linux box into a sealed LLM node.</h2>
-    <p class="muted" style="margin:14px 0 0;max-width:72ch">The same bounded Slipstream node now runs without a GUI and accepts direct authenticated QUIC jobs. Persistent identities, signed challenge-response, X25519 payload sealing, replay protection, per-peer rate limits and encrypted results are validated end to end.</p>
-    <p class="muted" style="margin:10px 0 0;max-width:72ch">Local remains the default. Remote Chat and free community capacity donation are separate opt-ins. The selected worker must decrypt and can see plaintext during inference; sensitive and secret work remains local. Public discovery, NAT hole punching and relay fallback are not claimed in this release.</p>
+    <div class="eyebrow">New in v0.3.1</div>
+    <h2 style="font-size:clamp(24px,3vw,34px);margin-top:10px">Two native engines. One verified local-LLM contract.</h2>
+    <p class="muted" style="margin:14px 0 0;max-width:72ch">llama.cpp/PGRN and oMLX/PGRN now ship behind the same measured OpenAI streaming contract: exact chat, strict JSON schema and forced tool calls, with deterministic output and no swap growth in the qualification runs. Runtime preflight verifies the bundled components before start.</p>
+    <p class="muted" style="margin:10px 0 0;max-width:72ch">Model placement now identifies internal, external and network storage and enforces a free-space reserve. oMLX also caps its SSD prefix cache against current free space, so a nearly full Mac volume is protected instead of silently receiving a capacity-based cache budget.</p>
   </div>
 </section>
 

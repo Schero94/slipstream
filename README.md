@@ -12,7 +12,12 @@ Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that 
 
 It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
-**New in v0.3.0:** the same sealed node now runs headlessly on Linux and macOS,
+**New in v0.3.1:** both bundled native engines now share one verified OpenAI
+streaming contract. llama.cpp/PGRN and oMLX/PGRN pass deterministic plain,
+strict-JSON and forced-tool requests; runtime preflight identifies every bundled
+component, and storage admission protects the internal SSD and RAM reserve.
+
+Since v0.3.0, the same sealed node also runs headlessly on Linux and macOS,
 or as a direct authenticated QUIC peer. Community donation and remote Chat are
 separate opt-ins. Traffic is encrypted, but the selected worker sees plaintext
 during inference; sensitive and secret work stays local by default.
