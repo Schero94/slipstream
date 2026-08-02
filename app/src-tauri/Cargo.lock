@@ -3535,6 +3535,7 @@ dependencies = [
  "p2p-crypto",
  "p2p-ledger",
  "p2p-node",
+ "plist",
  "serde",
  "serde_json",
  "tauri",

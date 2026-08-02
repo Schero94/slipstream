@@ -21,6 +21,9 @@ p2p-ledger = { path = "../../crates/p2p-ledger" }
 p2p-node = { path = "../../apps/p2p-node" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1"
+
 [[bin]]
 name = "peregrine-control"
 path = "src/main.rs"
