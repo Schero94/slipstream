@@ -262,15 +262,20 @@ pub fn pgrn_launcher(resource_dir: Option<&Path>) -> Option<PathBuf> {
     if let Some(dir) = pgrn_bundle_dir(resource_dir) {
         return Some(dir.join("run_omlx_pgrn.sh"));
     }
-    // Dev: apps/peregrine-control/src-tauri → ../../../tools/pgrn-mlx
-    let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../tools/pgrn-mlx/run_omlx_pgrn.sh");
-    if let Ok(c) = std::fs::canonicalize(&checkout) {
-        if launcher_is_ready(&c) {
-            return Some(c);
+    // Canonical app checkout first, then the legacy monorepo tools layout.
+    for checkout in [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/omlx-pgrn/run_omlx_pgrn.sh"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tools/pgrn-mlx/run_omlx_pgrn.sh"),
+    ] {
+        if let Ok(c) = std::fs::canonicalize(&checkout) {
+            if launcher_is_ready(&c) {
+                return Some(c);
+            }
+        } else if launcher_is_ready(&checkout) {
+            return Some(checkout);
         }
-    } else if launcher_is_ready(&checkout) {
-        return Some(checkout);
     }
     None
 }
@@ -848,7 +853,7 @@ mod tests {
     #[test]
     fn bootstrap_script_resolves_in_checkout() {
         let s = bootstrap_script(None);
-        assert!(s.is_some(), "expected tools/pgrn-mlx/bootstrap_mlx_runtime.sh");
+        assert!(s.is_some(), "expected the staged MLX bootstrap script");
         assert!(s.unwrap().ends_with("bootstrap_mlx_runtime.sh"));
     }
 
