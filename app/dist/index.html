@@ -447,6 +447,14 @@
           <div id="p2pPanel" hidden>
             <div class="ctrl-grid">
               <div class="ctrl">
+                <div class="ctrl-head"><label for="p2pMode"><span data-i18n="lbl.p2pMode">Node mode</span></label></div>
+                <select id="p2pMode">
+                  <option value="local">Local only</option>
+                  <option value="private">Private peers</option>
+                  <option value="community">Community</option>
+                </select>
+              </div>
+              <div class="ctrl">
                 <div class="ctrl-head"><label for="p2pListen"><span data-i18n="lbl.p2pListen">Listen address</span></label></div>
                 <input type="text" id="p2pListen" spellcheck="false" value="127.0.0.1:9002" />
               </div>
@@ -459,6 +467,17 @@
                   <option value="llama">llama</option>
                 </select>
               </div>
+            </div>
+            <div class="p2p-safety card soft-secondary">
+              <label class="chk">
+                <input type="checkbox" id="p2pDonate" disabled />
+                <span data-i18n="lbl.p2pDonate">Donate bounded capacity to community peers</span>
+              </label>
+              <label class="chk">
+                <input type="checkbox" id="p2pRemoteChat" />
+                <span data-i18n="lbl.p2pRemoteChat">Allow Chat fallback to a remote peer</span>
+              </label>
+              <p class="hint" id="p2pWorkerDisclosure" data-i18n="hint.p2pWorkerDisclosure">Traffic is encrypted, but the selected worker decrypts and sees the plaintext prompt for inference. Sensitive and Secret requests stay local by default.</p>
             </div>
             <div class="p2p-actions">
               <button id="p2pStart" class="btn btn-primary" data-i18n="btn.p2pStart">Start node</button>

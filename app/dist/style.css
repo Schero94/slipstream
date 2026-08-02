@@ -351,6 +351,8 @@ details.paths input { font-family: "SF Mono", monospace; font-size: 11.5px; }
 .badge.p2p-listening { color: var(--green); border-color: #1d4230; background: #0e2419; }
 .badge.p2p-error { color: var(--red); border-color: #4a2424; background: #241010; }
 .p2p-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-2); }
+.p2p-safety { display: grid; gap: var(--sp-2); margin-top: var(--sp-2); }
+.p2p-safety .hint { margin: 0; }
 .p2p-note { min-height: 16px; margin-top: var(--sp-2); white-space: pre-wrap; word-break: break-word; user-select: text; }
 .p2p-peers-out {
   margin: var(--sp-2) 0 0; padding: 10px var(--sp-2); max-height: 160px; overflow: auto;

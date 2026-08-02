@@ -2,7 +2,7 @@
 /**
  * Contract: Chat prefer-local gate (P2P must-fix #3).
  * When state.running is true, Chat must NEVER call p2p_chat.
- * P2P is only the offline fallback. No live serve.
+ * P2P is only the explicitly enabled offline fallback. No live serve.
  *
  * Source: docs/pgrn-mlx/artifacts/P2P_PRODUCT_PLAN.md
  */
@@ -15,9 +15,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appJs = fs.readFileSync(path.join(root, "dist/app.js"), "utf8");
 
 /** Pure mirror of sendChat routing: local | p2p | hint */
-function preferLocalChatRoute(running, p2p) {
+function preferLocalChatRoute(running, p2p, remoteChat) {
   if (!running) {
-    if (p2p) return "p2p";
+    if (p2p && remoteChat) return "p2p";
     return "hint";
   }
   return "local";
@@ -31,7 +31,7 @@ assert.match(
 );
 assert.match(
   appJs,
-  /if\s*\(\s*!state\.running\s*\)\s*\{\s*if\s*\(\s*state\.p2p\s*\)\s*\{\s*await\s+sendChatViaP2p\(/,
+  /if\s*\(\s*!state\.running\s*\)\s*\{\s*if\s*\(\s*state\.p2p\s*&&\s*state\.p2pRemoteChat\s*\)\s*\{\s*await\s+sendChatViaP2p\(/,
 );
 
 // Chat's only p2p_chat path is sendChatViaP2p (Cluster may also call it).
@@ -63,18 +63,25 @@ assert.match(
 );
 
 // --- EDGE: route table (running ⇒ never p2p) ---
-assert.equal(preferLocalChatRoute(true, true), "local");
-assert.equal(preferLocalChatRoute(true, false), "local");
-assert.equal(preferLocalChatRoute(false, true), "p2p");
-assert.equal(preferLocalChatRoute(false, false), "hint");
+assert.equal(preferLocalChatRoute(true, true, true), "local");
+assert.equal(preferLocalChatRoute(true, true, false), "local");
+assert.equal(preferLocalChatRoute(true, false, true), "local");
+assert.equal(preferLocalChatRoute(false, true, true), "p2p");
+assert.equal(preferLocalChatRoute(false, true, false), "hint");
+assert.equal(preferLocalChatRoute(false, false, true), "hint");
 
 // Must-fix #3: running + any p2p flag → never p2p
 for (const p2p of [true, false, 1, 0, null, undefined]) {
-  assert.notEqual(
-    preferLocalChatRoute(true, p2p),
-    "p2p",
-    `state.running=true must never route to p2p (p2p=${p2p})`,
-  );
+  for (const remoteChat of [true, false, 1, 0, null, undefined]) {
+    assert.notEqual(
+      preferLocalChatRoute(true, p2p, remoteChat),
+      "p2p",
+      `state.running=true must never route to p2p (p2p=${p2p}, remote=${remoteChat})`,
+    );
+  }
 }
+
+// Privacy default: an available P2P connection alone never exports a prompt.
+assert.equal(preferLocalChatRoute(false, true, false), "hint");
 
 console.log("test_prefer_local_p2p.mjs: OK");

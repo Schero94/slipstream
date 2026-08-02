@@ -271,6 +271,7 @@ const state = {
   runningPgrnProfile: null,
   // Slipstream P2P experimental mesh (default OFF). Independent of Metal/MLX.
   p2p: localStorage.getItem("slipstream.p2p") === "1",
+  p2pRemoteChat: localStorage.getItem("slipstream.p2p.remoteChat") === "1",
   chatModel: "slipstream",
   chatModelsLive: false,   // true after a successful GET /v1/models
   chatModels: [],          // [{id, vlm?}]
@@ -412,6 +413,9 @@ const I18N = {
     "hint.extBase": "Optional overflow. Empty = GGUF next to PGRN in the Models folder.",
     "sec.cluster": "Cluster / P2P",
     "sec.p2p": "P2P node", "lbl.p2pEnable": "Enable Slipstream P2P (experimental)",
+    "lbl.p2pMode": "Node mode", "lbl.p2pDonate": "Donate bounded capacity to community peers",
+    "lbl.p2pRemoteChat": "Allow Chat fallback to a remote peer",
+    "hint.p2pWorkerDisclosure": "Traffic is encrypted, but the selected worker decrypts and sees the plaintext prompt for inference. Sensitive and Secret requests stay local by default.",
     "hint.p2p": "Off by default. Local Metal/MLX path unchanged.",
     "hint.p2pL3": "L3 expert peer mirror (separate from sealed jobs; default OFF): host — l3_expert_mirror.py export-mirror then serve-mirror; consumer — SLIPSTREAM_PGRN_L3=peer + SLIPSTREAM_PGRN_PEER_BASE=http://host:8765. See docs/P2P_MVP.md § L3.",
     "hint.p2pSettings": "Start/stop, peers, jobs, and credits are on the Cluster tab.",
@@ -532,6 +536,9 @@ const I18N = {
     "hint.extBase": "Optionaler Overflow. Leer = GGUF neben PGRN im Modellordner.",
     "sec.cluster": "Cluster / P2P",
     "sec.p2p": "P2P-Node", "lbl.p2pEnable": "Slipstream P2P aktivieren (experimentell)",
+    "lbl.p2pMode": "Node-Modus", "lbl.p2pDonate": "Begrenzte Leistung für Community-Peers spenden",
+    "lbl.p2pRemoteChat": "Chat-Fallback an einen Remote-Peer erlauben",
+    "hint.p2pWorkerDisclosure": "Die Übertragung ist verschlüsselt, aber der ausgewählte Worker entschlüsselt und sieht den Klartext-Prompt für die Inferenz. Sensible und geheime Anfragen bleiben standardmäßig lokal.",
     "hint.p2p": "Standard aus. Lokaler Metal/MLX-Pfad unverändert.",
     "hint.p2pL3": "L3-Experten-Peer-Mirror (getrennt von versiegelten Jobs; Standard AUS): Host — l3_expert_mirror.py export-mirror, dann serve-mirror; Consumer — SLIPSTREAM_PGRN_L3=peer + SLIPSTREAM_PGRN_PEER_BASE=http://host:8765. Siehe docs/P2P_MVP.md § L3.",
     "hint.p2pSettings": "Start/Stop, Peers, Jobs und Credits sind im Cluster-Tab.",
@@ -3492,7 +3499,7 @@ async function sendChat() {
   if ((!text && !hasImg && !hasDoc) || chat.streaming) return;
   // Prefer local Metal/MLX whenever the server is up; P2P only as offline fallback.
   if (!state.running) {
-    if (state.p2p) {
+    if (state.p2p && state.p2pRemoteChat) {
       await sendChatViaP2p(text || (hasDoc ? "(document)" : "(image)"));
       return;
     }
@@ -3712,6 +3719,10 @@ function p2pEngineFromUi() {
   const el = $("p2pEngine");
   return (el && el.value) || localStorage.getItem("slipstream.p2p.engine") || "mock";
 }
+function p2pModeFromUi() {
+  const el = $("p2pMode");
+  return (el && el.value) || localStorage.getItem("slipstream.p2p.mode") || "local";
+}
 function p2pBootstrapFromUi() {
   return ($("p2pBootstrap") && $("p2pBootstrap").value.trim()) || "";
 }
@@ -3735,6 +3746,17 @@ function applyP2pUi() {
   if ($("p2pEngine")) {
     const saved = localStorage.getItem("slipstream.p2p.engine") || "mock";
     $("p2pEngine").value = saved;
+  }
+  if ($("p2pMode")) {
+    $("p2pMode").value = localStorage.getItem("slipstream.p2p.mode") || "local";
+  }
+  if ($("p2pDonate")) {
+    const community = p2pModeFromUi() === "community";
+    $("p2pDonate").disabled = !community;
+    $("p2pDonate").checked = community && localStorage.getItem("slipstream.p2p.donate") === "1";
+  }
+  if ($("p2pRemoteChat")) {
+    $("p2pRemoteChat").checked = !!state.p2pRemoteChat;
   }
   if ($("p2pBootstrap")) {
     $("p2pBootstrap").value = localStorage.getItem("slipstream.p2p.bootstrap") || "";
@@ -3823,6 +3845,15 @@ async function refreshP2pStatus() {
     if ($("p2pCredits")) $("p2pCredits").textContent = String(st.credits ?? 0);
     if ($("p2pEngineDisp")) $("p2pEngineDisp").textContent = st.engine || "mock";
     if ($("p2pEngine") && st.engine) $("p2pEngine").value = st.engine;
+    if ($("p2pMode") && st.mode) {
+      $("p2pMode").value = st.mode;
+      localStorage.setItem("slipstream.p2p.mode", st.mode);
+    }
+    if ($("p2pDonate")) {
+      $("p2pDonate").disabled = st.mode !== "community";
+      $("p2pDonate").checked = st.mode === "community" && !!st.donate_capacity;
+      localStorage.setItem("slipstream.p2p.donate", $("p2pDonate").checked ? "1" : "0");
+    }
     if ($("p2pListenDisp")) $("p2pListenDisp").textContent = st.listen_addr || "–";
     if ($("p2pState")) {
       $("p2pState").textContent = st.running
@@ -3843,7 +3874,7 @@ async function refreshP2pStatus() {
 function updateChatP2pHint() {
   const note = $("chatServerNote");
   if (!note) return;
-  if (!state.running && state.p2p) {
+  if (!state.running && state.p2p && state.p2pRemoteChat) {
     note.textContent = t("chat.p2pHint") || t("chat.serverHint");
   } else {
     note.textContent = t("chat.serverHint");
@@ -3874,6 +3905,31 @@ function initP2p() {
       }
     };
   }
+  if ($("p2pMode")) {
+    $("p2pMode").onchange = () => {
+      const mode = p2pModeFromUi();
+      localStorage.setItem("slipstream.p2p.mode", mode);
+      if ($("p2pDonate")) {
+        $("p2pDonate").disabled = mode !== "community";
+        if (mode !== "community") {
+          $("p2pDonate").checked = false;
+          localStorage.setItem("slipstream.p2p.donate", "0");
+        }
+      }
+    };
+  }
+  if ($("p2pDonate")) {
+    $("p2pDonate").onchange = () => {
+      localStorage.setItem("slipstream.p2p.donate", $("p2pDonate").checked ? "1" : "0");
+    };
+  }
+  if ($("p2pRemoteChat")) {
+    $("p2pRemoteChat").onchange = () => {
+      state.p2pRemoteChat = !!$("p2pRemoteChat").checked;
+      localStorage.setItem("slipstream.p2p.remoteChat", state.p2pRemoteChat ? "1" : "0");
+      updateChatP2pHint();
+    };
+  }
   if ($("p2pBootstrap")) {
     $("p2pBootstrap").onchange = () => {
       localStorage.setItem("slipstream.p2p.bootstrap", p2pBootstrapFromUi());
@@ -3902,9 +3958,11 @@ function initP2p() {
           listen: ($("p2pListen") && $("p2pListen").value) || "",
           engine: p2pEngineFromUi(),
           bootstrap: p2pBootstrapFromUi() || null,
+          mode: p2pModeFromUi(),
+          donateCapacity: !!($("p2pDonate") && $("p2pDonate").checked),
         });
         if ($("p2pNote")) $("p2pNote").textContent = st.running
-          ? ("Listening " + st.listen_addr + " · " + (st.engine || "mock"))
+          ? ("Listening " + st.listen_addr + " · " + (st.engine || "mock") + " · " + (st.mode || "local"))
           : "Stopped";
         await refreshP2pStatus();
       } catch (e) {

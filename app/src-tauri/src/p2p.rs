@@ -17,7 +17,7 @@ use p2p_crypto::NodeKeypair;
 use p2p_ledger::Ledger;
 use p2p_node::{
     capability_for_engine, capability_to_advert, client_hello, default_capability, send_sealed_job,
-    EngineChoice, NodeConfig, RunningNode,
+    EngineChoice, NodeConfig, NodeMode, NodePolicy, RunningNode,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -41,6 +41,8 @@ struct P2pRuntime {
     node_id: String,
     listen_addr: String,
     engine: String,
+    mode: String,
+    donate_capacity: bool,
     stop: tokio::sync::watch::Sender<bool>,
     _thread: thread::JoinHandle<()>,
 }
@@ -54,6 +56,8 @@ pub struct P2pStatus {
     pub mock: bool,
     /// Selected engine label: `mock` | `auto` | `mlx` | `llama`.
     pub engine: String,
+    pub mode: String,
+    pub donate_capacity: bool,
     pub last_job_id: Option<String>,
 }
 
@@ -273,6 +277,8 @@ fn status_from(
             credits: read_credits(&rt.node_id),
             mock: rt.engine == "mock",
             engine: rt.engine.clone(),
+            mode: rt.mode.clone(),
+            donate_capacity: rt.donate_capacity,
             last_job_id,
         },
         None => P2pStatus {
@@ -282,6 +288,8 @@ fn status_from(
             listen_addr: String::new(),
             mock: last_engine == "mock",
             engine: last_engine.to_string(),
+            mode: "local".into(),
+            donate_capacity: false,
             last_job_id,
         },
     }
@@ -364,6 +372,8 @@ pub fn p2p_start(
     listen: String,
     engine: Option<String>,
     bootstrap: Option<String>,
+    mode: Option<String>,
+    donate_capacity: Option<bool>,
     state: State<P2pState>,
 ) -> Result<P2pStatus, String> {
     let choice = parse_engine_opt(engine)?;
@@ -376,6 +386,16 @@ pub fn p2p_start(
     let listen_addr: SocketAddr = listen_raw
         .parse()
         .map_err(|e| format!("invalid listen addr '{listen_raw}': {e}"))?;
+    let mode: NodeMode = mode
+        .as_deref()
+        .unwrap_or("local")
+        .parse()
+        .map_err(|e| format!("invalid node mode: {e}"))?;
+    let mut policy = NodePolicy::for_mode(mode);
+    policy.donate_capacity = donate_capacity.unwrap_or(false);
+    policy
+        .validate_for_listen(listen_addr)
+        .map_err(|e| format!("invalid node policy: {e}"))?;
     let bootstrap_addrs = parse_addrs_csv(bootstrap.as_deref().unwrap_or(""))?;
 
     let mut guard = state
@@ -406,6 +426,8 @@ pub fn p2p_start(
 
     let keypair = Arc::new(kp);
     let engine_label = choice.as_str().to_string();
+    let mode_label = mode.to_string();
+    let donate_enabled = policy.donate_capacity;
     if let Ok(mut g) = state.last_engine.lock() {
         *g = engine_label.clone();
     }
@@ -444,7 +466,7 @@ pub fn p2p_start(
                     spawn_engine: false,
                     ledger_path: Some(ledger_for_node),
                     bootstrap: bootstrap_addrs,
-                    policy: p2p_node::NodePolicy::default(),
+                    policy,
                 }) {
                     Ok(n) => n,
                     Err(e) => {
@@ -485,6 +507,8 @@ pub fn p2p_start(
         node_id: node_id.clone(),
         listen_addr: bound,
         engine: engine_label,
+        mode: mode_label,
+        donate_capacity: donate_enabled,
         stop: stop_tx,
         _thread: thread,
     });
@@ -988,6 +1012,8 @@ mod tests {
                 node_id: "abc".into(),
                 listen_addr: "127.0.0.1:9002".into(),
                 engine: "mock".into(),
+                mode: "local".into(),
+                donate_capacity: false,
                 stop: tx,
                 _thread: thread::spawn(|| {}),
             });
