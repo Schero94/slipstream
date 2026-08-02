@@ -3248,3 +3248,19 @@ upgraded from 0.3.1; a real launch/quit smoke passed and left ports 8080/8081
 free. The v0.3.2 Pages source passed Chromium at 1440×1000 and 390×844 with
 zero overflow and no console errors or warnings. Full artifact hashes and known
 boundaries are in `docs/RELEASE_0.3.2.md`.
+
+## macOS complete ad-hoc bundle seal — 2026-08-02
+
+The v0.3.2 app launched successfully, but a strict whole-bundle verification
+failed with `code has no resources but signature indicates they must be
+present`: only Rust's linker-signed Mach-O was present and the app had no
+`Contents/_CodeSignature/CodeResources` seal. Official Tauri 2 guidance defines
+`bundle.macOS.signingIdentity: "-"` for a local ad-hoc signature. That setting
+was added with a release-contract regression.
+
+The rebuilt app now passes `codesign --verify --deep --strict`, satisfies its
+designated requirement, contains the resource seal and passes a real
+launch/quit/ports-free smoke. `spctl` still rejects it, as expected: ad-hoc
+signing provides bundle integrity but does not impersonate Developer ID or
+notarization. The test suite is now 40/40 Python contracts; no runtime or model
+content changed.

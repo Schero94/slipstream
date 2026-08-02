@@ -86,6 +86,10 @@ class RuntimeManifestTest(unittest.TestCase):
         resources = config["bundle"]["resources"]
         self.assertIn("resources/runtime-manifest.json", resources)
 
+    def test_macos_bundle_has_a_complete_adhoc_seal(self) -> None:
+        config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
+        self.assertEqual(config["bundle"]["macOS"]["signingIdentity"], "-")
+
 
 if __name__ == "__main__":
     unittest.main()
