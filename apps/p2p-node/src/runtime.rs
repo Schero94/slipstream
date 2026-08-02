@@ -631,8 +631,7 @@ fn unix_now() -> u64 {
 /// Seal + send a job; open the sealed [`NetMessage::EncryptedJobResult`] reply.
 ///
 /// `opener` is the consumer identity (must match the Hello `node_id` the worker
-/// sealed to). Cleartext [`NetMessage::JobResult`] is accepted only as a
-/// loopback/test exception (TM-007); product workers always seal.
+/// sealed to). Cleartext results are always rejected to prevent downgrade.
 pub async fn send_sealed_job(
     session: &mut PeerSession,
     request: &JobRequest,
@@ -662,20 +661,6 @@ pub async fn send_sealed_job(
             }
             Ok(result)
         }
-        // Loopback / unit-test exception — do not use on LAN product path.
-        NetMessage::JobResult {
-            job_id,
-            ok,
-            text,
-            tokens,
-            error,
-        } => Ok(JobResult {
-            job_id,
-            ok,
-            text,
-            tokens,
-            error,
-        }),
         other => Err(RuntimeError::Protocol(format!(
             "expected EncryptedJobResult, got {}",
             other.wire_type()

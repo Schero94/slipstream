@@ -9,9 +9,10 @@ use p2p_core::{local_capability, BackendKind, JobRequest, NodeId};
 use p2p_crypto::NodeKeypair;
 use p2p_engine::{open_engine, open_engine_for_choice, select_engine, EngineChoice};
 use p2p_ledger::Ledger;
+use p2p_net::NetMessage;
 use p2p_node::{
-    capability_to_advert, client_hello, default_capability, send_sealed_job, NodeConfig,
-    RunningNode,
+    capability_to_advert, client_hello, default_capability, send_sealed_job, signed_hello_at,
+    NodeConfig, RunningNode,
 };
 use p2p_router::{choose_route, JobContext, PeerSnapshot, RouteRequest};
 
@@ -230,6 +231,73 @@ async fn replay_across_connections_is_rejected() {
         .unwrap();
     assert!(!replay.ok);
     assert_eq!(replay.error.as_deref(), Some("replay"));
+}
+
+#[tokio::test]
+async fn cleartext_result_downgrade_is_rejected() {
+    let worker = NodeKeypair::from_secret_bytes([21; 32]);
+    let worker_recipient = worker.node_id();
+    let worker_capability = capability_to_advert(
+        &worker_recipient,
+        &default_capability(vec!["mock".into()], true),
+        true,
+    );
+    let (listener, addr) = p2p_net::listen("127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let server = tokio::spawn(async move {
+        let mut session = p2p_net::session::accept(&listener).await.unwrap();
+        let client_hello = session.recv().await.unwrap();
+        let NetMessage::Hello {
+            auth: Some(client_auth),
+            ..
+        } = client_hello
+        else {
+            panic!("expected authenticated client Hello")
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let response =
+            signed_hello_at(worker_capability, &worker, client_auth.nonce, now, [22; 32]).unwrap();
+        session.send(&response).await.unwrap();
+        let job = session.recv().await.unwrap();
+        let NetMessage::EncryptedJob { job_id, .. } = job else {
+            panic!("expected encrypted job")
+        };
+        session
+            .send(&NetMessage::JobResult {
+                job_id,
+                ok: true,
+                text: "downgrade".into(),
+                tokens: 1,
+                error: None,
+            })
+            .await
+            .unwrap();
+    });
+
+    let client = NodeKeypair::from_secret_bytes([23; 32]);
+    let ours = capability_to_advert(
+        &client.node_id(),
+        &default_capability(vec!["mock".into()], true),
+        true,
+    );
+    let (mut session, remote) = client_hello(addr, ours, &client, None).await.unwrap();
+    let job = JobRequest {
+        job_id: "no-cleartext".into(),
+        model: "mock".into(),
+        system: String::new(),
+        prompt: "sealed only".into(),
+        max_tokens: 1,
+    };
+    let remote_key = NodeId::from_hex(&remote.node_id).unwrap();
+    let error = send_sealed_job(&mut session, &job, &remote_key, &client)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("EncryptedJobResult"), "{error}");
+    server.await.unwrap();
 }
 
 #[test]
