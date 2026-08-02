@@ -8,7 +8,7 @@ fn slipstream_node_binary_has_stable_name_and_version() {
         .expect("run slipstream-node");
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("p2p-node 0.2.34"), "{stdout}");
+    assert_eq!(stdout.trim(), format!("slipstream-node {}", env!("CARGO_PKG_VERSION")));
 }
 
 #[test]

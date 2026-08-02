@@ -32,10 +32,10 @@
   "@type": "SoftwareApplication",
   "name": "Slipstream",
   "url": "https://schero94.github.io/slipstream/",
-  "softwareVersion": "0.2.34",
+  "softwareVersion": "0.3.0",
   "downloadUrl": "https://github.com/Schero94/slipstream/releases/latest",
   "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "macOS 11+ (Apple Silicon)",
+  "operatingSystem": "macOS 11+ (Apple Silicon), Linux (headless node)",
   "description": "A llama.cpp fork that streams Mixture-of-Experts weights from SSD, running 35B–480B MoE coding models on 16–36 GB Apple-Silicon Macs while the machine stays usable.",
   "image": "https://schero94.github.io/slipstream/og-image.png",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -50,7 +50,7 @@
     { "@type": "Question", "name": "What is Slipstream?", "acceptedAnswer": { "@type": "Answer", "text": "Slipstream is an open-source fork of llama.cpp that streams a Mixture-of-Experts model's expert weights from your SSD on demand, instead of loading the whole model into RAM. This lets a 16–36 GB Apple-Silicon Mac run 35B–480B MoE coding models locally." } },
     { "@type": "Question", "name": "What hardware do I need?", "acceptedAnswer": { "@type": "Answer", "text": "An Apple-Silicon Mac (M-series) with 16 GB of RAM or more, and a fast SSD. Larger XL models (240–466 GB on disk) need a big, fast external SSD; the interactive 35B model needs about 20 GB of disk." } },
     { "@type": "Question", "name": "How fast is it?", "acceptedAnswer": { "@type": "Answer", "text": "A 35B MoE coder runs at ~13–19 tokens/sec on a 36 GB Mac. A 118B model that does not fit in RAM runs at ~2.8 tokens/sec, which is usable for batch coding. Speed scales with SSD bandwidth and available RAM cache." } },
-    { "@type": "Question", "name": "Is it free and private?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Slipstream is MIT-licensed and runs entirely on-device. No cloud, no API keys, no data leaves your Mac. The engine is bundled inside the app, so there is nothing to compile." } }
+    { "@type": "Question", "name": "Is it free and private?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Slipstream is MIT-licensed and local inference stays on your machine. Optional remote mesh inference is off by default and encrypted in transit, but the selected worker decrypts and sees the plaintext prompt to run inference. Sensitive and secret work stays local by default." } }
   ]
 }
 </script>
@@ -235,16 +235,16 @@
     <div class="stat"><b>480B</b><span>largest MoE that runs</span></div>
     <div class="stat"><b>16 GB</b><span>minimum Mac RAM</span></div>
     <div class="stat"><b>3.9×</b><span>optimization speedup</span></div>
-    <div class="stat"><b>100%</b><span>on-device, private</span></div>
+    <div class="stat"><b>100%</b><span>local by default</span></div>
   </div>
 </header>
 
 <section style="padding-top:44px;padding-bottom:44px">
   <div class="wrap rv" style="padding:24px;border:1px solid var(--line2);border-radius:16px;background:linear-gradient(135deg,rgba(57,192,255,.08),rgba(255,157,47,.05))">
-    <div class="eyebrow">New in v0.2.34</div>
-    <h2 style="font-size:clamp(24px,3vw,34px);margin-top:10px">One coding contract, both local engines.</h2>
-    <p class="muted" style="margin:14px 0 0;max-width:72ch">Tools, JSON mode and JSON Schema now use the same OpenAI request shape in Metal/llama.cpp and MLX/oMLX. MLX structured prompts automatically use a bounded, measured cache profile; image and document attachments remain correctly scoped to MLX/VLM models.</p>
-    <p class="muted" style="margin:10px 0 0;max-width:72ch">The release also packages xgrammar explicitly and fixes an expert-cache eviction edge case found by a live tool-call test. The safety watermark was not relaxed.</p>
+    <div class="eyebrow">New in v0.3.0</div>
+    <h2 style="font-size:clamp(24px,3vw,34px);margin-top:10px">Turn a Mac mini or Linux box into a sealed LLM node.</h2>
+    <p class="muted" style="margin:14px 0 0;max-width:72ch">The same bounded Slipstream node now runs without a GUI and accepts direct authenticated QUIC jobs. Persistent identities, signed challenge-response, X25519 payload sealing, replay protection, per-peer rate limits and encrypted results are validated end to end.</p>
+    <p class="muted" style="margin:10px 0 0;max-width:72ch">Local remains the default. Remote Chat and free community capacity donation are separate opt-ins. The selected worker must decrypt and can see plaintext during inference; sensitive and secret work remains local. Public discovery, NAT hole punching and relay fallback are not claimed in this release.</p>
   </div>
 </section>
 

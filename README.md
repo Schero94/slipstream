@@ -8,14 +8,14 @@
 
 **Run coding models that are bigger than your Mac's RAM, locally and at usable speed.**
 
-Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that streams Mixture-of-Experts (MoE) expert weights off your SSD instead of loading the whole model into memory. A 16-36 GB Apple-Silicon Mac can run 35B-480B MoE coding models and stay usable while it does it. Nothing goes to a cloud, there are no API keys, and no data leaves the laptop.
+Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that streams Mixture-of-Experts (MoE) expert weights off your SSD instead of loading the whole model into memory. A 16-36 GB Apple-Silicon Mac can run 35B-480B MoE coding models and stay usable while it does it. Local inference stays on the machine; remote mesh inference is separate, explicit, and off by default.
 
 It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
-**New in v0.2.34:** Tools, JSON mode and JSON Schema share one Chat/API
-contract across Metal/llama.cpp and MLX/oMLX. Structured MLX prompts use a
-bounded safety profile automatically, while image/document attachments stay
-scoped to capable MLX/VLM models.
+**New in v0.3.0:** the same sealed node now runs headlessly on Linux and macOS,
+or as a direct authenticated QUIC peer. Community donation and remote Chat are
+separate opt-ins. Traffic is encrypted, but the selected worker sees plaintext
+during inference; sensitive and secret work stays local by default.
 
 > Not affiliated with Ollama. Slipstream is a llama.cpp/Metal fork with its own SSD expert-streaming layer (PGRN) and a self-contained control app.
 

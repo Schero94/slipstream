@@ -1960,7 +1960,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "p2p-core"
-version = "0.2.34"
+version = "0.3.0"
 dependencies = [
  "hex",
  "rand 0.8.7",
@@ -1971,7 +1971,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-crypto"
-version = "0.2.34"
+version = "0.3.0"
 dependencies = [
  "chacha20poly1305",
  "ed25519-dalek",
@@ -1990,7 +1990,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-engine"
-version = "0.2.34"
+version = "0.3.0"
 dependencies = [
  "p2p-core",
  "serde_json",
@@ -2000,7 +2000,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-ledger"
-version = "0.2.34"
+version = "0.3.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -2011,7 +2011,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-libp2p"
-version = "0.2.34"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -2025,7 +2025,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-net"
-version = "0.2.34"
+version = "0.3.0"
 dependencies = [
  "hex",
  "mdns-sd",
@@ -2038,7 +2038,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-node"
-version = "0.2.34"
+version = "0.3.0"
 dependencies = [
  "clap",
  "futures",
@@ -2064,7 +2064,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-router"
-version = "0.2.34"
+version = "0.3.0"
 dependencies = [
  "p2p-core",
  "proptest",
@@ -2073,7 +2073,7 @@ dependencies = [
 
 [[package]]
 name = "p2p-security"
-version = "0.2.34"
+version = "0.3.0"
 dependencies = [
  "hex",
  "p2p-core",

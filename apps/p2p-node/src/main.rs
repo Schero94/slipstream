@@ -27,7 +27,7 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "p2p-node",
+    name = "slipstream-node",
     about = "Slipstream P2P MVP CLI — start a node, list peers, send sealed jobs, show credits",
     version
 )]
