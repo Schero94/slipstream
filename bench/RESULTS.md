@@ -2997,3 +2997,23 @@ macOS host, so any tok/s here would describe the VM. The same applies to the tok
 curve over cache size that R2 asks for, and CUDA (SSD → RAM cache → VRAM upload) is
 untested for want of the hardware. Cross-platform therefore means exactly this
 today: **Linux/CPU is verified correct, not measured fast.**
+
+## Vendor PR qualification queue — 2026-08-02
+
+Open GitHub PR metadata was refreshed for JustVugg/colibri, jundot/omlx, and
+ggml-org/llama.cpp. Fifteen promising changes are pinned by exact baseline and
+candidate SHAs in `bench/vendor/candidates.json`; every entry is deliberately
+**unqualified**. No upstream performance claim is treated as a Slipstream result.
+
+Highest-priority correctness gates are oMLX #2442 (SpecPrefill trailing window)
+and llama.cpp #26223 (Metal `mul_mm_id` NaN). Highest-priority performance gates
+for this machine are Colibri #763/#757, oMLX #2440/#2346, and llama.cpp
+#25556/#25788/#26414. The queue also tracks disk-backed prompt cache, KV cloning,
+Apple RDMA, KV quantization, multi-slot caching, and disk-streamed MoE experts.
+
+`bench/vendor/run_candidate_ab.py` now enforces clean distinct worktrees, exact
+SHAs, warmup plus at least three measured repetitions, deterministic output
+hash parity, token/s, TTFT, peak RSS, zero swap, and per-candidate acceptance
+thresholds. Its six self-tests pass. Real candidate decisions remain pending
+fresh isolated builds and identical-model runs; therefore there is no accepted
+vendor merge in this entry.

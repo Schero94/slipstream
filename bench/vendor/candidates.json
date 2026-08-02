@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "audited_at": "2026-08-02T11:30:00+02:00",
+  "candidates": [
+    {
+      "id": "colibri-763-metal-prefill",
+      "vendor": "JustVugg/colibri",
+      "url": "https://github.com/JustVugg/colibri/pull/763",
+      "title": "metal: GPU attention for S>4 prefill (single command buffer)",
+      "status": "unqualified",
+      "baseline_sha": "fe308c98a79687dcc92d4555ca0e4d78a2e689a5",
+      "candidate_sha": "0b375a175a7490446a8270d3fde86d21b8868300",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 1.05, "max_ttft_ratio": 0.95, "max_rss_ratio": 1.1, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "colibri-757-metal-shared-experts",
+      "vendor": "JustVugg/colibri",
+      "url": "https://github.com/JustVugg/colibri/pull/757",
+      "title": "inkling: shared experts to the GPU, 1.75 to 2.46 tok/s on Apple Silicon",
+      "status": "unqualified",
+      "baseline_sha": "ee0c668b5b662345d9c7f4001585233ad4b1b8d5",
+      "candidate_sha": "b9ee0edbb050ab97a9ce236c35f578fbf0799bd8",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 1.1, "max_ttft_ratio": 1.1, "max_rss_ratio": 1.1, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "colibri-399-kv-quantization",
+      "vendor": "JustVugg/colibri",
+      "url": "https://github.com/JustVugg/colibri/pull/399",
+      "title": "KV cache quantization: fp8 and 4-bit TurboQuant on CPU, CUDA, and Metal",
+      "status": "unqualified",
+      "baseline_sha": "eb7a88193c5f002f356dce1c9407d33912c58b65",
+      "candidate_sha": "0927c45ca87acc38665c66f3972ac2fa47932578",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 0.98, "max_ttft_ratio": 1.1, "max_rss_ratio": 0.9, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "omlx-2442-specprefill-trailing-window",
+      "vendor": "jundot/omlx",
+      "url": "https://github.com/jundot/omlx/pull/2442",
+      "title": "fix(specprefill): always keep a trailing token window in chunk selection",
+      "status": "unqualified",
+      "baseline_sha": "aed846f62e4226fc719069eafb79a3a85db5dbd3",
+      "candidate_sha": "b531978194be160f518cde0d277fcb3b2c7c16d1",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 0.98, "max_ttft_ratio": 1.1, "max_rss_ratio": 1.05, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "omlx-2440-persistent-specprefill",
+      "vendor": "jundot/omlx",
+      "url": "https://github.com/jundot/omlx/pull/2440",
+      "title": "feat(specprefill): persist static target prefixes",
+      "status": "unqualified",
+      "baseline_sha": "569a359351d24473f1cf84acc2cea658cb481b05",
+      "candidate_sha": "42efc0b10357f5354e629d69d9a94fb56cb5d7d8",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 1.05, "max_ttft_ratio": 0.9, "max_rss_ratio": 1.1, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "omlx-2346-specprefill-memo",
+      "vendor": "jundot/omlx",
+      "url": "https://github.com/jundot/omlx/pull/2346",
+      "title": "feat(specprefill): memoize importance-score selection by prompt hash",
+      "status": "unqualified",
+      "baseline_sha": "60e03c433084d854a7911e81056ee6b60ba2b8d7",
+      "candidate_sha": "d2f2574615c20a4ba34654d95c797d18dab677f2",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 1.02, "max_ttft_ratio": 0.95, "max_rss_ratio": 1.05, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "omlx-1149-multislot-cache",
+      "vendor": "jundot/omlx",
+      "url": "https://github.com/jundot/omlx/pull/1149",
+      "title": "feat(cache): multi-slot LRU MRU partial block cache",
+      "status": "unqualified",
+      "baseline_sha": "839e811cc8bcd111f3086fde7439c5c9af25f338",
+      "candidate_sha": "80f67d4c797df181b383046b224c9ef482144ea4",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 0.98, "max_ttft_ratio": 0.9, "max_rss_ratio": 1.1, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "llama-26223-metal-nan-fix",
+      "vendor": "ggml-org/llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp/pull/26223",
+      "title": "metal: fix NaN in mul_mm_id when activations exceed f16 range",
+      "status": "unqualified",
+      "baseline_sha": "de699957b92f490efebad149665b0dccf127eaff",
+      "candidate_sha": "976221d0a9d67c12dedfd03193e28be6fc413644",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 0.98, "max_ttft_ratio": 1.05, "max_rss_ratio": 1.05, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "llama-25556-metal-q8-kv",
+      "vendor": "ggml-org/llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp/pull/25556",
+      "title": "Metal: optimize q8_0 KV",
+      "status": "unqualified",
+      "baseline_sha": "76f2798059575a96a12e4d34342165a4b6a6a312",
+      "candidate_sha": "793f1417040c15b2db9213be37d11c7409d1db76",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 1.05, "max_ttft_ratio": 1.05, "max_rss_ratio": 1.02, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "llama-25788-metal-gdn-cache-fusion",
+      "vendor": "ggml-org/llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp/pull/25788",
+      "title": "metal: gated_delta_net cache fusion",
+      "status": "unqualified",
+      "baseline_sha": "89482bd665673362b59c57d63295bd7c8259af62",
+      "candidate_sha": "85a466332d636f88ba5e6a5608f09c92ef00bb27",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 1.05, "max_ttft_ratio": 1.05, "max_rss_ratio": 1.05, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "llama-26414-hot-experts",
+      "vendor": "ggml-org/llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp/pull/26414",
+      "title": "llama-hot-experts: pin hottest MoE experts in RAM",
+      "status": "unqualified",
+      "baseline_sha": "a7a6d0d269c896218b6c78e0933bd6a17519d3f6",
+      "candidate_sha": "79a945f768c9c00612dab63d0b5a24892bcbb78c",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 1.05, "max_ttft_ratio": 1.1, "max_rss_ratio": 1.15, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "llama-26408-disk-prompt-cache",
+      "vendor": "ggml-org/llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp/pull/26408",
+      "title": "server: add cache-disk for mmap-backed prompt cache state",
+      "status": "unqualified",
+      "baseline_sha": "89482bd665673362b59c57d63295bd7c8259af62",
+      "candidate_sha": "0fac003ea693d6f48ccb49311a5cf12a6c8b996c",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 0.98, "max_ttft_ratio": 0.85, "max_rss_ratio": 0.9, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "llama-26204-kv-clone",
+      "vendor": "ggml-org/llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp/pull/26204",
+      "title": "server: add slots clone_to for KV clone between slots",
+      "status": "unqualified",
+      "baseline_sha": "1cbfd1988311775425d36c0ce066590f7d3049cf",
+      "candidate_sha": "d3af8eaf406c24a3d744a74d0b1d45ab042d661f",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 0.98, "max_ttft_ratio": 0.6, "max_rss_ratio": 1.15, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "llama-26421-apple-rdma",
+      "vendor": "ggml-org/llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp/pull/26421",
+      "title": "rpc: support Apple RDMA as an RPC transport",
+      "status": "unqualified",
+      "baseline_sha": "11924d4c17abc27383376a1ac6a24fa3e36c1c0c",
+      "candidate_sha": "dcfbb765283d0b056300b2ca5a70e9b8a5c7dbba",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 1.05, "max_ttft_ratio": 0.95, "max_rss_ratio": 1.1, "max_swap_delta_mb": 0}
+    },
+    {
+      "id": "llama-25294-stream-moe-experts",
+      "vendor": "ggml-org/llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp/pull/25294",
+      "title": "llama: stream MoE routed experts from disk",
+      "status": "unqualified",
+      "baseline_sha": "2da668617612d2df773f966e3b0ee22dc2beef7b",
+      "candidate_sha": "1248fd8fa8cfebaece5ea992e4d951c1e18bb9d5",
+      "command": [],
+      "acceptance": {"min_tok_s_ratio": 0.98, "max_ttft_ratio": 1.1, "max_rss_ratio": 0.75, "max_swap_delta_mb": 0}
+    }
+  ]
+}
