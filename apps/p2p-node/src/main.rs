@@ -20,7 +20,7 @@ use p2p_engine::{plan_serve_for_choice, resolve_engine_choice, EngineChoice};
 use p2p_ledger::Ledger;
 use p2p_node::{
     capability_for_engine, capability_to_advert, client_hello, default_capability, send_sealed_job,
-    NodeConfig, RunningNode,
+    NodeConfig, NodeMode, NodePolicy, RunningNode,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -49,6 +49,12 @@ enum Commands {
         /// Bind address (e.g. 127.0.0.1:9001).
         #[arg(long, default_value = "127.0.0.1:0")]
         listen: SocketAddr,
+        /// Exposure mode: local | private | community.
+        #[arg(long, default_value = "local")]
+        mode: NodeMode,
+        /// Donate bounded inference capacity. Valid only with --mode community.
+        #[arg(long, default_value_t = false)]
+        donate_capacity: bool,
         /// Path to NodeKeypair secret file (generated if missing).
         #[arg(long, default_value = "node.key")]
         key: PathBuf,
@@ -142,6 +148,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Keygen { out } => cmd_keygen(out)?,
         Commands::Serve {
             listen,
+            mode,
+            donate_capacity,
             key,
             ledger,
             bootstrap,
@@ -157,7 +165,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cmd_dry_run_engine(choice)?;
                 return Ok(());
             }
-            cmd_serve(listen, key, ledger, bootstrap, models, choice, spawn_engine).await?;
+            cmd_serve(
+                listen,
+                mode,
+                donate_capacity,
+                key,
+                ledger,
+                bootstrap,
+                models,
+                choice,
+                spawn_engine,
+            )
+            .await?;
         }
         Commands::Peers { addrs, key, models } => cmd_peers(addrs, key, models).await?,
         Commands::SendJob {
@@ -257,6 +276,8 @@ fn parse_addrs(csv: &str) -> Result<Vec<SocketAddr>, Box<dyn std::error::Error>>
 
 async fn cmd_serve(
     listen: SocketAddr,
+    mode: NodeMode,
+    donate_capacity: bool,
     key: PathBuf,
     ledger: Option<PathBuf>,
     bootstrap: String,
@@ -264,6 +285,9 @@ async fn cmd_serve(
     engine: EngineChoice,
     spawn_engine: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut policy = NodePolicy::for_mode(mode);
+    policy.donate_capacity = donate_capacity;
+    policy.validate_for_listen(listen)?;
     let keypair = Arc::new(load_or_create_key(&key)?);
     let capability = capability_for_engine(
         default_capability(parse_models(&models), engine.is_mock()),
@@ -278,7 +302,7 @@ async fn cmd_serve(
         spawn_engine,
         ledger_path: ledger,
         bootstrap,
-        policy: p2p_node::NodePolicy::default(),
+        policy,
     })?;
     node.serve().await?;
     Ok(())

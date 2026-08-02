@@ -1,10 +1,12 @@
 //! Library surface for `p2p-node` (CLI binary + integration tests).
 
+pub mod admission;
 pub mod config;
 pub mod runtime;
 pub mod spawn_guard;
 pub mod wire;
 
+pub use admission::{AdmissionController, AdmissionPermit, AdmissionRejection};
 pub use config::{NodeMode, NodePolicy, PolicyError};
 pub use p2p_engine::{launch_feature_enabled, plan_serve_for_choice, EngineChoice, ServePlan};
 pub use runtime::{

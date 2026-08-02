@@ -28,7 +28,7 @@ use tracing::{info, warn};
 
 use crate::spawn_guard::{check_spawn_engine_safe, default_lock_path, resolve_guard_endpoint};
 use crate::wire::{net_to_sealed, sealed_result_to_net, WireError};
-use crate::NodePolicy;
+use crate::{AdmissionController, NodeMode, NodePolicy};
 
 /// MVP faucet: auto-fund consumers so settle stubs always succeed in local demos.
 const FAUCET_CREDITS: u64 = 1_000;
@@ -80,6 +80,7 @@ pub struct RunningNode {
     pub ledger: Ledger,
     pub peers: Arc<Mutex<HashMap<String, CapabilityAdvert>>>,
     replay: Arc<Mutex<ReplayCache>>,
+    admission: AdmissionController,
     engine: Arc<dyn InferenceEngine>,
     /// Optional child from `--spawn-engine` (killed on drop).
     engine_child: Option<Child>,
@@ -103,6 +104,7 @@ impl RunningNode {
             std::time::Duration::from_secs(24 * 60 * 60),
             config.policy.max_replay_entries,
         )));
+        let admission = AdmissionController::new(config.policy.clone());
         let ledger = match &config.ledger_path {
             Some(path) => Ledger::open_sqlite(path)?,
             None => Ledger::open_memory()?,
@@ -165,6 +167,7 @@ impl RunningNode {
             ledger,
             peers: Arc::new(Mutex::new(HashMap::new())),
             replay,
+            admission,
             engine,
             engine_child,
         })
@@ -236,9 +239,20 @@ impl RunningNode {
             let ledger = self.ledger.clone();
             let peers = Arc::clone(&self.peers);
             let replay = Arc::clone(&self.replay);
+            let admission = self.admission.clone();
+            let community_free = self.config.policy.mode == NodeMode::Community;
             tokio::spawn(async move {
                 if let Err(e) = handle_session(
-                    session, advert, keypair, engine, ledger, peers, replay, node_id,
+                    session,
+                    advert,
+                    keypair,
+                    engine,
+                    ledger,
+                    peers,
+                    replay,
+                    admission,
+                    community_free,
+                    node_id,
                 )
                 .await
                 {
@@ -266,6 +280,8 @@ async fn handle_session(
     ledger: Ledger,
     peers: Arc<Mutex<HashMap<String, CapabilityAdvert>>>,
     replay: Arc<Mutex<ReplayCache>>,
+    admission: AdmissionController,
+    community_free: bool,
     provider_id: String,
 ) -> Result<(), RuntimeError> {
     // Accepting side: recv Hello first, then reply (avoids relying on concurrent send).
@@ -285,8 +301,11 @@ async fn handle_session(
         .expect("peers")
         .insert(remote.node_id.clone(), remote.clone());
 
-    // MVP faucet so settle stubs work without a separate wallet CLI.
-    let _ = ledger.fund(&remote.node_id, FAUCET_CREDITS);
+    // Private/local compatibility uses the demo ledger. Permissionless community
+    // jobs are donation-based and never depend on a global credit faucet.
+    if !community_free {
+        let _ = ledger.fund(&remote.node_id, FAUCET_CREDITS);
+    }
     let consumer = NodeId::from_hex(&remote.node_id).map_err(|e| {
         RuntimeError::Protocol(format!("peer Hello node_id not a valid NodeId: {e}"))
     })?;
@@ -337,19 +356,27 @@ async fn handle_session(
             NetMessage::EncryptedJob {
                 job_id,
                 ciphertext,
+                nonce,
                 ephemeral_pubkey,
-                ..
             } => {
-                let result = process_job(
-                    &job_id,
-                    &ciphertext,
-                    &ephemeral_pubkey,
-                    &keypair,
-                    engine.as_ref(),
-                    &ledger,
-                    &remote.node_id,
-                    &provider_id,
-                );
+                let frame_bytes =
+                    sealed_job_frame_bytes(&job_id, &ciphertext, &nonce, &ephemeral_pubkey);
+                let result = match admission.validate_frame(frame_bytes) {
+                    Ok(()) => process_job(
+                        &job_id,
+                        &ciphertext,
+                        &ephemeral_pubkey,
+                        &keypair,
+                        engine.as_ref(),
+                        &ledger,
+                        &remote.node_id,
+                        &provider_id,
+                        &admission,
+                        frame_bytes,
+                        community_free,
+                    ),
+                    Err(rejection) => JobResult::failure(&job_id, rejection.as_code()),
+                };
                 // TM-007: seal JobResult to the consumer (never cleartext on product path).
                 let msg = seal_result_message(&result, &consumer)?;
                 session.send(&msg).await?;
@@ -383,6 +410,9 @@ fn process_job(
     ledger: &Ledger,
     consumer_id: &str,
     provider_id: &str,
+    admission: &AdmissionController,
+    frame_bytes: u32,
+    community_free: bool,
 ) -> JobResult {
     let sealed = match net_to_sealed(ciphertext, ephemeral_pubkey) {
         Ok(s) => s,
@@ -397,8 +427,14 @@ fn process_job(
     if request.job_id.is_empty() {
         request.job_id = job_id.to_string();
     }
+    let _permit = match admission.admit(consumer_id, request.max_tokens, frame_bytes) {
+        Ok(permit) => permit,
+        Err(rejection) => {
+            return JobResult::failure(job_id, rejection.as_code());
+        }
+    };
     let result = engine.infer(&request);
-    if result.ok {
+    if result.ok && !community_free {
         if let Err(e) = ledger.settle(
             &result.job_id,
             consumer_id,
@@ -409,6 +445,20 @@ fn process_job(
         }
     }
     result
+}
+
+fn sealed_job_frame_bytes(
+    job_id: &str,
+    ciphertext: &[u8],
+    nonce: &[u8],
+    ephemeral_pubkey: &[u8],
+) -> u32 {
+    let bytes = job_id
+        .len()
+        .saturating_add(ciphertext.len())
+        .saturating_add(nonce.len())
+        .saturating_add(ephemeral_pubkey.len());
+    u32::try_from(bytes).unwrap_or(u32::MAX)
 }
 
 pub fn capability_to_advert(id: &NodeId, cap: &Capability, force_mock: bool) -> CapabilityAdvert {
