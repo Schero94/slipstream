@@ -175,6 +175,59 @@ async fn duplicate_job_id_is_rejected_by_recv_with_replay() {
     assert_eq!(second.error.as_deref(), Some("replay"));
 }
 
+#[tokio::test]
+async fn replay_across_connections_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let worker_kp = NodeKeypair::generate();
+    let mut node = RunningNode::open(NodeConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        keypair: Arc::new(worker_kp),
+        capability: default_capability(vec!["mock".into()], true),
+        engine: EngineChoice::Mock,
+        spawn_engine: false,
+        ledger_path: Some(dir.path().join("cross-connection.db")),
+        bootstrap: vec![],
+        policy: p2p_node::NodePolicy::default(),
+    })
+    .unwrap();
+    let (listener, addr) = node.bind().await.unwrap();
+    let provider = node.config.keypair.node_id();
+    let _server = tokio::spawn(async move {
+        let _ = node.accept_loop(listener).await;
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let client_kp = NodeKeypair::generate();
+    let advert = || {
+        capability_to_advert(
+            &client_kp.node_id(),
+            &default_capability(vec!["mock".into()], true),
+            true,
+        )
+    };
+    let job = JobRequest {
+        job_id: "job-cross-connection-replay".into(),
+        model: "mock".into(),
+        system: String::new(),
+        prompt: "must execute once".into(),
+        max_tokens: 2,
+    };
+
+    let (mut first_session, _) = client_hello(addr, advert()).await.unwrap();
+    let first = send_sealed_job(&mut first_session, &job, &provider, &client_kp)
+        .await
+        .unwrap();
+    assert!(first.ok);
+    drop(first_session);
+
+    let (mut second_session, _) = client_hello(addr, advert()).await.unwrap();
+    let replay = send_sealed_job(&mut second_session, &job, &provider, &client_kp)
+        .await
+        .unwrap();
+    assert!(!replay.ok);
+    assert_eq!(replay.error.as_deref(), Some("replay"));
+}
+
 #[test]
 fn engine_selection_mac_mlx_else_llama_and_mock_default() {
     let mac = local_capability("macos", 36, 0, vec!["m".into()]);

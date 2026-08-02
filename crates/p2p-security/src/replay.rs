@@ -8,7 +8,7 @@
 //! **not** stop honest re-submission of a captured valid envelope — that is
 //! this module's job.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
@@ -44,14 +44,22 @@ struct Entry {
 #[derive(Debug)]
 pub struct ReplayCache {
     ttl: Duration,
+    max_entries: usize,
     entries: HashMap<String, Entry>,
+    order: VecDeque<(String, Instant)>,
 }
 
 impl ReplayCache {
     pub fn new(ttl: Duration) -> Self {
+        Self::with_capacity(ttl, 65_536)
+    }
+
+    pub fn with_capacity(ttl: Duration, max_entries: usize) -> Self {
         Self {
             ttl,
+            max_entries: max_entries.max(1),
             entries: HashMap::new(),
+            order: VecDeque::new(),
         }
     }
 
@@ -60,8 +68,36 @@ impl ReplayCache {
     }
 
     fn purge_expired(&mut self, now: Instant) {
-        self.entries
-            .retain(|_, e| now.duration_since(e.seen_at) <= self.ttl);
+        while let Some((job_id, seen_at)) = self.order.front() {
+            if now.duration_since(*seen_at) <= self.ttl {
+                break;
+            }
+            let job_id = job_id.clone();
+            let seen_at = *seen_at;
+            self.order.pop_front();
+            if self
+                .entries
+                .get(&job_id)
+                .is_some_and(|entry| entry.seen_at == seen_at)
+            {
+                self.entries.remove(&job_id);
+            }
+        }
+    }
+
+    fn evict_to_fit(&mut self) {
+        while self.entries.len() >= self.max_entries {
+            let Some((job_id, seen_at)) = self.order.pop_front() else {
+                break;
+            };
+            if self
+                .entries
+                .get(&job_id)
+                .is_some_and(|entry| entry.seen_at == seen_at)
+            {
+                self.entries.remove(&job_id);
+            }
+        }
     }
 
     /// Accept a fresh job_id, or reject if already seen inside the TTL window.
@@ -71,6 +107,7 @@ impl ReplayCache {
         if self.entries.contains_key(job_id) {
             return Err(ReplayError::DuplicateJobId);
         }
+        self.evict_to_fit();
         self.entries.insert(
             job_id.to_string(),
             Entry {
@@ -78,6 +115,7 @@ impl ReplayCache {
                 envelope_fp: envelope_fp.map(str::to_string),
             },
         );
+        self.order.push_back((job_id.to_string(), now));
         Ok(())
     }
 
@@ -94,7 +132,6 @@ impl ReplayCache {
         self.entries.contains_key(job_id)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -121,5 +158,18 @@ mod tests {
             cache.accept("job-1", None),
             Err(ReplayError::DuplicateJobId)
         );
+    }
+
+    #[test]
+    fn bounded_cache_evicts_oldest_entry() {
+        let mut cache = ReplayCache::with_capacity(Duration::from_secs(60), 2);
+        cache.accept("job-1", None).unwrap();
+        cache.accept("job-2", None).unwrap();
+        cache.accept("job-3", None).unwrap();
+
+        assert_eq!(cache.len(), 2);
+        assert!(!cache.contains("job-1"));
+        assert!(cache.contains("job-2"));
+        assert!(cache.contains("job-3"));
     }
 }

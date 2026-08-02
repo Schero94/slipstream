@@ -79,6 +79,7 @@ pub struct RunningNode {
     pub listen_addr: SocketAddr,
     pub ledger: Ledger,
     pub peers: Arc<Mutex<HashMap<String, CapabilityAdvert>>>,
+    replay: Arc<Mutex<ReplayCache>>,
     engine: Arc<dyn InferenceEngine>,
     /// Optional child from `--spawn-engine` (killed on drop).
     engine_child: Option<Child>,
@@ -98,6 +99,10 @@ impl RunningNode {
             .policy
             .validate_for_listen(config.listen)
             .map_err(|e| RuntimeError::Protocol(format!("invalid node policy: {e}")))?;
+        let replay = Arc::new(Mutex::new(ReplayCache::with_capacity(
+            std::time::Duration::from_secs(24 * 60 * 60),
+            config.policy.max_replay_entries,
+        )));
         let ledger = match &config.ledger_path {
             Some(path) => Ledger::open_sqlite(path)?,
             None => Ledger::open_memory()?,
@@ -159,6 +164,7 @@ impl RunningNode {
             listen_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             ledger,
             peers: Arc::new(Mutex::new(HashMap::new())),
+            replay,
             engine,
             engine_child,
         })
@@ -229,9 +235,12 @@ impl RunningNode {
             let engine = Arc::clone(&self.engine);
             let ledger = self.ledger.clone();
             let peers = Arc::clone(&self.peers);
+            let replay = Arc::clone(&self.replay);
             tokio::spawn(async move {
-                if let Err(e) =
-                    handle_session(session, advert, keypair, engine, ledger, peers, node_id).await
+                if let Err(e) = handle_session(
+                    session, advert, keypair, engine, ledger, peers, replay, node_id,
+                )
+                .await
                 {
                     warn!(error = %e, "session ended with error");
                 }
@@ -256,6 +265,7 @@ async fn handle_session(
     engine: Arc<dyn InferenceEngine>,
     ledger: Ledger,
     peers: Arc<Mutex<HashMap<String, CapabilityAdvert>>>,
+    replay: Arc<Mutex<ReplayCache>>,
     provider_id: String,
 ) -> Result<(), RuntimeError> {
     // Accepting side: recv Hello first, then reply (avoids relying on concurrent send).
@@ -280,11 +290,31 @@ async fn handle_session(
     let consumer = NodeId::from_hex(&remote.node_id).map_err(|e| {
         RuntimeError::Protocol(format!("peer Hello node_id not a valid NodeId: {e}"))
     })?;
-    let mut replay = ReplayCache::with_default_ttl();
-
     loop {
-        let msg = match session.recv_with_replay(&mut replay).await {
-            Ok(m) => m,
+        let msg = match session.recv().await {
+            Ok(m) => {
+                let admitted = {
+                    let mut cache = replay.lock().expect("replay cache");
+                    p2p_net::admit_encrypted_job(&m, &mut cache)
+                };
+                match admitted {
+                    Ok(()) => m,
+                    Err(e) if e.is_replay() => {
+                        warn!(error = %e, "replay rejected");
+                        let nack = JobResult::failure("replay", "replay");
+                        match seal_result_message(&nack, &consumer) {
+                            Ok(msg) => {
+                                let _ = session.send(&msg).await;
+                            }
+                            Err(seal_err) => {
+                                warn!(error = %seal_err, "failed to seal replay nack");
+                            }
+                        }
+                        continue;
+                    }
+                    Err(e) => return Err(RuntimeError::Net(e)),
+                }
+            }
             Err(e) if e.is_replay() => {
                 warn!(error = %e, "replay rejected");
                 let nack = JobResult::failure("replay", "replay");
