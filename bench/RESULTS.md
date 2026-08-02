@@ -3017,3 +3017,36 @@ hash parity, token/s, TTFT, peak RSS, zero swap, and per-candidate acceptance
 thresholds. Its six self-tests pass. Real candidate decisions remain pending
 fresh isolated builds and identical-model runs; therefore there is no accepted
 vendor merge in this entry.
+
+## Native oMLX/PGRN OpenAI contract on internal SSD — 2026-08-02
+
+The bundled oMLX/PGRN path was exercised against the internal-SSD
+`Qwen3.6-35B-A3B-4bit` model with one common, stdlib-only OpenAI/SSE harness.
+Each case ran twice at temperature zero. The gate requires `/health`,
+`/v1/models`, a complete SSE stream through `[DONE]`, exact semantic output,
+usage accounting, deterministic output hashes, TTFT/chunk-gap bounds, and no
+swap growth.
+
+| Contract | Result | TTFT | Decode | Stream/detail |
+|---|---:|---:|---:|---|
+| exact plain `42` | 2/2 PASS | 3.25 s median | 5.58 tok/s mean | deterministic |
+| strict JSON schema | 2/2 PASS | 2.49 s median | 4.07 tok/s mean | max gap 0.917 s; deterministic |
+| forced `add(19,23)` | 2/2 PASS | 21.18 s median | 3.21 tok/s mean | `tool_calls`; deterministic |
+
+The forced-tool TTFT is a buffered-response measurement: this oMLX path emits
+the structured call after generation. Decode therefore uses oMLX's own
+`generation_duration` and `generation_tokens_per_second`; using the final SSE
+delta interval would report a meaningless near-infinite rate. A regression test
+locks this distinction down.
+
+System state remained healthy: server RSS 9.62 → 9.72 GiB, free+inactive RAM
+17.35 → 15.67 GiB, and swap stayed exactly **1348.25 MiB**. Controlled shutdown
+released the owned process, port, and lock. The compact evidence artifact is
+`bench/results/native-runtime-omlx-internal-20260802.json`; the full raw harness
+artifact hashes to `25af8700…d59c5a8`.
+
+The run also exposed the next safety task: oMLX's `auto` prefix-cache budget is
+10% of total filesystem capacity (about 46 GB here), even though the internal
+SSD had only about 10 GiB free. This did not grow during the short qualification,
+but it is not a safe long-running product default and must be capped against
+current free space plus a reserve before release.

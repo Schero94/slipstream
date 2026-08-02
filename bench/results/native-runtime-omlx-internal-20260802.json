@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "date": "2026-08-02",
+  "engine": "omlx-pgrn",
+  "model": "Qwen3.6-35B-A3B-4bit",
+  "model_storage": "internal-ssd",
+  "model_api_id": "slipstream",
+  "repetitions": 2,
+  "passed": true,
+  "raw_artifact_sha256": "25af8700d5eaff6769b9cfecfb72031bdf193ee0c0f5b602d945adef0d59c5a8",
+  "resources": {
+    "server_rss_bytes_before": 10332372992,
+    "server_rss_bytes_after": 10436739072,
+    "free_inactive_bytes_before": 18628624384,
+    "free_inactive_bytes_after": 16819879936,
+    "swap_used_mib_before": 1348.25,
+    "swap_used_mib_after": 1348.25
+  },
+  "cases": {
+    "plain": {
+      "passed": true,
+      "deterministic": true,
+      "ttft_seconds": [3.305045, 3.186357],
+      "decode_tokens_per_second": [5.58, 5.58],
+      "output_sha256": "8334c554c7276f59674810b92fff5197cd46bf6ccbe872742f9b04ca31dfe3d1"
+    },
+    "strict_json": {
+      "passed": true,
+      "deterministic": true,
+      "ttft_seconds": [2.459762, 2.512865],
+      "decode_tokens_per_second": [4.13, 4.01],
+      "max_chunk_gap_seconds": 0.91715,
+      "output_sha256": "f280d0d22b266baf4e723a615f104f576ec11c03a318cfa416e86f03d0dfaabd"
+    },
+    "forced_tool": {
+      "passed": true,
+      "deterministic": true,
+      "tool": "add",
+      "arguments": {"a": 19, "b": 23},
+      "finish_reason": "tool_calls",
+      "buffered_ttft_seconds": [21.247114, 21.112556],
+      "engine_generation_seconds": [11.27, 11.18],
+      "engine_generation_tokens_per_second": [3.19, 3.22],
+      "output_sha256": "a58ee95fcbdf0ad05b00cfaea24efb1a15f4c1c223d23a9e364d701d01545ff0"
+    }
+  }
+}

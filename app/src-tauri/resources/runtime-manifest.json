@@ -72,6 +72,13 @@
       "executable": false,
       "platform": "macos-arm64"
     },
+    "omlx_forced_tool_choice": {
+      "path": "omlx-pgrn/omlx/api/forced_tool_choice.py",
+      "kind": "file",
+      "required": true,
+      "executable": false,
+      "platform": "macos-arm64"
+    },
     "omlx_pgrn_profile": {
       "path": "omlx-pgrn/omlx/pgrn/profile.py",
       "kind": "file",

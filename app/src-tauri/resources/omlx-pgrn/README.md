@@ -3,16 +3,20 @@
 The complete oMLX fork and `libpgrn_host.dylib` are staged here at bundle time
 and remain ignored because they are generated/vendor build inputs.
 
-Two release-critical overlays are intentionally versioned even though their
+Three release-critical overlays are intentionally versioned even though their
 parent tree is ignored:
 
 - `omlx/pgrn/profile.py` defines Slipstream's bounded `contract` profile.
 - `omlx/pgrn/store.py` preserves active-bank experts during cache eviction.
+- `omlx/api/forced_tool_choice.py` enforces OpenAI required/specific tool calls.
 
-After refreshing the staged oMLX fork, restore these two tracked files before
+After refreshing the staged oMLX fork, restore these three tracked files before
 testing or building. The launcher, bootstrap, lock, dependency manifests, and
 runtime helpers beside this README are also versioned. Never stage private
 machine-specific helper scripts in a release bundle.
+
+After copying the pinned oMLX fork, run `app/scripts/apply_omlx_overlays.sh` to
+apply the small tracked server seam and byte-compile both server and overlay.
 
 The release build must run `app/scripts/stage_uv_runtime.sh`. It accepts only
 the manifest-pinned arm64 `uv` version and atomically stages it as `./uv`;

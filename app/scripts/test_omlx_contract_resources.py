@@ -15,6 +15,8 @@ PROFILE = RESOURCE / "omlx" / "pgrn" / "profile.py"
 STORE = RESOURCE / "omlx" / "pgrn" / "store.py"
 BOOTSTRAP = RESOURCE / "bootstrap_mlx_runtime.sh"
 UV_STAGER = ROOT / "scripts" / "stage_uv_runtime.sh"
+OMLX_OVERLAY_STAGER = ROOT / "scripts" / "apply_omlx_overlays.sh"
+TOOL_CHOICE_PATCH = ROOT.parent / "patches" / "omlx" / "0001-enforce-openai-tool-choice.patch"
 RUNTIME_LOCK = RESOURCE / "requirements-mlx-runtime.lock"
 GRAMMAR_REQUIREMENTS = RESOURCE / "requirements-mlx-grammar.txt"
 
@@ -83,6 +85,13 @@ class ContractResourcesTest(unittest.TestCase):
         self.assertIn("Mach-O 64-bit executable arm64", stager)
         self.assertIn('NEXT="${TARGET}.next"', stager)
         self.assertNotIn("curl", stager)
+
+    def test_tool_choice_overlay_is_applied_during_release_staging(self) -> None:
+        stager = OMLX_OVERLAY_STAGER.read_text(encoding="utf-8")
+        patch = TOOL_CHOICE_PATCH.read_text(encoding="utf-8")
+        self.assertIn("0001-enforce-openai-tool-choice.patch", stager)
+        self.assertIn("enforce_tool_choice", patch)
+        self.assertIn('field="tool_choice"', patch)
 
 
 if __name__ == "__main__":

@@ -43,6 +43,7 @@ class RuntimeManifestTest(unittest.TestCase):
             "omlx_cli",
             "omlx_server",
             "omlx_torch_stub",
+            "omlx_forced_tool_choice",
             "omlx_pgrn_profile",
             "omlx_pgrn_store",
             "pgrn_host_python",

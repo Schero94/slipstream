@@ -1,0 +1,28 @@
+--- a/omlx/server.py
++++ b/omlx/server.py
+@@ -98,6 +98,7 @@
+     normalize_input,
+     truncate_embedding,
+ )
++from .api.forced_tool_choice import enforce_tool_choice
+ from .api.markitdown import (
+     MARKITDOWN_MODEL_ID,
+     MarkItDownRequestError,
+@@ -3457,6 +3458,17 @@
+         tools_for_template = (
+             convert_tools_for_template(effective_tools) if effective_tools else None
+         )
++        # Slipstream overlay: upstream accepts required/specific tool_choice but
++        # otherwise treats both as auto.  Enforce the choice at the chat-template
++        # boundary so the model actually receives the OpenAI request semantics.
++        try:
++            messages, tools_for_template = enforce_tool_choice(
++                messages,
++                request.tool_choice,
++                tools_for_template,
++            )
++        except ValueError as error:
++            raise InvalidRequestError(str(error), field="tool_choice") from error
+         # Gemma 4 drops required params that lack descriptions — enrich them
+         if tools_for_template and "gemma" in (resolved_model or "").lower():
+             tools_for_template = enrich_tool_params_for_gemma4(tools_for_template)
