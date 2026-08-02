@@ -12,6 +12,11 @@ Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that 
 
 It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
+**New in v0.2.34:** Tools, JSON mode and JSON Schema share one Chat/API
+contract across Metal/llama.cpp and MLX/oMLX. Structured MLX prompts use a
+bounded safety profile automatically, while image/document attachments stay
+scoped to capable MLX/VLM models.
+
 > Not affiliated with Ollama. Slipstream is a llama.cpp/Metal fork with its own SSD expert-streaming layer (PGRN) and a self-contained control app.
 
 ---
@@ -28,14 +33,14 @@ Models that won't fit in your RAM become runnable. That's the entire pitch.
 
 ## Get started
 
-1. Download the latest `Slipstream_x.y.z_aarch64.dmg` from [Releases](../../releases).
+1. Download the latest `Slipstream_x.y.z_aarch64.dmg` from [Releases](https://github.com/Schero94/slipstream/releases/latest).
 2. Drag `Slipstream.app` into Applications. The first launch needs right-click → Open, once, because the app isn't notarized yet.
 3. Open it. Slipstream detects your Mac and proposes settings for it: cache size, context and I/O threads derived from your RAM and core count. Click "Apply best".
 4. Pick a model from the dropdown and download it (with progress), then generate its PGRN sidecar. See *Compatible models* below.
 5. Click Start. Once the pill turns green you're serving an OpenAI-compatible API on `127.0.0.1:8080`.
 6. In your coding assistant, add an OpenAI Compatible provider. For Kilo and OpenCode there's a one-click patch instead; restart VS Code afterwards.
 
-Everything runs on-device. While you work, the app shows live SSD throughput, cache hit-rate, tokens/sec, token usage and RAM headroom. Two engine features have switches in the settings panel: Compact, which is on by default and is the fastest setting I've measured, and Predictive Prefetch, which is off by default and experimental. The UI is available in English, German, Chinese and Spanish.
+Everything runs on-device. While you work, the app shows live SSD throughput, cache hit-rate, tokens/sec, token usage and RAM headroom. Two engine features have switches in the settings panel: Compact, which is on by default and is the fastest setting I've measured, and Predictive Prefetch, which is off by default and experimental. The UI is available in English and German.
 
 ### Codebase indexing (optional)
 

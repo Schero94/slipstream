@@ -32,6 +32,7 @@
   "@type": "SoftwareApplication",
   "name": "Slipstream",
   "url": "https://schero94.github.io/slipstream/",
+  "softwareVersion": "0.2.34",
   "downloadUrl": "https://github.com/Schero94/slipstream/releases/latest",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS 11+ (Apple Silicon)",
@@ -237,6 +238,15 @@
     <div class="stat"><b>100%</b><span>on-device, private</span></div>
   </div>
 </header>
+
+<section style="padding-top:44px;padding-bottom:44px">
+  <div class="wrap rv" style="padding:24px;border:1px solid var(--line2);border-radius:16px;background:linear-gradient(135deg,rgba(57,192,255,.08),rgba(255,157,47,.05))">
+    <div class="eyebrow">New in v0.2.34</div>
+    <h2 style="font-size:clamp(24px,3vw,34px);margin-top:10px">One coding contract, both local engines.</h2>
+    <p class="muted" style="margin:14px 0 0;max-width:72ch">Tools, JSON mode and JSON Schema now use the same OpenAI request shape in Metal/llama.cpp and MLX/oMLX. MLX structured prompts automatically use a bounded, measured cache profile; image and document attachments remain correctly scoped to MLX/VLM models.</p>
+    <p class="muted" style="margin:10px 0 0;max-width:72ch">The release also packages xgrammar explicitly and fixes an expert-cache eviction edge case found by a live tool-call test. The safety watermark was not relaxed.</p>
+  </div>
+</section>
 
 <section class="insight">
   <div class="wrap rv">
