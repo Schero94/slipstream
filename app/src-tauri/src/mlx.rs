@@ -568,7 +568,7 @@ impl PgrnMlxEnv {
     pub fn sanitized(mut self) -> Self {
         let p = self.profile.trim().to_ascii_lowercase();
         self.profile = match p.as_str() {
-            "quality" | "fast" | "balanced" => p,
+            "quality" | "fast" | "balanced" | "contract" => p,
             _ => "balanced".into(),
         };
         let r = self.residency.trim().to_ascii_lowercase();
@@ -962,6 +962,17 @@ mod tests {
         let e = PgrnMlxEnv::from_parts("turbo", "banana", true, true, false, "", "");
         assert_eq!(e.profile, "balanced");
         assert_eq!(e.residency, "touch");
+    }
+
+    #[test]
+    fn pgrn_mlx_env_accepts_internal_contract_profile() {
+        let e = PgrnMlxEnv::from_parts("CONTRACT", "touch", true, true, false, "", "");
+        assert_eq!(e.profile, "contract");
+        let pairs: std::collections::HashMap<_, _> = e.env_pairs().into_iter().collect();
+        assert_eq!(
+            pairs.get("SLIPSTREAM_PGRN_PROFILE").map(String::as_str),
+            Some("contract")
+        );
     }
 
     #[test]
