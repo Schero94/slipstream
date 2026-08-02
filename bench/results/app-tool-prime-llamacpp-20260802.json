@@ -1,0 +1,137 @@
+{
+  "base_url": "http://127.0.0.1:18081",
+  "model": "slipstream",
+  "passed": true,
+  "probe": {
+    "error": null,
+    "health": {
+      "status": "ok"
+    },
+    "model_ids": [
+      "slipstream"
+    ],
+    "passed": true,
+    "wall_seconds": 0.013566
+  },
+  "resources_after": {
+    "free_inactive_bytes": 7073087488,
+    "platform": "darwin",
+    "server_rss_bytes": 16554311680,
+    "swap_used_mib": 1148.12
+  },
+  "resources_before": {
+    "free_inactive_bytes": 7093583872,
+    "platform": "darwin",
+    "server_rss_bytes": 16298655744,
+    "swap_used_mib": 1148.12
+  },
+  "runs": [
+    {
+      "cached_tokens": 0,
+      "case": "plain",
+      "chunk_gap_max_seconds": 0.0,
+      "chunk_gap_p50_seconds": 0.0,
+      "chunk_gap_p95_seconds": 0.0,
+      "content": "The",
+      "content_chunks": 1,
+      "decode_seconds": 7.3e-05,
+      "decode_tokens_per_second": 13722.126566,
+      "done": true,
+      "errors": [],
+      "events": 4,
+      "finish_reason": "length",
+      "label": "one_token_schema_prime",
+      "output_sha256": "f3425df9b1739a6dd2e1d0ba54c0cc046cd00033c96ed0eb3dc8be0f5e6c65c3",
+      "passed": true,
+      "tool_calls": [],
+      "ttft_seconds": 23.358138,
+      "usage": {
+        "completion_tokens": 1,
+        "prompt_tokens": 355,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 356
+      },
+      "wall_seconds": 23.358211
+    },
+    {
+      "cached_tokens": 337,
+      "case": "tool",
+      "chunk_gap_max_seconds": 0.789264,
+      "chunk_gap_p50_seconds": 0.346144,
+      "chunk_gap_p95_seconds": 0.789264,
+      "content": "",
+      "content_chunks": 9,
+      "decode_seconds": 2.949449,
+      "decode_tokens_per_second": 10.171391,
+      "done": true,
+      "errors": [],
+      "events": 12,
+      "finish_reason": "tool_calls",
+      "label": "first_visible_calculator",
+      "output_sha256": "3cd07f5727fc9d880e9014f3fdb8010832f5365893b1c08f04a466eb34556fb4",
+      "passed": true,
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{\"expression\":\"19+23\"}",
+            "name": "calculator"
+          },
+          "id": "9VRZh94Q59Z3Ymk2g2MpgpZcmrDuJ9sW",
+          "type": "function"
+        }
+      ],
+      "ttft_seconds": 4.73113,
+      "usage": {
+        "completion_tokens": 30,
+        "prompt_tokens": 361,
+        "prompt_tokens_details": {
+          "cached_tokens": 337
+        },
+        "total_tokens": 391
+      },
+      "wall_seconds": 7.680579
+    },
+    {
+      "cached_tokens": 337,
+      "case": "tool",
+      "chunk_gap_max_seconds": 0.326767,
+      "chunk_gap_p50_seconds": 0.326767,
+      "chunk_gap_p95_seconds": 0.326767,
+      "content": "",
+      "content_chunks": 2,
+      "decode_seconds": 0.326915,
+      "decode_tokens_per_second": 45.883504,
+      "done": true,
+      "errors": [],
+      "events": 5,
+      "finish_reason": "tool_calls",
+      "label": "same_schema_other_tool",
+      "output_sha256": "dd32aadc18a619e18399f9ee4a32749b7b7ed556a9e22128c1e883bb56b97215",
+      "passed": true,
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{}",
+            "name": "get_current_time"
+          },
+          "id": "OUizP6BSEJQbNmjmCHHS0bMwqInKlQ2A",
+          "type": "function"
+        }
+      ],
+      "ttft_seconds": 2.457489,
+      "usage": {
+        "completion_tokens": 15,
+        "prompt_tokens": 355,
+        "prompt_tokens_details": {
+          "cached_tokens": 337
+        },
+        "total_tokens": 370
+      },
+      "wall_seconds": 2.784404
+    }
+  ],
+  "schema": 1,
+  "started": "2026-08-02T14:22:06.728072+00:00"
+}

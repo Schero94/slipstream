@@ -3186,3 +3186,49 @@ Evidence:
 `app/scripts/qualify_tool_schema_cache.py` and its test module. The expanded
 OpenAI harness has 8/8 tests; the schema-cache harness has 2/2; the native UI
 contract passes; and Tauri/Rust remains 96/96 after the launcher change.
+
+### Conditional app-tool priming — PASS
+
+Slipstream's actual visible tool pair (`get_current_time`, `calculator`) was
+then tested at the qualified 10 GiB PGRN / 3 GiB reserve / 512 MiB prompt-cache
+operating point. A one-token request primed the exact schema after model load;
+its generated text was discarded and never entered chat history. The next two
+requests used the same schema but exercised different tools.
+
+| Request | TTFT | Cached prompt | Semantic gate |
+|---|---:|---:|---|
+| one-token background prime | 23.36 s | 0 / 355 tokens | complete response, `length` |
+| first visible `calculator(19+23)` | **4.73 s** | **337 / 361 tokens** | exact name + arguments, `[DONE]` |
+| same-schema `get_current_time()` | **2.46 s** | **337 / 355 tokens** | exact name + `{}`, `[DONE]` |
+
+The first visible tool TTFT is 79.7% below the same schema's cold prefill. RSS
+was 15.18 → 15.42 GiB, free+inactive memory stayed approximately 6.6 GiB, and
+swap remained exactly **1148.12 MiB**. The validator initially treated the
+valid empty `{}` time-tool arguments as its default `add` arguments; that run
+was rejected and moved to Trash. The corrected validator distinguishes `None`
+from an empty object, has a dedicated regression, and the full qualification
+was repeated from a fresh server start rather than post-processing the failed
+artifact.
+
+The product path is deliberately conditional and transparent: it runs only on
+llama.cpp after readiness and only when the user enabled Tools. While it runs,
+the main status remains Starting and Chat shows a warming badge; a tool request
+is asked to retry rather than queueing behind hidden work. Disabling Tools or
+stopping the server aborts it. Failure is soft and visible, and ordinary cold
+tool calls remain available. oMLX is explicitly excluded because its two
+qualified short-schema requests both stayed cold (~21.2 s), so copying this
+strategy there would spend SSD/Metal work without demonstrated reuse.
+
+Evidence: `bench/results/app-tool-prime-llamacpp-20260802.json` (SHA-256
+`25658bfb…10e1b`). The app-prime harness has 2/2 tests and the shared OpenAI
+harness now has 10/10, including probe-without-semantic-validation and empty
+tool arguments. The hidden prime consumes exactly one completion token in
+llama.cpp's accounting. A Chromium UI gate also passed at 1440×1000 and
+390×844: 2/2 warming→ready transitions, the exact two-tool request contract,
+zero horizontal overflow, and zero console warnings or errors.
+
+A follow-up tried llama.cpp's documented `max_tokens: 0` prefill-only value.
+The OpenAI Chat adapter still returned content (`The`) and reported one
+completion token, despite near-zero decode timing. Since this provides no
+observable accounting advantage over `1`, the zero-token variant was rejected;
+the product keeps the honestly qualified one-token request.

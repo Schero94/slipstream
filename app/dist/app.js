@@ -279,6 +279,9 @@ const state = {
   chatModels: [],          // [{id, vlm?}]
   chatAttach: null,        // { path, dataUrl } for OpenAI image_url (VLM)
   chatDoc: null,           // { path, dataUrl, filename, mime } for oMLX file parts (MLX)
+  toolPrimeStatus: "idle", // llama only: idle | warming | ready | failed
+  toolPrimeController: null,
+  toolPrimePromise: null,
 };
 
 /** Matches Rust `mlx::AUTO_PREFILL_CHARS` — long prefill prefers Metal. */
@@ -378,6 +381,8 @@ const I18N = {
     "tip.chatSchema": "Optional JSON Schema for either local engine. Paste a raw schema, {name,schema}, or full response_format. Empty = json_object.",
     "lbl.chatTools": "Enable tools",
     "hint.chatTools": "When on, Chat sends standard OpenAI tools to the active local engine (time + calculator). The Chat toolbar stays in sync.",
+    "chat.toolsPriming": "warming tools", "chat.toolsPrimed": "tools warm", "chat.toolsPrimeFailed": "warm-up failed",
+    "chat.toolsPrimeWait": "The local tool schema is still warming — send again in a moment.",
     "tip.chatTools": "OpenAI tool calling for both MLX and Metal. Off by default. On MLX, Start selects a bounded contract-safe cache profile.",
     "toast.mlxContractProfile": "MLX contract-safe cache profile active",
     "err.mlxContractRestart": "Tools/JSON need the bounded MLX contract profile on this Mac. Stop and Start once; Slipstream will select it automatically.",
@@ -511,6 +516,8 @@ const I18N = {
     "tip.chatSchema": "Optionales JSON Schema für beide lokalen Engines. Rohes Schema, {name,schema} oder volles response_format. Leer = json_object.",
     "lbl.chatTools": "Tools aktivieren",
     "hint.chatTools": "Wenn an, sendet Chat Standard-OpenAI-Tools an die aktive lokale Engine (Zeit + Taschenrechner). Die Chat-Leiste bleibt synchron.",
+    "chat.toolsPriming": "Tools wärmen", "chat.toolsPrimed": "Tools warm", "chat.toolsPrimeFailed": "Warm-up fehlgeschlagen",
+    "chat.toolsPrimeWait": "Das lokale Tool-Schema wird noch geladen – gleich noch einmal senden.",
     "tip.chatTools": "OpenAI-Tool-Calling für MLX und Metal. Standard aus. Bei MLX wählt Start ein begrenztes, vertragssicheres Cache-Profil.",
     "toast.mlxContractProfile": "MLX-Profil für Tools/JSON aktiv",
     "err.mlxContractRestart": "Tools/JSON brauchen auf diesem Mac das begrenzte MLX-Vertragsprofil. Einmal Stoppen und Starten; Slipstream wählt es automatisch.",
@@ -1876,6 +1883,7 @@ async function startServer() {
     if (freeM != null && freeM < peakAdmit && !confirm(t("confirm.peakMarginal"))) return;
   }
   try {
+    resetLlamaToolPrime();
     const msg = await invoke("start_server", { cfg });
     state.resolvedBackend = isAutoBackend() ? resolved : null;
     state.runningPgrnProfile = goingMlx ? cfg.pgrn_profile : null;
@@ -1895,6 +1903,7 @@ async function startServer() {
   }
 }
 async function stopServer() {
+  resetLlamaToolPrime();
   await invoke("stop_server");
   state.resolvedBackend = null;
   state.runningPgrnProfile = null;
@@ -2265,8 +2274,9 @@ async function poll() {
       ARENA.active = act.phase === "decode" || act.phase === "prefill";
       // Load-time line: keep it, the 400-line tail window scrolls past it later.
       if (p.kvMiB) state.kvMiB = p.kvMiB;
-      setPill(sstate === "ready" ? "on" : "loading");
     } catch {}
+    if (sstate === "ready") maybePrimeLlamaTools();
+    setPill(sstate === "ready" && state.toolPrimeStatus !== "warming" ? "on" : "loading");
     // Refresh model list when the API is ready (throttled; GET /v1/models).
     if (sstate === "ready") {
       const now = Date.now();
@@ -2276,6 +2286,7 @@ async function poll() {
       }
     }
   } else {
+    resetLlamaToolPrime();
     setPill("off");
     state.lastMisses = null;
     state.kvMiB = null;
@@ -3113,6 +3124,98 @@ const DEMO_TOOLS = [
   },
 ];
 
+function renderLlamaToolPrime() {
+  const badge = $("chatToolsPrime");
+  if (!badge) return;
+  const status = state.toolPrimeStatus || "idle";
+  const applicable = chatToolsPreference() && effectiveBackend() !== "mlx" && status !== "idle";
+  badge.hidden = !applicable;
+  badge.classList.toggle("is-ready", status === "ready");
+  badge.classList.toggle("is-failed", status === "failed");
+  badge.textContent = status === "warming"
+    ? t("chat.toolsPriming")
+    : status === "ready"
+      ? t("chat.toolsPrimed")
+      : status === "failed" ? t("chat.toolsPrimeFailed") : "";
+}
+
+function resetLlamaToolPrime() {
+  if (state.toolPrimeController) state.toolPrimeController.abort();
+  state.toolPrimeController = null;
+  state.toolPrimePromise = null;
+  state.toolPrimeStatus = "idle";
+  renderLlamaToolPrime();
+}
+
+/**
+ * Prime only Slipstream's fixed llama.cpp tool prefix. A real Qwen/PGRN gate
+ * measured 23.36 s hidden prefill -> 4.73 s first visible calculator TTFT with
+ * 337 cached tokens and zero swap growth. oMLX is excluded because its short
+ * prefix cache produced no hit in the corresponding qualification.
+ */
+function maybePrimeLlamaTools() {
+  if (!state.running || !chatToolsPreference() || effectiveBackend() === "mlx") {
+    renderLlamaToolPrime();
+    return state.toolPrimePromise;
+  }
+  if (state.toolPrimeStatus === "warming" || state.toolPrimeStatus === "ready" || state.toolPrimeStatus === "failed") {
+    renderLlamaToolPrime();
+    return state.toolPrimePromise;
+  }
+
+  const controller = new AbortController();
+  state.toolPrimeController = controller;
+  state.toolPrimeStatus = "warming";
+  renderLlamaToolPrime();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+  const primeBody = {
+    model: chatFallbackModelId(),
+    messages: [{ role: "user", content: "Initialize the local tool contract." }],
+    tools: DEMO_TOOLS,
+    tool_choice: "auto",
+    // One discarded token completes the OpenAI request and leaves the prefix hot.
+    max_tokens: 1,
+    temperature: 0,
+    stream: false,
+    cache_prompt: true,
+    chat_template_kwargs: { enable_thinking: false },
+  };
+  const promise = fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(primeBody),
+    signal: controller.signal,
+  }).then(async (response) => {
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await response.arrayBuffer();
+    if (state.toolPrimeController === controller) state.toolPrimeStatus = "ready";
+    return true;
+  }).catch(() => {
+    if (state.toolPrimeController === controller && state.running) state.toolPrimeStatus = "failed";
+    return false;
+  }).finally(() => {
+    clearTimeout(timeout);
+    if (state.toolPrimeController === controller) {
+      state.toolPrimeController = null;
+      state.toolPrimePromise = null;
+      renderLlamaToolPrime();
+    }
+  });
+  state.toolPrimePromise = promise;
+  return promise;
+}
+
+function onChatToolsToggle(enabled) {
+  syncChatToolsUi(enabled);
+  if (!enabled && state.toolPrimeStatus === "warming") {
+    resetLlamaToolPrime();
+    return;
+  }
+  if (enabled && state.toolPrimeStatus === "failed") state.toolPrimeStatus = "idle";
+  if (enabled) maybePrimeLlamaTools();
+  renderLlamaToolPrime();
+}
+
 function runDemoTool(name, args) {
   if (name === "get_current_time") return new Date().toISOString();
   if (name === "calculator") {
@@ -3640,6 +3743,10 @@ async function sendChat() {
     return;
   }
   if ((!text && !hasImg && !hasDoc) || chat.streaming) return;
+  if (toolsEnabledForRequest(text) && state.toolPrimeStatus === "warming") {
+    toast(t("chat.toolsPrimeWait"));
+    return;
+  }
   // Prefer local Metal/MLX whenever the server is up; P2P only as offline fallback.
   if (!state.running) {
     if (state.p2p && state.p2pRemoteChat) {
@@ -3832,8 +3939,8 @@ function initChat() {
   if ($("chatDocAttach")) $("chatDocAttach").onclick = pickChatDoc;
   if ($("chatAttachClear")) $("chatAttachClear").onclick = clearChatAttach;
   // Settings ↔ Chat toolbar: common OpenAI tools / structured output contract.
-  if ($("chatTools")) $("chatTools").onchange = (e) => syncChatToolsUi(e.target.checked);
-  if ($("settingsChatTools")) $("settingsChatTools").onchange = (e) => syncChatToolsUi(e.target.checked);
+  if ($("chatTools")) $("chatTools").onchange = (e) => onChatToolsToggle(e.target.checked);
+  if ($("settingsChatTools")) $("settingsChatTools").onchange = (e) => onChatToolsToggle(e.target.checked);
   if ($("chatJson")) $("chatJson").onchange = (e) => syncChatJsonUi(e.target.checked);
   const schema = $("chatSchema");
   if (schema) {

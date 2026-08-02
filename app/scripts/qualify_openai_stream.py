@@ -191,7 +191,11 @@ def _validate_case(
             if parsed != {"answer": 42, "label": "ok"}:
                 errors.append(f"JSON output mismatch: {parsed!r}")
     elif case == "tool":
-        expected_arguments = expected_tool_arguments or {"a": 19, "b": 23}
+        expected_arguments = (
+            expected_tool_arguments
+            if expected_tool_arguments is not None
+            else {"a": 19, "b": 23}
+        )
         if len(tool_calls) != 1:
             errors.append(f"expected one tool call, got {len(tool_calls)}")
         else:
@@ -218,6 +222,7 @@ def run_case(
     body_override: dict[str, Any] | None = None,
     expected_tool_name: str = "add",
     expected_tool_arguments: dict[str, Any] | None = None,
+    validate_output: bool = True,
 ) -> dict[str, Any]:
     body = body_override if body_override is not None else build_case_body(model, case)
     raw_body = json.dumps(body, separators=(",", ":")).encode()
@@ -297,15 +302,16 @@ def run_case(
     ended = time.perf_counter()
     content = "".join(content_parts)
     tool_calls = [calls[index] for index in sorted(calls)]
-    errors.extend(
-        _validate_case(
-            case,
-            content,
-            tool_calls,
-            expected_tool_name=expected_tool_name,
-            expected_tool_arguments=expected_tool_arguments,
+    if validate_output:
+        errors.extend(
+            _validate_case(
+                case,
+                content,
+                tool_calls,
+                expected_tool_name=expected_tool_name,
+                expected_tool_arguments=expected_tool_arguments,
+            )
         )
-    )
     if not done:
         errors.append("SSE stream ended without [DONE]")
     if not usage or not isinstance(usage.get("completion_tokens"), int):

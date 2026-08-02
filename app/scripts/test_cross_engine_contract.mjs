@@ -29,7 +29,14 @@ assert.match(appJs, /state\.runningPgrnProfile = goingMlx \? cfg\.pgrn_profile/)
 assert.match(appJs, /err\.mlxContractRestart/);
 assert.match(html, /id="chatToolsSettingsWrap"/);
 assert.match(html, /id="settingsChatTools"/);
+assert.match(html, /id="chatToolsPrime"/);
 assert.match(html, /data-i18n="lbl\.chatTools"/);
+assert.match(appJs, /function maybePrimeLlamaTools\(\)/);
+assert.match(appJs, /effectiveBackend\(\) === "mlx"/);
+assert.match(appJs, /max_tokens:\s*1/);
+assert.match(appJs, /cache_prompt:\s*true/);
+assert.match(appJs, /toolPrimeStatus === "warming"/);
+assert.match(appJs, /if \(sstate === "ready"\) maybePrimeLlamaTools\(\)/);
 
 // Schema edits validate immediately and persist for the next backend/session.
 assert.match(appJs, /const schema = \$\("chatSchema"\);/);

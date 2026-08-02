@@ -121,6 +121,29 @@ class QualificationHarnessTest(unittest.TestCase):
         )
         self.assertTrue(result["passed"])
 
+    def test_probe_request_can_skip_semantic_output_validation(self) -> None:
+        body = qualify.build_case_body("fixture", "tool")
+        result = qualify.run_case(
+            self.base_url,
+            "fixture",
+            "plain",
+            timeout=5,
+            body_override=body,
+            validate_output=False,
+        )
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["tool_calls"][0]["function"]["name"], "add")
+
+    def test_empty_tool_arguments_are_not_replaced_by_defaults(self) -> None:
+        errors = qualify._validate_case(
+            "tool",
+            "",
+            [{"function": {"name": "get_current_time", "arguments": "{}"}}],
+            expected_tool_name="get_current_time",
+            expected_tool_arguments={},
+        )
+        self.assertEqual(errors, [])
+
     def test_endpoint_probe_checks_health_and_models(self) -> None:
         result = qualify.probe_endpoints(self.base_url, timeout=5)
         self.assertTrue(result["passed"])
