@@ -26,6 +26,7 @@
 mod envelope;
 mod error;
 mod identity;
+mod signing;
 
 pub use envelope::{
     open, open_job, open_job_request, open_job_result, open_json, public_key_from_hex, seal,
@@ -34,3 +35,4 @@ pub use envelope::{
 };
 pub use error::CryptoError;
 pub use identity::{IdentityIoError, NodeKeypair};
+pub use signing::{verify_identity_signature, SigningError, SigningIdentity};

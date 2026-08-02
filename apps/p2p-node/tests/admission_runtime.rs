@@ -110,7 +110,7 @@ async fn community_free_job_is_bounded_and_never_faucet_funded() {
         &default_capability(vec!["mock".into()], true),
         true,
     );
-    let (mut session, _) = client_hello(addr, advert).await.unwrap();
+    let (mut session, _) = client_hello(addr, advert, &client, None).await.unwrap();
 
     let oversized = JobRequest {
         job_id: "free-too-many-tokens".into(),

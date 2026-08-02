@@ -23,8 +23,6 @@ pub mod session;
 pub use discovery::{BootstrapList, PeerAddr};
 pub use error::NetError;
 pub use frame::{read_frame, write_frame, MAX_FRAME_BYTES};
-pub use message::{CapabilityAdvert, NetMessage};
+pub use message::{CapabilityAdvert, HelloAuth, NetMessage};
 pub use replay::{admit_encrypted_job, encrypted_job_fingerprint};
-pub use session::{
-    accept, connect, connect_timeout, listen, PeerSession, DEFAULT_CONNECT_TIMEOUT,
-};
+pub use session::{accept, connect, connect_timeout, listen, PeerSession, DEFAULT_CONNECT_TIMEOUT};

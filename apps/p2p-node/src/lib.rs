@@ -11,7 +11,8 @@ pub use config::{NodeMode, NodePolicy, PolicyError};
 pub use p2p_engine::{launch_feature_enabled, plan_serve_for_choice, EngineChoice, ServePlan};
 pub use runtime::{
     capability_for_engine, capability_to_advert, client_hello, default_capability, send_sealed_job,
-    NodeConfig, RunningNode, RuntimeError,
+    signed_hello_at, verify_signed_hello_at, NodeConfig, RunningNode, RuntimeError,
+    INFERENCE_PROTOCOL_V1,
 };
 pub use spawn_guard::{
     check_spawn_engine_safe, check_spawn_engine_safe_with, default_lock_path,

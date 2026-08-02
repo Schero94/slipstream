@@ -11,6 +11,7 @@ use p2p_security::ReplayCache;
 fn cap(id: &str) -> CapabilityAdvert {
     CapabilityAdvert {
         node_id: id.into(),
+        identity_id: String::new(),
         models: vec!["mock-7b".into()],
         ram_gib: 32,
         vram_gib: 0,

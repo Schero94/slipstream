@@ -105,6 +105,9 @@ enum Commands {
         /// Worker listen address.
         #[arg(long)]
         peer: SocketAddr,
+        /// Optional pinned Ed25519 peer identity (64 lowercase hex chars).
+        #[arg(long)]
+        expected_peer_id: Option<String>,
         /// Local client key file (generated if missing).
         #[arg(long, default_value = "client.key")]
         key: PathBuf,
@@ -181,13 +184,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Peers { addrs, key, models } => cmd_peers(addrs, key, models).await?,
         Commands::SendJob {
             peer,
+            expected_peer_id,
             key,
             prompt,
             system,
             model,
             max_tokens,
             job_id,
-        } => cmd_send_job(peer, key, prompt, system, model, max_tokens, job_id).await?,
+        } => {
+            cmd_send_job(
+                peer,
+                expected_peer_id,
+                key,
+                prompt,
+                system,
+                model,
+                max_tokens,
+                job_id,
+            )
+            .await?
+        }
         Commands::Credits {
             ledger,
             account,
@@ -322,11 +338,16 @@ async fn cmd_peers(
     }
     println!("local node_id={}", keypair.node_id());
     for addr in addrs {
-        match client_hello(addr, ours.clone()).await {
+        match client_hello(addr, ours.clone(), &keypair, None).await {
             Ok((_session, remote)) => {
                 println!(
-                    "peer addr={addr} id={} backend={} models={:?} ram_gib={} vram_gib={}",
-                    remote.node_id, remote.backend, remote.models, remote.ram_gib, remote.vram_gib
+                    "peer addr={addr} identity_id={} encryption_id={} backend={} models={:?} ram_gib={} vram_gib={}",
+                    remote.identity_id,
+                    remote.node_id,
+                    remote.backend,
+                    remote.models,
+                    remote.ram_gib,
+                    remote.vram_gib
                 );
             }
             Err(e) => eprintln!("peer addr={addr} error={e}"),
@@ -337,6 +358,7 @@ async fn cmd_peers(
 
 async fn cmd_send_job(
     peer: SocketAddr,
+    expected_peer_id: Option<String>,
     key: PathBuf,
     prompt: String,
     system: String,
@@ -347,7 +369,8 @@ async fn cmd_send_job(
     let keypair = load_or_create_key(&key)?;
     let cap = default_capability(vec![model.clone()], true);
     let ours = capability_to_advert(&keypair.node_id(), &cap, true);
-    let (mut session, remote) = client_hello(peer, ours).await?;
+    let (mut session, remote) =
+        client_hello(peer, ours, &keypair, expected_peer_id.as_deref()).await?;
     let recipient = NodeId::from_hex(&remote.node_id)?;
     let job_id = job_id.unwrap_or_else(|| format!("job-{}", &keypair.node_id().as_hex()[..8]));
     let request = JobRequest {
@@ -358,8 +381,9 @@ async fn cmd_send_job(
         max_tokens,
     };
     println!(
-        "sending sealed job_id={job_id} to {} via {peer}",
-        recipient.as_hex()
+        "sending sealed job_id={job_id} to identity={} encryption={} via {peer}",
+        remote.identity_id,
+        recipient.as_hex(),
     );
     let result = send_sealed_job(&mut session, &request, &recipient, &keypair).await?;
     if result.ok {

@@ -67,10 +67,13 @@ impl PeerSession {
         &mut self,
         ours: crate::message::CapabilityAdvert,
     ) -> Result<crate::message::CapabilityAdvert, NetError> {
-        self.send(&NetMessage::Hello { capability: ours })
-            .await?;
+        self.send(&NetMessage::Hello {
+            capability: ours,
+            auth: None,
+        })
+        .await?;
         match self.recv().await? {
-            NetMessage::Hello { capability } => Ok(capability),
+            NetMessage::Hello { capability, .. } => Ok(capability),
             other => Err(NetError::protocol(format!(
                 "expected hello during capability exchange, got {}",
                 other.wire_type()
@@ -101,10 +104,7 @@ pub async fn connect(addr: SocketAddr) -> Result<PeerSession, NetError> {
 ///
 /// Critical for multi-node Probe / bootstrap: unbound `TcpStream::connect` can hang for
 /// minutes on blackhole routes; Cluster UI and `p2p-node` need a bounded wait.
-pub async fn connect_timeout(
-    addr: SocketAddr,
-    timeout: Duration,
-) -> Result<PeerSession, NetError> {
+pub async fn connect_timeout(addr: SocketAddr, timeout: Duration) -> Result<PeerSession, NetError> {
     match tokio::time::timeout(timeout, TcpStream::connect(addr)).await {
         Ok(Ok(stream)) => PeerSession::from_stream(stream),
         Ok(Err(e)) => Err(NetError::Io(e)),
@@ -154,13 +154,7 @@ mod tests {
         let err = connect_timeout(addr, Duration::from_secs(2))
             .await
             .expect_err("refused dial must fail");
-        assert!(
-            !err.is_timeout(),
-            "refused should be Io, got {err:?}"
-        );
-        assert!(
-            matches!(err, NetError::Io(_)),
-            "expected Io, got {err:?}"
-        );
+        assert!(!err.is_timeout(), "refused should be Io, got {err:?}");
+        assert!(matches!(err, NetError::Io(_)), "expected Io, got {err:?}");
     }
 }

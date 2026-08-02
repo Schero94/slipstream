@@ -8,7 +8,11 @@ use serde::{Deserialize, Serialize};
 /// Lightweight capability advertisement carried in [`NetMessage::Hello`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilityAdvert {
+    /// X25519 encryption key id used by sealed inference envelopes.
     pub node_id: String,
+    /// Ed25519 identity public key id that signed this capability.
+    #[serde(default)]
+    pub identity_id: String,
     pub models: Vec<String>,
     pub ram_gib: u32,
     pub vram_gib: u32,
@@ -16,12 +20,59 @@ pub struct CapabilityAdvert {
     pub backend: String,
 }
 
+/// Authentication metadata for a product Hello. The signature covers this
+/// metadata (except `signature`) and the complete [`CapabilityAdvert`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelloAuth {
+    pub protocol: String,
+    pub identity_pubkey: Vec<u8>,
+    pub issued_at_unix: u64,
+    pub expires_at_unix: u64,
+    pub nonce: Vec<u8>,
+    pub response_to: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
+impl HelloAuth {
+    pub fn signing_payload(
+        &self,
+        capability: &CapabilityAdvert,
+    ) -> Result<Vec<u8>, serde_json::Error> {
+        #[derive(Serialize)]
+        struct SigningPayload<'a> {
+            protocol: &'a str,
+            capability: &'a CapabilityAdvert,
+            identity_pubkey: &'a [u8],
+            issued_at_unix: u64,
+            expires_at_unix: u64,
+            nonce: &'a [u8],
+            response_to: &'a [u8],
+        }
+
+        serde_json::to_vec(&SigningPayload {
+            protocol: &self.protocol,
+            capability,
+            identity_pubkey: &self.identity_pubkey,
+            issued_at_unix: self.issued_at_unix,
+            expires_at_unix: self.expires_at_unix,
+            nonce: &self.nonce,
+            response_to: &self.response_to,
+        })
+    }
+}
+
 /// Length-prefixed JSON frames exchanged over TCP.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NetMessage {
     /// First message after connect: identity + capability.
-    Hello { capability: CapabilityAdvert },
+    Hello {
+        capability: CapabilityAdvert,
+        /// `None` exists only for transport-unit compatibility. Product
+        /// sessions require and verify authenticated Hello metadata.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth: Option<HelloAuth>,
+    },
     /// Opaque sealed job blob (ciphertext produced by `p2p-crypto`).
     EncryptedJob {
         job_id: String,
@@ -83,6 +134,7 @@ mod tests {
     fn sample_cap() -> CapabilityAdvert {
         CapabilityAdvert {
             node_id: "node-a".into(),
+            identity_id: String::new(),
             models: vec!["mock-7b".into()],
             ram_gib: 32,
             vram_gib: 0,
@@ -94,6 +146,7 @@ mod tests {
     fn hello_roundtrip() {
         let msg = NetMessage::Hello {
             capability: sample_cap(),
+            auth: None,
         };
         let bytes = msg.encode().unwrap();
         let back = NetMessage::decode(&bytes).unwrap();
@@ -140,7 +193,8 @@ mod tests {
     fn wire_type_tags_match_serde() {
         assert_eq!(
             NetMessage::Hello {
-                capability: sample_cap()
+                capability: sample_cap(),
+                auth: None,
             }
             .wire_type(),
             "hello"

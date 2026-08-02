@@ -72,6 +72,7 @@ pub struct P2pJobOutcome {
 pub struct P2pPeerInfo {
     pub addr: String,
     pub ok: bool,
+    pub identity_id: String,
     pub node_id: String,
     pub backend: String,
     pub models: Vec<String>,
@@ -313,10 +314,7 @@ pub fn p2p_status(state: State<P2pState>) -> Result<P2pStatus, String> {
 /// Credits balance (+ optional settlement by `job_id`).
 /// `account` defaults to this node's persistent id.
 #[tauri::command]
-pub fn p2p_credits(
-    account: Option<String>,
-    job_id: Option<String>,
-) -> Result<P2pCredits, String> {
+pub fn p2p_credits(account: Option<String>, job_id: Option<String>) -> Result<P2pCredits, String> {
     let (kp, _) = load_or_create_keypair()?;
     let node_id = kp.node_id().as_hex().to_string();
     let account = account
@@ -330,24 +328,22 @@ pub fn p2p_credits(
     } else {
         0
     };
-    let settlement = job_id
-        .filter(|s| !s.trim().is_empty())
-        .and_then(|jid| {
-            if !path.is_file() {
-                return None;
-            }
-            Ledger::open_sqlite(&path)
-                .ok()
-                .and_then(|l| l.get_settlement(&jid).ok())
-                .flatten()
-                .map(|s| P2pSettlementView {
-                    job_id: s.job_id,
-                    consumer_id: s.consumer_id,
-                    provider_id: s.provider_id,
-                    tokens: s.tokens,
-                    credits: s.credits,
-                })
-        });
+    let settlement = job_id.filter(|s| !s.trim().is_empty()).and_then(|jid| {
+        if !path.is_file() {
+            return None;
+        }
+        Ledger::open_sqlite(&path)
+            .ok()
+            .and_then(|l| l.get_settlement(&jid).ok())
+            .flatten()
+            .map(|s| P2pSettlementView {
+                job_id: s.job_id,
+                consumer_id: s.consumer_id,
+                provider_id: s.provider_id,
+                tokens: s.tokens,
+                credits: s.credits,
+            })
+    });
     Ok(P2pCredits {
         account: account.clone(),
         balance,
@@ -399,7 +395,11 @@ pub fn p2p_start(
     let (kp, _) = load_or_create_keypair()?;
     let node_id = kp.node_id().as_hex().to_string();
     let ledger_for_node = ledger_path();
-    ensure_dir(ledger_for_node.parent().unwrap_or(std::path::Path::new(".")))?;
+    ensure_dir(
+        ledger_for_node
+            .parent()
+            .unwrap_or(std::path::Path::new(".")),
+    )?;
 
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<String, String>>();
@@ -539,10 +539,11 @@ pub fn p2p_peers(addrs: String, state: State<P2pState>) -> Result<Vec<P2pPeerInf
     let out = rt.block_on(async move {
         let mut out = Vec::with_capacity(parsed.len());
         for addr in parsed {
-            match client_hello(addr, ours.clone()).await {
+            match client_hello(addr, ours.clone(), &kp, None).await {
                 Ok((_session, remote)) => out.push(P2pPeerInfo {
                     addr: addr.to_string(),
                     ok: true,
+                    identity_id: remote.identity_id,
                     node_id: remote.node_id,
                     backend: remote.backend,
                     models: remote.models,
@@ -553,6 +554,7 @@ pub fn p2p_peers(addrs: String, state: State<P2pState>) -> Result<Vec<P2pPeerInf
                 Err(e) => out.push(P2pPeerInfo {
                     addr: addr.to_string(),
                     ok: false,
+                    identity_id: String::new(),
                     node_id: String::new(),
                     backend: String::new(),
                     models: vec![],
@@ -586,6 +588,7 @@ pub fn p2p_recent_peers(state: State<P2pState>) -> Result<Vec<P2pPeerInfo>, Stri
         .map(|addr| P2pPeerInfo {
             addr,
             ok: false,
+            identity_id: String::new(),
             node_id: String::new(),
             backend: String::new(),
             models: vec![],
@@ -742,7 +745,7 @@ async fn send_job_to(addr: SocketAddr, params: &JobParams) -> Result<P2pJobOutco
     let (client_kp, _) = load_or_create_keypair()?;
     let cap = default_capability(vec![params.model.clone()], true);
     let ours = capability_to_advert(&client_kp.node_id(), &cap, true);
-    let (mut session, remote) = client_hello(addr, ours)
+    let (mut session, remote) = client_hello(addr, ours, &client_kp, None)
         .await
         .map_err(|e| format!("hello: {e}"))?;
     let job_id = params
@@ -910,10 +913,11 @@ mod tests {
             let (kp, _) = load_or_create_keypair().unwrap();
             let cap = default_capability(vec!["mock".into()], true);
             let ours = capability_to_advert(&kp.node_id(), &cap, true);
-            let (_s, remote) = client_hello(addr, ours).await.expect("hello");
+            let (_s, remote) = client_hello(addr, ours, &kp, None).await.expect("hello");
             vec![P2pPeerInfo {
                 addr: addr.to_string(),
                 ok: true,
+                identity_id: remote.identity_id,
                 node_id: remote.node_id,
                 backend: remote.backend,
                 models: remote.models,
@@ -946,7 +950,10 @@ mod tests {
     #[test]
     fn parse_engine_opt_defaults_mock() {
         assert!(parse_engine_opt(None).unwrap().is_mock());
-        assert_eq!(parse_engine_opt(Some("mlx".into())).unwrap().as_str(), "mlx");
+        assert_eq!(
+            parse_engine_opt(Some("mlx".into())).unwrap().as_str(),
+            "mlx"
+        );
     }
 
     #[test]

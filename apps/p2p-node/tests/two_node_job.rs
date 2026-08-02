@@ -49,7 +49,7 @@ async fn sealed_job_mock_infer_and_settle() {
     let consumer_id = client_kp.node_id().as_hex().to_string();
     let cap = default_capability(vec!["mock".into()], true);
     let ours = capability_to_advert(&client_kp.node_id(), &cap, true);
-    let (mut session, remote) = client_hello(addr, ours).await.unwrap();
+    let (mut session, remote) = client_hello(addr, ours, &client_kp, None).await.unwrap();
     assert_eq!(remote.node_id, provider_id);
     assert_eq!(remote.backend, "mock");
 
@@ -154,7 +154,7 @@ async fn duplicate_job_id_is_rejected_by_recv_with_replay() {
         &default_capability(vec!["mock".into()], true),
         true,
     );
-    let (mut session, _) = client_hello(addr, ours).await.unwrap();
+    let (mut session, _) = client_hello(addr, ours, &client_kp, None).await.unwrap();
     let job = JobRequest {
         job_id: "job-replay-1".into(),
         model: "mock".into(),
@@ -213,14 +213,18 @@ async fn replay_across_connections_is_rejected() {
         max_tokens: 2,
     };
 
-    let (mut first_session, _) = client_hello(addr, advert()).await.unwrap();
+    let (mut first_session, _) = client_hello(addr, advert(), &client_kp, None)
+        .await
+        .unwrap();
     let first = send_sealed_job(&mut first_session, &job, &provider, &client_kp)
         .await
         .unwrap();
     assert!(first.ok);
     drop(first_session);
 
-    let (mut second_session, _) = client_hello(addr, advert()).await.unwrap();
+    let (mut second_session, _) = client_hello(addr, advert(), &client_kp, None)
+        .await
+        .unwrap();
     let replay = send_sealed_job(&mut second_session, &job, &provider, &client_kp)
         .await
         .unwrap();

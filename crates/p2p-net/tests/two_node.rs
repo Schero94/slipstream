@@ -9,6 +9,7 @@ use p2p_net::BootstrapList;
 fn cap(id: &str) -> CapabilityAdvert {
     CapabilityAdvert {
         node_id: id.into(),
+        identity_id: String::new(),
         models: vec!["mock-7b".into()],
         ram_gib: 32,
         vram_gib: 0,
@@ -39,9 +40,7 @@ async fn two_nodes_capability_and_mock_job() {
         // Expect a mock encrypted job, reply with EncryptedJobResult (sealed shape).
         match session.recv().await.expect("recv job") {
             NetMessage::EncryptedJob {
-                job_id,
-                ciphertext,
-                ..
+                job_id, ciphertext, ..
             } => {
                 assert_eq!(job_id, "job-42");
                 assert_eq!(ciphertext, b"mock-sealed-prompt");

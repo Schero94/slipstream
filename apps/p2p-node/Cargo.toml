@@ -31,6 +31,7 @@ p2p-router = { workspace = true }
 p2p-security = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
+rand = "0.8"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

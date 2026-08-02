@@ -15,14 +15,19 @@ use std::sync::{Arc, Mutex};
 use p2p_core::{
     local_capability, BackendKind, Capability, InferenceEngine, JobRequest, JobResult, NodeId,
 };
-use p2p_crypto::{open_job_request, open_job_result, seal_job_result, NodeKeypair};
+use p2p_crypto::{
+    open_job_request, open_job_result, seal_job_result, verify_identity_signature, NodeKeypair,
+    SigningIdentity,
+};
 use p2p_engine::{
     launch_serve_plan, open_engine_for_choice_at, plan_serve_for_choice, stop_child, EngineChoice,
 };
 use p2p_ledger::Ledger;
 use p2p_net::message::CapabilityAdvert;
-use p2p_net::{session, NetMessage, PeerSession};
+use p2p_net::{session, HelloAuth, NetMessage, PeerSession};
 use p2p_security::ReplayCache;
+use rand::rngs::OsRng;
+use rand::RngCore;
 use thiserror::Error;
 use tracing::{info, warn};
 
@@ -32,6 +37,9 @@ use crate::{AdmissionController, NodeMode, NodePolicy};
 
 /// MVP faucet: auto-fund consumers so settle stubs always succeed in local demos.
 const FAUCET_CREDITS: u64 = 1_000;
+pub const INFERENCE_PROTOCOL_V1: &str = "/slipstream/inference/1";
+const HELLO_TTL_SECS: u64 = 5 * 60;
+const HELLO_CLOCK_SKEW_SECS: u64 = 60;
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -267,8 +275,8 @@ async fn dial_hello(
     node: &RunningNode,
     addr: SocketAddr,
 ) -> Result<CapabilityAdvert, RuntimeError> {
-    let mut session = p2p_net::connect(addr).await?;
-    let remote = session.exchange_hello(node.advert()).await?;
+    let (_session, remote) =
+        client_hello(addr, node.advert(), node.config.keypair.as_ref(), None).await?;
     Ok(remote)
 }
 
@@ -284,18 +292,14 @@ async fn handle_session(
     community_free: bool,
     provider_id: String,
 ) -> Result<(), RuntimeError> {
-    // Accepting side: recv Hello first, then reply (avoids relying on concurrent send).
-    let remote = match session.recv().await? {
-        NetMessage::Hello { capability } => capability,
-        other => {
-            return Err(RuntimeError::Protocol(format!(
-                "expected Hello, got {other:?}"
-            )))
-        }
-    };
-    session
-        .send(&NetMessage::Hello { capability: advert })
-        .await?;
+    // The worker authenticates the signed requester capability. Its reply is
+    // bound to the requester's fresh nonce so a captured worker Hello cannot be
+    // replayed as a live response on another connection.
+    let hello = session.recv().await?;
+    let response_to = hello_nonce(&hello)?;
+    let remote = verify_signed_hello_at(&hello, Some(&[]), None, unix_now())?;
+    let response = signed_hello(advert, keypair.as_ref(), response_to)?;
+    session.send(&response).await?;
     peers
         .lock()
         .expect("peers")
@@ -381,11 +385,10 @@ async fn handle_session(
                 let msg = seal_result_message(&result, &consumer)?;
                 session.send(&msg).await?;
             }
-            NetMessage::Hello { capability } => {
-                peers
-                    .lock()
-                    .expect("peers")
-                    .insert(capability.node_id.clone(), capability);
+            NetMessage::Hello { .. } => {
+                return Err(RuntimeError::Protocol(
+                    "unexpected Hello after authenticated handshake".into(),
+                ));
             }
             NetMessage::EncryptedJobResult { .. } | NetMessage::JobResult { .. } => {
                 // Ignore unexpected results on the worker.
@@ -472,6 +475,7 @@ pub fn capability_to_advert(id: &NodeId, cap: &Capability, force_mock: bool) -> 
     };
     CapabilityAdvert {
         node_id: id.as_hex().to_string(),
+        identity_id: String::new(),
         models: cap.models.clone(),
         ram_gib: cap.ram_gib,
         vram_gib: cap.vram_gib,
@@ -495,21 +499,133 @@ pub fn capability_for_engine(mut cap: Capability, choice: EngineChoice) -> Capab
 pub async fn client_hello(
     addr: SocketAddr,
     ours: CapabilityAdvert,
+    keypair: &NodeKeypair,
+    expected_identity: Option<&str>,
 ) -> Result<(PeerSession, CapabilityAdvert), RuntimeError> {
     let mut session = p2p_net::connect(addr).await?;
-    // Dialer sends Hello first (matches exchange_hello / worker recv-first).
-    session
-        .send(&NetMessage::Hello { capability: ours })
-        .await?;
-    let remote = match session.recv().await? {
-        NetMessage::Hello { capability } => capability,
-        other => {
-            return Err(RuntimeError::Protocol(format!(
-                "expected Hello, got {other:?}"
-            )))
-        }
-    };
+    let hello = signed_hello(ours, keypair, Vec::new())?;
+    let challenge = hello_nonce(&hello)?;
+    session.send(&hello).await?;
+    let response = session.recv().await?;
+    let remote =
+        verify_signed_hello_at(&response, Some(&challenge), expected_identity, unix_now())?;
     Ok((session, remote))
+}
+
+fn signed_hello(
+    capability: CapabilityAdvert,
+    keypair: &NodeKeypair,
+    response_to: Vec<u8>,
+) -> Result<NetMessage, RuntimeError> {
+    let mut nonce = [0u8; 32];
+    OsRng.fill_bytes(&mut nonce);
+    signed_hello_at(capability, keypair, response_to, unix_now(), nonce)
+}
+
+pub fn signed_hello_at(
+    mut capability: CapabilityAdvert,
+    keypair: &NodeKeypair,
+    response_to: Vec<u8>,
+    issued_at_unix: u64,
+    nonce: [u8; 32],
+) -> Result<NetMessage, RuntimeError> {
+    let identity = SigningIdentity::from_node_keypair(keypair);
+    capability.identity_id = identity.public_hex();
+    let mut auth = HelloAuth {
+        protocol: INFERENCE_PROTOCOL_V1.into(),
+        identity_pubkey: identity.public_bytes().to_vec(),
+        issued_at_unix,
+        expires_at_unix: issued_at_unix.saturating_add(HELLO_TTL_SECS),
+        nonce: nonce.to_vec(),
+        response_to,
+        signature: Vec::new(),
+    };
+    let payload = auth
+        .signing_payload(&capability)
+        .map_err(|e| RuntimeError::Protocol(format!("encode Hello signature payload: {e}")))?;
+    auth.signature = identity.sign(&payload);
+    Ok(NetMessage::Hello {
+        capability,
+        auth: Some(auth),
+    })
+}
+
+pub fn verify_signed_hello_at(
+    message: &NetMessage,
+    expected_response: Option<&[u8]>,
+    expected_identity: Option<&str>,
+    now_unix: u64,
+) -> Result<CapabilityAdvert, RuntimeError> {
+    let NetMessage::Hello { capability, auth } = message else {
+        return Err(RuntimeError::Protocol(format!(
+            "expected authenticated Hello, got {}",
+            message.wire_type()
+        )));
+    };
+    let auth = auth
+        .as_ref()
+        .ok_or_else(|| RuntimeError::Protocol("unsigned Hello rejected".into()))?;
+    if auth.protocol != INFERENCE_PROTOCOL_V1 {
+        return Err(RuntimeError::Protocol("unsupported Hello protocol".into()));
+    }
+    if auth.identity_pubkey.len() != 32 || auth.nonce.len() != 32 || auth.signature.len() != 64 {
+        return Err(RuntimeError::Protocol(
+            "malformed Hello authentication".into(),
+        ));
+    }
+    if auth.issued_at_unix > now_unix.saturating_add(HELLO_CLOCK_SKEW_SECS)
+        || auth.expires_at_unix <= now_unix
+        || auth.expires_at_unix.saturating_sub(auth.issued_at_unix) > HELLO_TTL_SECS
+    {
+        return Err(RuntimeError::Protocol("expired Hello rejected".into()));
+    }
+    if let Some(expected) = expected_response {
+        if auth.response_to != expected {
+            return Err(RuntimeError::Protocol(
+                "Hello challenge response mismatch".into(),
+            ));
+        }
+    }
+    let identity_id = hex::encode(&auth.identity_pubkey);
+    if capability.identity_id != identity_id {
+        return Err(RuntimeError::Protocol(
+            "Hello identity binding mismatch".into(),
+        ));
+    }
+    if let Some(expected) = expected_identity {
+        if identity_id != expected {
+            return Err(RuntimeError::Protocol(
+                "Hello peer identity does not match pinned identity".into(),
+            ));
+        }
+    }
+    NodeId::from_hex(&capability.node_id)
+        .map_err(|_| RuntimeError::Protocol("Hello encryption key is invalid".into()))?;
+    let payload = auth
+        .signing_payload(capability)
+        .map_err(|e| RuntimeError::Protocol(format!("encode Hello signature payload: {e}")))?;
+    verify_identity_signature(&auth.identity_pubkey, &payload, &auth.signature)
+        .map_err(|_| RuntimeError::Protocol("Hello signature verification failed".into()))?;
+    Ok(capability.clone())
+}
+
+fn hello_nonce(message: &NetMessage) -> Result<Vec<u8>, RuntimeError> {
+    let NetMessage::Hello {
+        auth: Some(auth), ..
+    } = message
+    else {
+        return Err(RuntimeError::Protocol(
+            "authenticated Hello required".into(),
+        ));
+    };
+    Ok(auth.nonce.clone())
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 /// Seal + send a job; open the sealed [`NetMessage::EncryptedJobResult`] reply.
