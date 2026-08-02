@@ -269,6 +269,8 @@ const state = {
   // Actual MLX profile chosen at Start; contract/fast are safe for expanded
   // tool and JSON-schema prompts under the Apple Metal working-set cap.
   runningPgrnProfile: null,
+  nativeRuntime: null,
+  nativeStorage: { model: null, pgrn: null },
   // Slipstream P2P experimental mesh (default OFF). Independent of Metal/MLX.
   p2p: localStorage.getItem("slipstream.p2p") === "1",
   p2pRemoteChat: localStorage.getItem("slipstream.p2p.remoteChat") === "1",
@@ -339,6 +341,17 @@ const I18N = {
     "hint.ssdStream": "Models larger than RAM stream from SSD.",
     "hint.codingPreset": "Coding preset: Thinking off, greedy (temp 0).",
     "hint.startPath": "Models folder → Backend Auto → Start",
+    "runtime.title": "Native runtime & SSD",
+    "runtime.subtitle": "Verified Slipstream components and real storage devices.",
+    "runtime.llama": "llama.cpp/PGRN", "runtime.convert": "PGRN converter",
+    "runtime.omlx": "oMLX/PGRN", "runtime.version": "Runtime",
+    "runtime.modelDevice": "Model device", "runtime.pgrnDevice": "PGRN device",
+    "runtime.diskFree": "Free on PGRN device", "runtime.internal": "internal",
+    "runtime.external": "external", "runtime.unknown": "unknown device",
+    "runtime.ready": "Required native components and disk reserve verified.",
+    "runtime.incomplete": "Native runtime incomplete — repair the app bundle before Start.",
+    "runtime.diskUnsafe": "Disk reserve is too low for a safe Start.",
+    "runtime.externalPgrn": "PGRN is on external storage. It works, but internal NVMe is usually much faster.",
     "lbl.modelsRoot": "Models folder",
     "hint.modelsRoot": "One folder on the Mac’s internal disk: GGUF + .pgrn here, MLX under mlx/. Default: ~/Modelle. External drives are Advanced overflow only.",
     "tip.modelsRoot": "Primary catalog on internal SSD. Metal looks for GGUF + .pgrn under this folder. MLX uses <folder>/mlx/<model>/. Put models on an external drive only when internal is full (Advanced overflow) — Start still defaults here.",
@@ -461,6 +474,17 @@ const I18N = {
     "hint.ssdStream": "Modelle größer als RAM streamen von der SSD.",
     "hint.codingPreset": "Coding-Preset: Thinking aus, greedy (temp 0).",
     "hint.startPath": "Modellordner → Backend Auto → Start",
+    "runtime.title": "Native Runtime & SSD",
+    "runtime.subtitle": "Verifizierte Slipstream-Komponenten und echte Speichergeräte.",
+    "runtime.llama": "llama.cpp/PGRN", "runtime.convert": "PGRN-Converter",
+    "runtime.omlx": "oMLX/PGRN", "runtime.version": "Runtime",
+    "runtime.modelDevice": "Modell-Gerät", "runtime.pgrnDevice": "PGRN-Gerät",
+    "runtime.diskFree": "Frei auf PGRN-Gerät", "runtime.internal": "intern",
+    "runtime.external": "extern", "runtime.unknown": "Gerät unbekannt",
+    "runtime.ready": "Native Pflichtkomponenten und Disk-Reserve verifiziert.",
+    "runtime.incomplete": "Native Runtime unvollständig — App-Bundle vor Start reparieren.",
+    "runtime.diskUnsafe": "Disk-Reserve ist für einen sicheren Start zu klein.",
+    "runtime.externalPgrn": "PGRN liegt extern. Das funktioniert, interne NVMe ist meist deutlich schneller.",
     "lbl.modelsRoot": "Modellordner",
     "hint.modelsRoot": "Ein Ordner auf der internen SSD: GGUF + .pgrn hier, MLX unter mlx/. Standard: ~/Modelle. Externe Platten nur als Advanced-Overflow.",
     "tip.modelsRoot": "Primärer Katalog auf der internen SSD. Metal sucht GGUF + .pgrn hier. MLX nutzt <Ordner>/mlx/<Modell>/. Externe Platte nur wenn intern voll (Advanced-Overflow) — Start bleibt standardmäßig hier.",
@@ -1362,6 +1386,124 @@ $("dlCancel").onclick = async () => {
 };
 
 // ---- server start/stop -----------------------------------------------------
+function runtimeComponent(report, name) {
+  return ((report && report.components) || []).find((c) => c.name === name) || null;
+}
+
+function runtimeComponentText(component) {
+  if (!component || !component.applicable) return "–";
+  return component.ready ? "✓" : `✗ ${component.detail || "missing"}`;
+}
+
+function formatStorageDevice(report) {
+  if (!report) return "–";
+  const device = report.internal === true ? t("runtime.internal")
+    : report.internal === false ? t("runtime.external")
+    : t("runtime.unknown");
+  const medium = report.solid_state === true ? " SSD" : "";
+  const link = report.is_symlink ? " · symlink" : "";
+  return `${device}${medium}${link}`;
+}
+
+function renderNativeRuntimeStatus() {
+  const runtime = state.nativeRuntime;
+  const modelStorage = state.nativeStorage.model;
+  const pgrnStorage = state.nativeStorage.pgrn;
+  const badge = $("runtimeBadge");
+  if (!badge) return;
+
+  const llama = runtimeComponent(runtime, "llama_server");
+  const convert = runtimeComponent(runtime, "pgrn_convert");
+  const launcher = runtimeComponent(runtime, "omlx_launcher");
+  const fork = runtimeComponent(runtime, "omlx_fork");
+  const host = runtimeComponent(runtime, "pgrn_host");
+  $("runtimeLlama").textContent = runtimeComponentText(llama);
+  $("runtimeConvert").textContent = runtimeComponentText(convert);
+  $("runtimeOmlx").textContent = [launcher, fork, host].every((c) => c && c.ready)
+    ? "✓" : runtimeComponentText(launcher || fork || host);
+  $("runtimeVersion").textContent = runtime
+    ? `schema ${runtime.schema} · MLX ${(runtime.mlx_packages || {}).mlx || "–"}` : "–";
+  $("runtimeModelDevice").textContent = formatStorageDevice(modelStorage);
+  $("runtimePgrnDevice").textContent = formatStorageDevice(pgrnStorage);
+  $("runtimeDiskFree").textContent = pgrnStorage
+    ? `${fmtGiB(pgrnStorage.available_bytes)} GiB` : "–";
+
+  const diskReady = [modelStorage, pgrnStorage].filter(Boolean).every((storage) => storage.admitted);
+  const ready = !!(runtime && runtime.ready && diskReady);
+  badge.className = `badge ${ready ? "ready" : "missing"}`;
+  badge.textContent = ready ? t("badge.ready") : t("badge.missing");
+  let note = !runtime || !runtime.ready ? t("runtime.incomplete")
+    : !diskReady ? t("runtime.diskUnsafe")
+    : pgrnStorage && !pgrnStorage.placement_ok ? t("runtime.externalPgrn")
+    : t("runtime.ready");
+  const failed = ((runtime && runtime.components) || [])
+    .filter((c) => c.applicable && c.required && !c.ready)
+    .map((c) => `${c.name}: ${c.detail}`);
+  if (failed.length) note += ` ${failed.join(" · ")}`;
+  $("runtimeNote").textContent = note;
+}
+
+function nativeStoragePaths(resolvedBackend) {
+  if (resolvedBackend === "mlx" && state.model.mlx) {
+    const catalog = ($("pMlx") && $("pMlx").value.trim())
+      || state.model.mlx.dir || defaultMlxDir();
+    const model = `${catalog}/${state.model.mlx.id}`;
+    return { model, pgrn: `${model}/experts.pgrn` };
+  }
+  const model = ggufPath();
+  return { model, pgrn: ($("pPgrn").value.trim() || pgrnOf(model)) };
+}
+
+async function storageReport(path, role) {
+  try {
+    return await invoke("inspect_storage", {
+      path,
+      role,
+      plannedBytes: 0,
+      reserveBytes: 3 * 1024 * 1024 * 1024,
+    });
+  } catch (e) {
+    return {
+      path, role, admitted: false, placement_ok: false,
+      detail: String(e), internal: null, solid_state: null,
+    };
+  }
+}
+
+async function refreshNativeRuntimeStatus(resolvedBackend) {
+  try {
+    state.nativeRuntime = await invoke("runtime_preflight");
+  } catch (e) {
+    state.nativeRuntime = { ready: false, components: [], mlx_packages: {}, detail: String(e) };
+  }
+  const paths = nativeStoragePaths(resolvedBackend || effectiveBackend());
+  const [model, pgrn] = await Promise.all([
+    storageReport(paths.model, "model"),
+    storageReport(paths.pgrn, "pgrn"),
+  ]);
+  state.nativeStorage = { model, pgrn };
+  renderNativeRuntimeStatus();
+  return { runtime: state.nativeRuntime, storageReports: [model, pgrn] };
+}
+
+async function ensureNativeStartReady(resolvedBackend) {
+  const status = await refreshNativeRuntimeStatus(resolvedBackend);
+  const runtime = status.runtime;
+  if (!runtime.ready) {
+    toast(t("runtime.incomplete"), true);
+    return false;
+  }
+  for (const storage of status.storageReports) {
+    if (!storage.admitted) {
+      toast(`${t("runtime.diskUnsafe")} ${storage.detail || ""}`, true);
+      return false;
+    }
+  }
+  const pgrnStorage = status.storageReports.find((storage) => storage.role === "pgrn");
+  if (pgrnStorage && !pgrnStorage.placement_ok) toast(t("runtime.externalPgrn"), true);
+  return true;
+}
+
 /** Cluster tab: surface mlx_capability streaming readiness (reuse Settings probe). */
 async function refreshClusterMlxCap() {
   const code = $("clusterMlxCap");
@@ -1672,6 +1814,7 @@ async function startServer() {
   const resolved = isAutoBackend()
     ? resolveAutoBackend(promptChars, hasExperts)
     : (state.backend === "mlx" ? "mlx" : "metal");
+  if (!(await ensureNativeStartReady(resolved))) return;
   const cfg = {
     server: $("pServer").value.trim(),
     model: ggufPath(),
@@ -4177,6 +4320,7 @@ async function boot() {
     };
   }
   applyBackendUi();
+  await refreshNativeRuntimeStatus(effectiveBackend());
   $("extBase").onchange = (e) => {
     extBase = e.target.value.trim().replace(/\/+$/, "");
     localStorage.setItem("pgrn.extBase", extBase);

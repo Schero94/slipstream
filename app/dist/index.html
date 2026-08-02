@@ -565,6 +565,25 @@
       <section class="panel" data-panel="settings" hidden>
         <div class="card">
           <h2 data-i18n="sec.settings">Einstellungen</h2>
+          <div class="runtime-status" id="runtimeStatusCard">
+            <div class="runtime-status-head">
+              <div>
+                <div class="runtime-status-title" data-i18n="runtime.title">Native Runtime &amp; SSD</div>
+                <p class="hint" data-i18n="runtime.subtitle">Verifizierte Slipstream-Komponenten und echte Speichergeräte.</p>
+              </div>
+              <span id="runtimeBadge" class="badge partial">prüfe…</span>
+            </div>
+            <div class="runtime-grid">
+              <div><span data-i18n="runtime.llama">llama.cpp/PGRN</span><strong id="runtimeLlama">–</strong></div>
+              <div><span data-i18n="runtime.convert">PGRN-Converter</span><strong id="runtimeConvert">–</strong></div>
+              <div><span data-i18n="runtime.omlx">oMLX/PGRN</span><strong id="runtimeOmlx">–</strong></div>
+              <div><span data-i18n="runtime.version">Runtime</span><strong id="runtimeVersion">–</strong></div>
+              <div><span data-i18n="runtime.modelDevice">Modell-Gerät</span><strong id="runtimeModelDevice">–</strong></div>
+              <div><span data-i18n="runtime.pgrnDevice">PGRN-Gerät</span><strong id="runtimePgrnDevice">–</strong></div>
+              <div><span data-i18n="runtime.diskFree">Frei auf PGRN-Gerät</span><strong id="runtimeDiskFree">–</strong></div>
+            </div>
+            <p class="hint" id="runtimeNote">–</p>
+          </div>
           <div class="ctrl">
             <div class="ctrl-head"><label for="backendSel"><span data-i18n="lbl.backend">Backend</span> <span class="info" data-i18n-tip="tip.backend">ⓘ</span></label></div>
             <select id="backendSel">
