@@ -59,8 +59,15 @@ The source loop before canonical port completed:
 - 810 oMLX grammar/tool/engine tests passing, 3 skipped;
 - browser journeys at 1440×1000 and 1024×768 without overflow or console errors.
 
-Canonical repository and release-bundle gate results are appended after the final
-v0.2.34 build.
+The canonical product repository then passed:
+
+- 4/4 JavaScript engine-contract scripts and 3/3 packaged-oMLX resource tests;
+- 83/83 Tauri/Rust tests and 154/154 P2P workspace tests;
+- a clean arm64 DMG build, DMG CRC verification, and ZIP integrity test;
+- installation over v0.2.33, version verification, and a successful v0.2.34
+  application launch without starting an inference server;
+- GitHub Pages journeys at 1440×1000 and 390×844 with no horizontal overflow
+  or browser-console warnings.
 
 ## Artifacts
 
@@ -69,7 +76,13 @@ The GitHub Release publishes both:
 - `Slipstream_0.2.34_aarch64.dmg`
 - `Slipstream_0.2.34_aarch64.zip`
 
-SHA-256 digests are recorded in the Release body after the final build.
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Slipstream_0.2.34_aarch64.dmg` | 47,005,825 | `ae1f62a1b2aee316ab3b3ddf031133d0ed0c6228adc69b62675cb3c7f370c0a7` |
+| `Slipstream_0.2.34_aarch64.zip` | 45,443,612 | `0700300c537d514334469c73d7a215c2863d8fa66faf0b0b715180e63e472e70` |
+
+The bundle contains no local helper scripts or Python bytecode caches. Its staged
+oMLX `profile.py` and `store.py` match the validated source inputs byte-for-byte.
 
 ## Build
 
