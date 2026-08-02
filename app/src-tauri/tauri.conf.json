@@ -28,6 +28,7 @@
       "dmg"
     ],
     "resources": [
+      "resources/runtime-manifest.json",
       "resources/llama-server",
       "resources/pgrn-convert",
       "resources/omlx-pgrn"

@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "product_engine": "llama.cpp-pgrn",
+  "ollama": false,
+  "components": {
+    "llama_server": {
+      "path": "llama-server",
+      "kind": "file",
+      "required": true,
+      "executable": true
+    },
+    "pgrn_convert": {
+      "path": "pgrn-convert",
+      "kind": "file",
+      "required": true,
+      "executable": true
+    },
+    "omlx_launcher": {
+      "path": "omlx-pgrn/run_omlx_pgrn.sh",
+      "kind": "file",
+      "required": true,
+      "executable": true,
+      "platform": "macos-arm64"
+    },
+    "omlx_fork": {
+      "path": "omlx-pgrn/omlx",
+      "kind": "directory",
+      "required": true,
+      "executable": false,
+      "platform": "macos-arm64"
+    },
+    "pgrn_host": {
+      "path": "omlx-pgrn/libpgrn_host.dylib",
+      "kind": "file",
+      "required": true,
+      "executable": false,
+      "platform": "macos-arm64"
+    }
+  },
+  "mlx_packages": {
+    "mlx": "0.32.0",
+    "omlx": "0.5.3",
+    "mlx_lm_revision": "ab1806e8f5d6aa035973af194a1b9198ab4754dc",
+    "xgrammar": "0.2.3",
+    "apache_tvm_ffi": "0.1.11"
+  }
+}
