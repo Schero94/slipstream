@@ -3232,3 +3232,19 @@ The OpenAI Chat adapter still returned content (`The`) and reported one
 completion token, despite near-zero decode timing. Since this provides no
 observable accounting advantage over `1`, the zero-token variant was rejected;
 the product keeps the honestly qualified one-token request.
+
+## Slipstream 0.3.2 release qualification — 2026-08-02
+
+The 512 MiB llama prompt-cache bound and conditional tool-schema warm-up were
+packaged as v0.3.2 without changing the pure llama.cpp/PGRN + oMLX/PGRN runtime
+boundary. The complete Rust workspace passed 183/183 tests, Tauri passed 96/96,
+Python passed 39/39, all six Node contracts passed and the atomic oMLX bootstrap
+passed. The arm64 DMG CRC and ZIP integrity passed.
+
+The mounted app reports 0.3.2 and contains 477 resource files, all 16 required
+runtime-manifest components, zero Python bytecode caches and no Ollama payload.
+App, llama server, PGRN converter and pinned uv are arm64. The installed app was
+upgraded from 0.3.1; a real launch/quit smoke passed and left ports 8080/8081
+free. The v0.3.2 Pages source passed Chromium at 1440×1000 and 390×844 with
+zero overflow and no console errors or warnings. Full artifact hashes and known
+boundaries are in `docs/RELEASE_0.3.2.md`.
