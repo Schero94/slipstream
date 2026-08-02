@@ -116,7 +116,7 @@
               <button id="chatSend" class="btn btn-primary" data-i18n="btn.send">Senden</button>
               <button id="chatStop" class="btn btn-danger" style="display:none" data-i18n="chat.stop">Stopp</button>
             </div>
-            <!-- One calm meta row: model + toggles. Tools/JSON stay MLX-gated via [hidden]. -->
+            <!-- One calm meta row: model + common OpenAI toggles. -->
             <div class="chat-composer-bar">
               <div class="chat-composer-left">
                 <label class="chat-model-label" for="chatModelSel"><span data-i18n="chat.model">Modell</span></label>
@@ -132,7 +132,7 @@
               </div>
               <span class="chat-hintnote" id="chatServerNote" data-i18n="chat.serverHint">Server muss laufen (oben rechts → Start).</span>
             </div>
-            <!-- MLX + JSON only: collapsed by default; paste → response_format.json_schema -->
+            <!-- JSON contract: collapsed by default; paste → response_format.json_schema -->
             <details class="chat-schema-wrap" id="chatSchemaWrap" hidden>
               <summary class="chat-schema-label"><span data-i18n="chat.schema">Schema</span> <span class="info" data-i18n-tip="tip.chatSchema">ⓘ</span></summary>
               <textarea id="chatSchema" rows="3" spellcheck="false" data-i18n-ph="chat.schemaPh" placeholder='{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}'></textarea>
@@ -577,18 +577,18 @@
               <p class="hint" data-i18n="hint.extBase">Optional overflow. Empty = GGUF next to PGRN in the Models folder.</p>
             </div>
           </details>
-          <div class="ctrl" id="mlxToolsSettingsWrap" hidden>
+          <div class="ctrl" id="chatToolsSettingsWrap" hidden>
             <div class="ctrl-head">
               <label class="chk">
-                <input type="checkbox" id="settingsMlxTools" />
-                <span data-i18n="lbl.mlxTools">Enable tools (MLX)</span>
-                <span class="info" data-i18n-tip="tip.mlxTools">ⓘ</span>
+                <input type="checkbox" id="settingsChatTools" />
+                <span data-i18n="lbl.chatTools">Enable tools</span>
+                <span class="info" data-i18n-tip="tip.chatTools">ⓘ</span>
               </label>
             </div>
-            <p class="hint" data-i18n="hint.mlxTools">When on, chat completions send a small tools array to oMLX (time + calculator). Chat toolbar checkbox stays in sync. Metal path unchanged.</p>
+            <p class="hint" data-i18n="hint.chatTools">When on, Chat sends standard OpenAI tools to the active local engine (time + calculator). The Chat toolbar stays in sync.</p>
           </div>
           <div class="ctrl" id="mlxLeverNote" hidden>
-            <p class="hint" data-i18n="hint.mlxLevers">MLX uses Tools / JSON / Schema in the Chat bar. Compact + Grammar drafts are Metal-only; choose Metal or Auto for those.</p>
+            <p class="hint" data-i18n="hint.mlxLevers">Tools / JSON / Schema use the same Chat contract on both engines. Compact + Grammar drafts are Metal-only; choose Metal or Auto for those.</p>
           </div>
           <!-- MLX-only SLIPSTREAM_PGRN_* levers — Advanced disclosure; smart defaults stay. -->
           <div class="ctrl" id="mlxPgrnSettingsWrap" hidden>

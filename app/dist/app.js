@@ -266,6 +266,9 @@ const state = {
   })(),
   // Last Auto/heuristic resolution at Start ("metal"|"mlx"); null when stopped / explicit.
   resolvedBackend: null,
+  // Actual MLX profile chosen at Start; contract/fast are safe for expanded
+  // tool and JSON-schema prompts under the Apple Metal working-set cap.
+  runningPgrnProfile: null,
   // Slipstream P2P experimental mesh (default OFF). Independent of Metal/MLX.
   p2p: localStorage.getItem("slipstream.p2p") === "1",
   chatModel: "slipstream",
@@ -343,7 +346,7 @@ const I18N = {
     "adv.p2pHelp": "How to use",
     "hint.pathOverrides": "Only if GGUF or MLX live outside the Models folder (second SSD / custom layout).",
     "hint.mlxPgrnDefaults": "MLX defaults: touch · cold_io=0 · balanced · keep-hot. Rarely need changing.",
-    "hint.mlxLevers": "MLX uses Tools / JSON / Schema in the Chat bar. Compact + Grammar drafts are Metal-only; choose Metal or Auto for those.",
+    "hint.mlxLevers": "Tools / JSON / Schema use the same Chat contract on both engines. Compact + Grammar drafts are Metal-only; choose Metal or Auto for those.",
     "adv.mlxPgrn": "Advanced: profile / residency / L3 / MCP",
     "chat.stop": "Stop", "chat.clear": "Clear history", "chat.thinking": "Thinking",
     "chat.model": "Model", "chat.tools": "Tools", "chat.json": "JSON", "chat.vlm": "VLM",
@@ -358,10 +361,12 @@ const I18N = {
     "chat.viaP2p": "Reply via P2P",
     "tip.chatAttach": "Attach an image (VLM models only). Sent as OpenAI image_url.",
     "tip.chatDocAttach": "Attach a document (PDF/MD/TXT/DOCX/PPTX). MLX only — oMLX MarkItDown file parts.",
-    "tip.chatSchema": "Optional JSON Schema when JSON is on (MLX). Paste a raw schema, {name,schema}, or full response_format. Empty = json_object. Metal unchanged.",
-    "lbl.mlxTools": "Enable tools (MLX)",
-    "hint.mlxTools": "When on, chat completions send a small tools array to oMLX (time + calculator). Chat toolbar checkbox stays in sync. Metal path unchanged.",
-    "tip.mlxTools": "oMLX native tool-calling. Off by default. Does not affect Metal/llama.cpp starts.",
+    "tip.chatSchema": "Optional JSON Schema for either local engine. Paste a raw schema, {name,schema}, or full response_format. Empty = json_object.",
+    "lbl.chatTools": "Enable tools",
+    "hint.chatTools": "When on, Chat sends standard OpenAI tools to the active local engine (time + calculator). The Chat toolbar stays in sync.",
+    "tip.chatTools": "OpenAI tool calling for both MLX and Metal. Off by default. On MLX, Start selects a bounded contract-safe cache profile.",
+    "toast.mlxContractProfile": "MLX contract-safe cache profile active",
+    "err.mlxContractRestart": "Tools/JSON need the bounded MLX contract profile on this Mac. Stop and Start once; Slipstream will select it automatically.",
     "sec.mlxPgrn": "Slipstream Settings (MLX)",
     "tip.mlxPgrn": "oMLX streaming profile + residency. Applied as SLIPSTREAM_PGRN_* when you Start with Backend=MLX. Metal/llama.cpp ignores these. Default residency=touch (safe). mlock is opt-in for short measured runs — dual mlock/keep-hot can hard-freeze the Mac. One heavy PGRN server at a time. Overnight / sleep: leave touch or off.",
     "hint.mlxPgrn": "Passed as SLIPSTREAM_PGRN_* on MLX start. Default: touch + keep-hot + io16 (no cold boost). mlock opt-in (never overnight). Sticky Settings may still show an old mlock choice — switch to touch before sleep. Prefetch stays off unless set outside the app.",
@@ -460,7 +465,7 @@ const I18N = {
     "adv.p2pHelp": "So geht’s",
     "hint.pathOverrides": "Nur wenn GGUF oder MLX außerhalb des Modellordners liegen (zweite SSD / eigenes Layout).",
     "hint.mlxPgrnDefaults": "MLX-Defaults: touch · cold_io=0 · balanced · keep-hot. Selten nötig zu ändern.",
-    "hint.mlxLevers": "MLX nutzt Tools / JSON / Schema in der Chat-Leiste. Compact + Grammar-Drafts sind Metal-only; dafür Metal oder Auto wählen.",
+    "hint.mlxLevers": "Tools / JSON / Schema nutzen bei beiden Engines denselben Chat-Vertrag. Compact + Grammar-Drafts sind Metal-only; dafür Metal oder Auto wählen.",
     "adv.mlxPgrn": "Advanced: Profil / Residency / L3 / MCP",
     "chat.stop": "Stopp", "chat.clear": "Verlauf löschen", "chat.thinking": "Thinking",
     "chat.model": "Modell", "chat.tools": "Tools", "chat.json": "JSON", "chat.vlm": "VLM",
@@ -475,10 +480,12 @@ const I18N = {
     "chat.viaP2p": "Antwort via P2P",
     "tip.chatAttach": "Bild anhängen (nur VLM). Wird als OpenAI image_url gesendet.",
     "tip.chatDocAttach": "Dokument anhängen (PDF/MD/TXT/DOCX/PPTX). Nur MLX — oMLX MarkItDown file-Parts.",
-    "tip.chatSchema": "Optionales JSON Schema wenn JSON an (MLX). Rohes Schema, {name,schema} oder volles response_format. Leer = json_object. Metal unverändert.",
-    "lbl.mlxTools": "Tools aktivieren (MLX)",
-    "hint.mlxTools": "Wenn an, sendet Chat ein kleines tools-Array an oMLX (Zeit + Taschenrechner). Chat-Toolbar-Checkbox bleibt synchron. Metal-Pfad unverändert.",
-    "tip.mlxTools": "oMLX natives Tool-Calling. Standard aus. Beeinflusst Metal/llama.cpp-Starts nicht.",
+    "tip.chatSchema": "Optionales JSON Schema für beide lokalen Engines. Rohes Schema, {name,schema} oder volles response_format. Leer = json_object.",
+    "lbl.chatTools": "Tools aktivieren",
+    "hint.chatTools": "Wenn an, sendet Chat Standard-OpenAI-Tools an die aktive lokale Engine (Zeit + Taschenrechner). Die Chat-Leiste bleibt synchron.",
+    "tip.chatTools": "OpenAI-Tool-Calling für MLX und Metal. Standard aus. Bei MLX wählt Start ein begrenztes, vertragssicheres Cache-Profil.",
+    "toast.mlxContractProfile": "MLX-Profil für Tools/JSON aktiv",
+    "err.mlxContractRestart": "Tools/JSON brauchen auf diesem Mac das begrenzte MLX-Vertragsprofil. Einmal Stoppen und Starten; Slipstream wählt es automatisch.",
     "sec.mlxPgrn": "Slipstream-Einstellungen (MLX)",
     "tip.mlxPgrn": "oMLX-Streaming-Profil + Residency. Werden als SLIPSTREAM_PGRN_* gesetzt, wenn du mit Backend=MLX startest. Metal/llama.cpp ignoriert sie. Standard residency=touch (sicher). mlock nur opt-in für kurze gemessene Läufe — dual mlock/keep-hot kann den Mac hart einfrieren. Nur ein schwerer PGRN-Server gleichzeitig. Über Nacht / Sleep: touch oder off lassen.",
     "hint.mlxPgrn": "Beim MLX-Start als SLIPSTREAM_PGRN_* übergeben. Standard: touch + keep-hot + io16 (kein cold boost). mlock opt-in (nie über Nacht). Sticky Settings können noch eine alte mlock-Wahl zeigen — vor Sleep auf touch stellen. Prefetch bleibt aus, außer außerhalb der App gesetzt.",
@@ -1440,6 +1447,16 @@ function pgrnProfileFromUi() {
   const v = ($("pgrnProfile") && $("pgrnProfile").value) || localStorage.getItem("slipstream.pgrn.profile") || "balanced";
   return (v === "quality" || v === "fast") ? v : "balanced";
 }
+
+/** Keep expanded MLX tool/schema prompts below the Apple Metal hard cap. */
+function pgrnProfileForStart(resolved, pendingText) {
+  const selected = pgrnProfileFromUi();
+  const commonContract = chatToolsPreference()
+    || chatJsonPreference()
+    || messageAsksForTools(pendingText);
+  if (resolved === "mlx" && commonContract) return "contract";
+  return selected;
+}
 /** Product residency allow-list. Unknown / sticky garbage → touch (mlock is opt-in). */
 function normalizePgrnResidency(v) {
   return (v === "mlock" || v === "off" || v === "touch") ? v : "touch";
@@ -1609,25 +1626,20 @@ function applyBackendUi() {
   } else if (!state.chatModelsLive && !isAutoBackend()) {
     state.chatModel = "slipstream";
   }
-  // oMLX-only chat levers (tools / JSON / vision attach when VLM).
-  ["chatToolsWrap", "chatJsonWrap", "mlxToolsSettingsWrap"].forEach((id) => {
+  // Tools / JSON are the common OpenAI contract. Attachments remain scoped below.
+  ["chatToolsWrap", "chatJsonWrap", "chatToolsSettingsWrap"].forEach((id) => {
     const el = $(id);
-    if (el) el.hidden = !mlx;
+    if (el) el.hidden = false;
   });
   // Slipstream PGRN settings: show for explicit MLX or Auto (may resolve to MLX).
   if ($("mlxPgrnSettingsWrap")) $("mlxPgrnSettingsWrap").hidden = !showMlxDir;
-  if (!mlx) {
-    if ($("chatTools")) $("chatTools").checked = false;
-    if ($("chatJson")) $("chatJson").checked = false;
-  } else {
-    syncMlxToolsUi(localStorage.getItem("slipstream.mlxTools") === "1");
-    syncMlxJsonUi(localStorage.getItem("slipstream.mlxJson") === "1");
-  }
+  syncChatToolsUi(chatToolsPreference());
+  syncChatJsonUi(chatJsonPreference());
   updateChatSchemaVisibility();
   updatePgrnProfileHint();
   refreshMlxCapability();
   refreshChatModels();
-  updateChatMlxControls();
+  updateChatCapabilityControls();
 }
 
 async function startServer() {
@@ -1677,7 +1689,7 @@ async function startServer() {
     omlx_bin: "",
     prompt_chars: promptChars,
     // MLX-only SLIPSTREAM_PGRN_* (Metal start ignores these fields).
-    pgrn_profile: pgrnProfileFromUi(),
+    pgrn_profile: pgrnProfileForStart(resolved, pending),
     pgrn_residency: pgrnResidencyFromUi(),
     pgrn_keep_hot: pgrnKeepHotFromUi(),
     pgrn_warmup: pgrnWarmupFromUi(),
@@ -1716,7 +1728,11 @@ async function startServer() {
   try {
     const msg = await invoke("start_server", { cfg });
     state.resolvedBackend = isAutoBackend() ? resolved : null;
-    toast(msg || t("srv.startedLoading"));
+    state.runningPgrnProfile = goingMlx ? cfg.pgrn_profile : null;
+    const profileNote = goingMlx && cfg.pgrn_profile === "contract"
+      ? ` · ${t("toast.mlxContractProfile")}`
+      : "";
+    toast(`${msg || t("srv.startedLoading")}${profileNote}`);
     setPill("loading");
     applyBackendUi();
   } catch (e) {
@@ -1731,6 +1747,7 @@ async function startServer() {
 async function stopServer() {
   await invoke("stop_server");
   state.resolvedBackend = null;
+  state.runningPgrnProfile = null;
   setPill("off");
   toast(t("toast.serverStopped"));
   applyBackendUi();
@@ -2751,17 +2768,31 @@ function hideStatsConfirm() {
 // ---- chat (streaming against the local OpenAI-compatible server) -----------
 const chat = { history: [], streaming: false, abort: null };
 
-/** Persist + sync Settings ↔ chat toolbar for oMLX tools (Metal never sees this). */
-function syncMlxToolsUi(on) {
+/** Read a common preference, falling back to the pre-parity MLX-only key. */
+function migratedChatPreference(key, legacyKey) {
+  const current = localStorage.getItem(key);
+  return (current == null ? localStorage.getItem(legacyKey) : current) === "1";
+}
+
+function chatToolsPreference() {
+  return migratedChatPreference("slipstream.chatTools", "slipstream.mlxTools");
+}
+
+function chatJsonPreference() {
+  return migratedChatPreference("slipstream.chatJson", "slipstream.mlxJson");
+}
+
+/** Persist + sync the common Settings ↔ Chat toolbar tool preference. */
+function syncChatToolsUi(on) {
   const enabled = !!on;
-  localStorage.setItem("slipstream.mlxTools", enabled ? "1" : "0");
-  if ($("settingsMlxTools")) $("settingsMlxTools").checked = enabled;
+  localStorage.setItem("slipstream.chatTools", enabled ? "1" : "0");
+  if ($("settingsChatTools")) $("settingsChatTools").checked = enabled;
   if ($("chatTools")) $("chatTools").checked = enabled;
 }
 
-function syncMlxJsonUi(on) {
+function syncChatJsonUi(on) {
   const enabled = !!on;
-  localStorage.setItem("slipstream.mlxJson", enabled ? "1" : "0");
+  localStorage.setItem("slipstream.chatJson", enabled ? "1" : "0");
   if ($("chatJson")) $("chatJson").checked = enabled;
   updateChatSchemaVisibility();
 }
@@ -2838,11 +2869,13 @@ function buildResponseFormat(jsonEnabled, schemaText) {
 
 function chatSchemaText() {
   if ($("chatSchema")) return $("chatSchema").value;
-  return localStorage.getItem("slipstream.mlxJsonSchema") || "";
+  return localStorage.getItem("slipstream.chatJsonSchema")
+    || localStorage.getItem("slipstream.mlxJsonSchema")
+    || "";
 }
 
 function persistChatSchema(text) {
-  localStorage.setItem("slipstream.mlxJsonSchema", String(text || ""));
+  localStorage.setItem("slipstream.chatJsonSchema", String(text || ""));
 }
 
 function updateChatSchemaStatus() {
@@ -2864,13 +2897,12 @@ function updateChatSchemaStatus() {
   }
 }
 
-/** Show schema paste only for MLX + JSON checked. Metal never sees it.
+/** Show schema paste when the common JSON contract is enabled.
  *  Collapsed by default so the composer stays calm until the user opens it. */
 function updateChatSchemaVisibility() {
   const wrap = $("chatSchemaWrap");
   if (!wrap) return;
-  const mlx = effectiveBackend() === "mlx";
-  const jsonOn = !!(mlx && $("chatJson") && $("chatJson").checked);
+  const jsonOn = !!($("chatJson") && $("chatJson").checked);
   wrap.hidden = !jsonOn;
   if (!jsonOn) {
     if (wrap instanceof HTMLDetailsElement) wrap.open = false;
@@ -2878,7 +2910,9 @@ function updateChatSchemaVisibility() {
   }
   const ta = $("chatSchema");
   if (ta && !ta.dataset.hydrated) {
-    ta.value = localStorage.getItem("slipstream.mlxJsonSchema") || "";
+    ta.value = localStorage.getItem("slipstream.chatJsonSchema")
+      || localStorage.getItem("slipstream.mlxJsonSchema")
+      || "";
     ta.dataset.hydrated = "1";
   }
   updateChatSchemaStatus();
@@ -2892,15 +2926,14 @@ function messageAsksForTools(text) {
     || /[0-9]+\s*[\+\-\*\/×÷]\s*[0-9]+/.test(s);
 }
 
-function mlxToolsEnabledForRequest(userText) {
-  if (effectiveBackend() !== "mlx") return false;
+function toolsEnabledForRequest(userText) {
   const checked = !!(
     ($("chatTools") && $("chatTools").checked)
-    || ($("settingsMlxTools") && $("settingsMlxTools").checked)
-    || localStorage.getItem("slipstream.mlxTools") === "1"
+    || ($("settingsChatTools") && $("settingsChatTools").checked)
+    || chatToolsPreference()
   );
   if (checked) return true;
-  // Soft path: if the user clearly asks and tools are available on MLX, attach them.
+  // Soft path: if the user clearly asks, attach the common local demo tools.
   return messageAsksForTools(userText);
 }
 
@@ -2988,7 +3021,7 @@ function fillChatModelSelect(ids) {
     live.hidden = !state.chatModelsLive;
     live.textContent = state.chatModelsLive ? "live" : "";
   }
-  updateChatMlxControls();
+  updateChatCapabilityControls();
 }
 
 async function refreshChatModels() {
@@ -3037,7 +3070,7 @@ async function refreshChatModels() {
   }
 }
 
-function updateChatMlxControls() {
+function updateChatCapabilityControls() {
   const mlx = effectiveBackend() === "mlx";
   const meta = selectedChatModelMeta();
   const vlm = !!(meta.vlm || (mlx && looksLikeVlm(meta.id)));
@@ -3053,18 +3086,15 @@ function updateChatMlxControls() {
     state.chatDoc = null;
     renderChatAttachPreview();
   }
-  ["chatToolsWrap", "chatJsonWrap", "mlxToolsSettingsWrap"].forEach((id) => {
+  ["chatToolsWrap", "chatJsonWrap", "chatToolsSettingsWrap"].forEach((id) => {
     const el = $(id);
-    if (el) el.hidden = !mlx;
+    if (el) el.hidden = false;
   });
-  if (!mlx) {
-    if ($("chatTools")) $("chatTools").checked = false;
-    if ($("chatJson")) $("chatJson").checked = false;
-  } else if (!chat.streaming) {
-    const toolsOn = localStorage.getItem("slipstream.mlxTools") === "1";
-    const jsonOn = localStorage.getItem("slipstream.mlxJson") === "1";
-    if ($("settingsMlxTools") && $("settingsMlxTools").checked !== toolsOn) {
-      $("settingsMlxTools").checked = toolsOn;
+  if (!chat.streaming) {
+    const toolsOn = chatToolsPreference();
+    const jsonOn = chatJsonPreference();
+    if ($("settingsChatTools") && $("settingsChatTools").checked !== toolsOn) {
+      $("settingsChatTools").checked = toolsOn;
     }
     if ($("chatTools") && $("chatTools").checked !== toolsOn) $("chatTools").checked = toolsOn;
     if ($("chatJson") && $("chatJson").checked !== jsonOn) $("chatJson").checked = jsonOn;
@@ -3331,12 +3361,11 @@ async function sendChatViaP2p(text) {
 
 /**
  * Build POST /v1/chat/completions body for Slipstream Chat.
- * Metal: stream + thinking only (tools/schema stay MLX-UI). Agents may still
- * send tools/response_format directly to Metal — see API_PARITY_AI.md.
+ * Common OpenAI contract: both local engines receive tools / response_format.
+ * Multimodal and file content parts remain capability-scoped by their builders.
  * Returns { error } when JSON schema paste is invalid.
  */
 function buildChatRequestBody(messages, opts) {
-  const mlx = effectiveBackend() === "mlx";
   const think = !!($("chatThink") && $("chatThink").checked);
   const body = {
     model: state.chatModel || chatFallbackModelId(),
@@ -3346,9 +3375,8 @@ function buildChatRequestBody(messages, opts) {
     temperature: think ? 0.6 : 0,
     chat_template_kwargs: { enable_thinking: think },
   };
-  if (!mlx) return body;
   const userText = (opts && opts.userText) || "";
-  if (mlxToolsEnabledForRequest(userText)) {
+  if (toolsEnabledForRequest(userText)) {
     body.tools = DEMO_TOOLS;
     body.tool_choice = "auto";
   }
@@ -3364,6 +3392,16 @@ function buildChatRequestBody(messages, opts) {
 async function streamChatCompletion(messages, ui, opts) {
   const body = buildChatRequestBody(messages, opts);
   if (body.error) throw new Error(body.error);
+  const needsContractProfile = !!(body.tools || body.response_format);
+  if (
+    effectiveBackend() === "mlx"
+    && needsContractProfile
+    && state.runningPgrnProfile
+    && state.runningPgrnProfile !== "contract"
+    && state.runningPgrnProfile !== "fast"
+  ) {
+    throw new Error(t("err.mlxContractRestart"));
+  }
   const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -3637,16 +3675,23 @@ function initChat() {
   if ($("chatModelSel")) {
     $("chatModelSel").onchange = (e) => {
       state.chatModel = e.target.value;
-      updateChatMlxControls();
+      updateChatCapabilityControls();
     };
   }
   if ($("chatAttach")) $("chatAttach").onclick = pickChatImage;
   if ($("chatDocAttach")) $("chatDocAttach").onclick = pickChatDoc;
   if ($("chatAttachClear")) $("chatAttachClear").onclick = clearChatAttach;
-  // Settings ↔ Chat toolbar: tools / JSON (oMLX only; Metal never sends these).
-  if ($("chatTools")) $("chatTools").onchange = (e) => syncMlxToolsUi(e.target.checked);
-  if ($("settingsMlxTools")) $("settingsMlxTools").onchange = (e) => syncMlxToolsUi(e.target.checked);
-  if ($("chatJson")) $("chatJson").onchange = (e) => syncMlxJsonUi(e.target.checked);
+  // Settings ↔ Chat toolbar: common OpenAI tools / structured output contract.
+  if ($("chatTools")) $("chatTools").onchange = (e) => syncChatToolsUi(e.target.checked);
+  if ($("settingsChatTools")) $("settingsChatTools").onchange = (e) => syncChatToolsUi(e.target.checked);
+  if ($("chatJson")) $("chatJson").onchange = (e) => syncChatJsonUi(e.target.checked);
+  const schema = $("chatSchema");
+  if (schema) {
+    schema.addEventListener("input", () => {
+      persistChatSchema(schema.value);
+      updateChatSchemaStatus();
+    });
+  }
   const input = $("chatInput");
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
@@ -3655,13 +3700,11 @@ function initChat() {
     input.style.height = "auto";
     input.style.height = Math.min(160, input.scrollHeight) + "px";
   });
-  // Restore prefs before first paint of MLX controls.
-  if (effectiveBackend() === "mlx") {
-    syncMlxToolsUi(localStorage.getItem("slipstream.mlxTools") === "1");
-    syncMlxJsonUi(localStorage.getItem("slipstream.mlxJson") === "1");
-  }
+  // Restore the common contract before its first paint, independent of backend.
+  syncChatToolsUi(chatToolsPreference());
+  syncChatJsonUi(chatJsonPreference());
   refreshChatModels();
-  updateChatMlxControls();
+  updateChatCapabilityControls();
 }
 
 // ---- Slipstream P2P (Cluster tab; localStorage slipstream.p2p) --------------
