@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 RESOURCE = ROOT / "src-tauri" / "resources" / "omlx-pgrn"
 PROFILE = RESOURCE / "omlx" / "pgrn" / "profile.py"
 STORE = RESOURCE / "omlx" / "pgrn" / "store.py"
+BOOTSTRAP = RESOURCE / "bootstrap_mlx_runtime.sh"
+GRAMMAR_REQUIREMENTS = RESOURCE / "requirements-mlx-grammar.txt"
 
 
 class ContractResourcesTest(unittest.TestCase):
@@ -36,6 +38,16 @@ class ContractResourcesTest(unittest.TestCase):
         self.assertIn("active_keys = {(int(layer), int(e)) for e in experts}", source)
         self.assertIn("preserve=active_keys", source)
         self.assertIn("cache is smaller than the active expert bank", source)
+
+    def test_runtime_bootstrap_installs_and_verifies_grammar_support(self) -> None:
+        pins = GRAMMAR_REQUIREMENTS.read_text(encoding="utf-8")
+        self.assertIn("xgrammar==0.2.3", pins)
+        self.assertIn("apache-tvm-ffi==0.1.11", pins)
+        bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+        self.assertIn("requirements-mlx-grammar.txt", bootstrap)
+        self.assertIn("grammar_runtime_ready", bootstrap)
+        self.assertIn("upgrade_required", bootstrap)
+        self.assertIn("pip install --no-deps", bootstrap)
 
 
 if __name__ == "__main__":

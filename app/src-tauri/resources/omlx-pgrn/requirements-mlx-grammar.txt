@@ -1,0 +1,6 @@
+# Structured output for the standalone Slipstream MLX runtime.
+# Install this file with --no-deps: oMLX provides a narrow torch import stub,
+# and pulling the real torch wheel would add roughly 2 GiB to the runtime.
+# Keep these pins aligned with vendor/omlx pyproject.toml and its stub tests.
+xgrammar==0.2.3
+apache-tvm-ffi==0.1.11
