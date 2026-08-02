@@ -34,20 +34,42 @@ class RuntimeManifestTest(unittest.TestCase):
 
     def test_omlx_components_are_apple_silicon_scoped(self) -> None:
         components = self.manifest["components"]
-        for name in ("omlx_launcher", "omlx_fork", "pgrn_host"):
+        required = (
+            "omlx_launcher",
+            "omlx_bootstrap",
+            "omlx_uv",
+            "omlx_runtime_lock",
+            "omlx_fork",
+            "omlx_cli",
+            "omlx_server",
+            "omlx_torch_stub",
+            "omlx_pgrn_profile",
+            "omlx_pgrn_store",
+            "pgrn_host_python",
+            "pgrn_host",
+        )
+        for name in required:
             self.assertEqual(components[name]["platform"], "macos-arm64")
+            self.assertIs(components[name]["required"], True)
         self.assertIs(components["omlx_launcher"]["executable"], True)
+        self.assertIs(components["omlx_bootstrap"]["executable"], True)
+        self.assertIs(components["omlx_uv"]["executable"], True)
+        self.assertEqual(
+            components["omlx_launcher"]["minimum_system_version"], "14.0"
+        )
 
     def test_mlx_sources_are_exactly_pinned(self) -> None:
         packages = self.manifest["mlx_packages"]
         self.assertEqual(packages["mlx"], "0.32.0")
         self.assertEqual(packages["omlx"], "0.5.3")
+        self.assertEqual(packages["uv"], "0.11.10")
         self.assertEqual(
             packages["mlx_lm_revision"],
             "ab1806e8f5d6aa035973af194a1b9198ab4754dc",
         )
         self.assertEqual(packages["xgrammar"], "0.2.3")
         self.assertEqual(packages["apache_tvm_ffi"], "0.1.11")
+        self.assertEqual(packages["minimum_macos"], "14.0")
 
     def test_component_paths_are_relative_and_cannot_escape(self) -> None:
         for component in self.manifest["components"].values():

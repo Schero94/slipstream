@@ -20,11 +20,75 @@
       "kind": "file",
       "required": true,
       "executable": true,
+      "platform": "macos-arm64",
+      "minimum_system_version": "14.0"
+    },
+    "omlx_bootstrap": {
+      "path": "omlx-pgrn/bootstrap_mlx_runtime.sh",
+      "kind": "file",
+      "required": true,
+      "executable": true,
+      "platform": "macos-arm64"
+    },
+    "omlx_uv": {
+      "path": "omlx-pgrn/uv",
+      "kind": "file",
+      "required": true,
+      "executable": true,
+      "platform": "macos-arm64"
+    },
+    "omlx_runtime_lock": {
+      "path": "omlx-pgrn/requirements-mlx-runtime.lock",
+      "kind": "file",
+      "required": true,
+      "executable": false,
       "platform": "macos-arm64"
     },
     "omlx_fork": {
       "path": "omlx-pgrn/omlx",
       "kind": "directory",
+      "required": true,
+      "executable": false,
+      "platform": "macos-arm64"
+    },
+    "omlx_cli": {
+      "path": "omlx-pgrn/omlx/cli.py",
+      "kind": "file",
+      "required": true,
+      "executable": false,
+      "platform": "macos-arm64"
+    },
+    "omlx_server": {
+      "path": "omlx-pgrn/omlx/server.py",
+      "kind": "file",
+      "required": true,
+      "executable": false,
+      "platform": "macos-arm64"
+    },
+    "omlx_torch_stub": {
+      "path": "omlx-pgrn/omlx/_torch_stub.py",
+      "kind": "file",
+      "required": true,
+      "executable": false,
+      "platform": "macos-arm64"
+    },
+    "omlx_pgrn_profile": {
+      "path": "omlx-pgrn/omlx/pgrn/profile.py",
+      "kind": "file",
+      "required": true,
+      "executable": false,
+      "platform": "macos-arm64"
+    },
+    "omlx_pgrn_store": {
+      "path": "omlx-pgrn/omlx/pgrn/store.py",
+      "kind": "file",
+      "required": true,
+      "executable": false,
+      "platform": "macos-arm64"
+    },
+    "pgrn_host_python": {
+      "path": "omlx-pgrn/pgrn_host.py",
+      "kind": "file",
       "required": true,
       "executable": false,
       "platform": "macos-arm64"
@@ -40,8 +104,10 @@
   "mlx_packages": {
     "mlx": "0.32.0",
     "omlx": "0.5.3",
+    "uv": "0.11.10",
     "mlx_lm_revision": "ab1806e8f5d6aa035973af194a1b9198ab4754dc",
     "xgrammar": "0.2.3",
-    "apache_tvm_ffi": "0.1.11"
+    "apache_tvm_ffi": "0.1.11",
+    "minimum_macos": "14.0"
   }
 }

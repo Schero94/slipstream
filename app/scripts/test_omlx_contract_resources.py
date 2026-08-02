@@ -14,6 +14,8 @@ RESOURCE = ROOT / "src-tauri" / "resources" / "omlx-pgrn"
 PROFILE = RESOURCE / "omlx" / "pgrn" / "profile.py"
 STORE = RESOURCE / "omlx" / "pgrn" / "store.py"
 BOOTSTRAP = RESOURCE / "bootstrap_mlx_runtime.sh"
+UV_STAGER = ROOT / "scripts" / "stage_uv_runtime.sh"
+RUNTIME_LOCK = RESOURCE / "requirements-mlx-runtime.lock"
 GRAMMAR_REQUIREMENTS = RESOURCE / "requirements-mlx-grammar.txt"
 
 
@@ -47,7 +49,40 @@ class ContractResourcesTest(unittest.TestCase):
         self.assertIn("requirements-mlx-grammar.txt", bootstrap)
         self.assertIn("grammar_runtime_ready", bootstrap)
         self.assertIn("upgrade_required", bootstrap)
-        self.assertIn("pip install --no-deps", bootstrap)
+        self.assertIn("--no-deps -r", bootstrap)
+
+    def test_runtime_resolution_is_hash_and_commit_locked(self) -> None:
+        lock = RUNTIME_LOCK.read_text(encoding="utf-8")
+        self.assertIn("mlx==0.32.0", lock)
+        self.assertGreaterEqual(lock.count("--hash=sha256:"), 80)
+        for commit in (
+            "ab1806e8f5d6aa035973af194a1b9198ab4754dc",
+            "32981fa4e8064ed664b52071789dd18271fe4206",
+            "78b96eb5462141447b9a6b4943ef553891da56dd",
+            "9ca002898b48e14c9727dec17299f497e8467870",
+        ):
+            self.assertIn(commit, lock)
+
+    def test_bootstrap_promotes_only_a_verified_staging_runtime(self) -> None:
+        bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+        self.assertIn("requirements-mlx-runtime.lock", bootstrap)
+        self.assertIn("venv.next", bootstrap)
+        self.assertIn("READY.next", bootstrap)
+        self.assertIn("venv.previous", bootstrap)
+        self.assertIn("promote_staged_runtime", bootstrap)
+        self.assertIn("verify_runtime", bootstrap)
+        self.assertIn("omlx/_torch_stub.py", bootstrap)
+        self.assertIn("install_torch_stub()", bootstrap)
+        self.assertIn("refusing unsafe MLX runtime root", bootstrap)
+        self.assertNotIn('rm -rf "$VENV_DIR"', bootstrap)
+        self.assertNotIn("curl -LsSf https://astral.sh/uv/install.sh | sh", bootstrap)
+
+    def test_uv_is_staged_as_a_pinned_arm64_release_input(self) -> None:
+        stager = UV_STAGER.read_text(encoding="utf-8")
+        self.assertIn('EXPECTED="uv 0.11.10"', stager)
+        self.assertIn("Mach-O 64-bit executable arm64", stager)
+        self.assertIn('NEXT="${TARGET}.next"', stager)
+        self.assertNotIn("curl", stager)
 
 
 if __name__ == "__main__":

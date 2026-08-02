@@ -8,6 +8,7 @@ app/src-tauri/resources/pgrn-convert
 app/src-tauri/resources/omlx-pgrn/omlx/
 app/src-tauri/resources/omlx-pgrn/libpgrn_host.dylib
 app/src-tauri/resources/omlx-pgrn/*.dylib
+app/src-tauri/resources/omlx-pgrn/uv
 llama.cpp-slipstream/
 build-static/
 # os / editor

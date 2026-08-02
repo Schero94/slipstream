@@ -26,6 +26,9 @@ assert.match(js, /async function ensureNativeStartReady\(/);
 assert.match(js, /async function startServer\(\)[\s\S]*await ensureNativeStartReady\(/);
 assert.match(js, /if \(!storage\.admitted\)/);
 assert.match(js, /if \(!runtime\.ready\)/);
+assert.match(js, /filter\(\(c\) => c\.applicable && c\.required/);
+assert.match(js, /c\.name\.startsWith\("omlx_"\)/);
+assert.match(js, /c\.name\.startsWith\("pgrn_host"\)/);
 assert.doesNotMatch(html, /value=["']ollama["']/i);
 assert.doesNotMatch(js, /backend\.ollama|start_ollama|OLLAMA_MODELS/);
 

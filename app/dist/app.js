@@ -1414,13 +1414,13 @@ function renderNativeRuntimeStatus() {
 
   const llama = runtimeComponent(runtime, "llama_server");
   const convert = runtimeComponent(runtime, "pgrn_convert");
-  const launcher = runtimeComponent(runtime, "omlx_launcher");
-  const fork = runtimeComponent(runtime, "omlx_fork");
-  const host = runtimeComponent(runtime, "pgrn_host");
+  const omlxComponents = ((runtime && runtime.components) || []).filter((c) => c.applicable && c.required
+    && (c.name.startsWith("omlx_") || c.name.startsWith("pgrn_host")));
+  const failedOmlx = omlxComponents.find((c) => !c.ready) || null;
   $("runtimeLlama").textContent = runtimeComponentText(llama);
   $("runtimeConvert").textContent = runtimeComponentText(convert);
-  $("runtimeOmlx").textContent = [launcher, fork, host].every((c) => c && c.ready)
-    ? "✓" : runtimeComponentText(launcher || fork || host);
+  $("runtimeOmlx").textContent = omlxComponents.length > 0 && !failedOmlx
+    ? "✓" : runtimeComponentText(failedOmlx);
   $("runtimeVersion").textContent = runtime
     ? `schema ${runtime.schema} · MLX ${(runtime.mlx_packages || {}).mlx || "–"}` : "–";
   $("runtimeModelDevice").textContent = formatStorageDevice(modelStorage);

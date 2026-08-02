@@ -4,6 +4,8 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path};
+#[cfg(target_os = "macos")]
+use std::process::Command;
 
 const MANIFEST_NAME: &str = "runtime-manifest.json";
 
@@ -23,6 +25,7 @@ struct ComponentSpec {
     required: bool,
     executable: bool,
     platform: Option<String>,
+    minimum_system_version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -41,6 +44,7 @@ pub struct RuntimeReport {
     pub product_engine: String,
     pub ollama: bool,
     pub platform: String,
+    pub system_version: Option<String>,
     pub ready: bool,
     pub components: Vec<ComponentReport>,
     pub mlx_packages: BTreeMap<String, String>,
@@ -50,6 +54,46 @@ pub fn current_platform() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
         .replace("macos-aarch64", "macos-arm64")
         .replace("linux-aarch64", "linux-arm64")
+}
+
+fn numeric_version(version: &str) -> Vec<u64> {
+    version
+        .split('.')
+        .map(|part| {
+            part.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse::<u64>()
+                .unwrap_or(0)
+        })
+        .collect()
+}
+
+fn version_at_least(actual: &str, minimum: &str) -> bool {
+    let mut actual = numeric_version(actual);
+    let mut minimum = numeric_version(minimum);
+    let width = actual.len().max(minimum.len());
+    actual.resize(width, 0);
+    minimum.resize(width, 0);
+    actual >= minimum
+}
+
+#[cfg(target_os = "macos")]
+fn current_system_version() -> Option<String> {
+    let output = Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+    (!version.is_empty()).then_some(version)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_system_version() -> Option<String> {
+    None
 }
 
 fn safe_relative(path: &Path) -> bool {
@@ -75,8 +119,8 @@ fn is_executable(metadata: &fs::Metadata) -> bool {
 pub fn preflight(resource_root: &Path) -> Result<RuntimeReport, String> {
     let raw = fs::read(resource_root.join(MANIFEST_NAME))
         .map_err(|e| format!("runtime manifest read failed: {e}"))?;
-    let manifest: RuntimeManifest = serde_json::from_slice(&raw)
-        .map_err(|e| format!("runtime manifest parse failed: {e}"))?;
+    let manifest: RuntimeManifest =
+        serde_json::from_slice(&raw).map_err(|e| format!("runtime manifest parse failed: {e}"))?;
     if manifest.schema != 1 {
         return Err(format!(
             "unsupported runtime manifest schema {} (expected 1)",
@@ -88,6 +132,7 @@ pub fn preflight(resource_root: &Path) -> Result<RuntimeReport, String> {
     }
 
     let platform = current_platform();
+    let system_version = current_system_version();
     let canonical_root = resource_root
         .canonicalize()
         .map_err(|e| format!("runtime resource root is unavailable: {e}"))?;
@@ -118,7 +163,11 @@ pub fn preflight(resource_root: &Path) -> Result<RuntimeReport, String> {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     format!(
                         "missing {} {}",
-                        if spec.required { "required" } else { "optional" },
+                        if spec.required {
+                            "required"
+                        } else {
+                            "optional"
+                        },
                         spec.kind
                     )
                 }
@@ -142,10 +191,24 @@ pub fn preflight(resource_root: &Path) -> Result<RuntimeReport, String> {
                             Ok(_) if spec.executable && !is_executable(&metadata) => {
                                 "not executable".into()
                             }
-                            Ok(_) => {
-                                component_ready = true;
-                                "ready".into()
-                            }
+                            Ok(_) => match spec.minimum_system_version.as_deref() {
+                                Some(minimum) => match system_version.as_deref() {
+                                    Some(actual) if version_at_least(actual, minimum) => {
+                                        component_ready = true;
+                                        format!("ready (system {actual})")
+                                    }
+                                    Some(actual) => format!(
+                                        "requires system {minimum} or newer (found {actual})"
+                                    ),
+                                    None => format!(
+                                        "cannot determine system version (requires {minimum}+)"
+                                    ),
+                                },
+                                None => {
+                                    component_ready = true;
+                                    "ready".into()
+                                }
+                            },
                         }
                     }
                 }
@@ -170,6 +233,7 @@ pub fn preflight(resource_root: &Path) -> Result<RuntimeReport, String> {
         product_engine: manifest.product_engine,
         ollama: manifest.ollama,
         platform,
+        system_version,
         ready,
         components,
         mlx_packages: manifest.mlx_packages,
@@ -274,7 +338,10 @@ mod tests {
         let report = preflight(root.path()).unwrap();
         assert!(report.ready);
         assert!(!report.components[0].applicable);
-        assert_eq!(report.components[0].detail, "not applicable on this platform");
+        assert_eq!(
+            report.components[0].detail,
+            "not applicable on this platform"
+        );
     }
 
     #[test]
@@ -303,5 +370,14 @@ mod tests {
         fs::write(root.path().join(MANIFEST_NAME), b"{not-json").unwrap();
         let error = preflight(root.path()).unwrap_err();
         assert!(error.contains("runtime manifest"));
+    }
+
+    #[test]
+    fn compares_numeric_system_versions_without_lexical_errors() {
+        assert!(version_at_least("14.0", "14.0"));
+        assert!(version_at_least("15.6.1", "14.0"));
+        assert!(version_at_least("26.0", "14.0"));
+        assert!(!version_at_least("13.7.9", "14.0"));
+        assert!(!version_at_least("9.9", "14.0"));
     }
 }

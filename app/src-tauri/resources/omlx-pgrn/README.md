@@ -13,3 +13,8 @@ After refreshing the staged oMLX fork, restore these two tracked files before
 testing or building. The launcher, bootstrap, lock, dependency manifests, and
 runtime helpers beside this README are also versioned. Never stage private
 machine-specific helper scripts in a release bundle.
+
+The release build must run `app/scripts/stage_uv_runtime.sh`. It accepts only
+the manifest-pinned arm64 `uv` version and atomically stages it as `./uv`;
+the executable is intentionally a generated release input rather than a large
+binary committed to Git.

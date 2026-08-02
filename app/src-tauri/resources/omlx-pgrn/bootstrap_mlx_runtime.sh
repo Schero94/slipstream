@@ -22,9 +22,10 @@ set -euo pipefail
 # oMLX.app shells often export PYTHONHOME; that breaks system/Homebrew python.
 unset PYTHONHOME PYTHONPATH || true
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-REQ="${SLIPSTREAM_MLX_REQUIREMENTS:-$HERE/requirements-mlx-runtime.txt}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REQ_LOCK="${SLIPSTREAM_MLX_REQUIREMENTS:-$HERE/requirements-mlx-runtime.lock}"
 GRAMMAR_REQ="${SLIPSTREAM_MLX_GRAMMAR_REQUIREMENTS:-$HERE/requirements-mlx-grammar.txt}"
+OMLX_FORK_ROOT="${SLIPSTREAM_OMLX_FORK:-$HERE}"
 DEFAULT_ROOT="${HOME}/Library/Application Support/Slipstream/mlx-runtime"
 ROOT="${SLIPSTREAM_MLX_RUNTIME:-$DEFAULT_ROOT}"
 STATUS_JSON="$ROOT/status.json"
@@ -32,6 +33,11 @@ READY="$ROOT/READY"
 LOG="$ROOT/bootstrap.log"
 VENV_DIR="$ROOT/venv"
 VENV_PY="$VENV_DIR/bin/python"
+STAGE_VENV="$ROOT/venv.next"
+STAGE_PY="$STAGE_VENV/bin/python"
+STAGE_READY="$ROOT/READY.next"
+PREVIOUS_VENV="$ROOT/venv.previous"
+PREVIOUS_READY="$ROOT/READY.previous"
 LOCK="$ROOT/bootstrap.lock"
 OMLX_PY="/Applications/oMLX.app/Contents/Resources/Python/cpython-3.11/bin/python3"
 
@@ -71,14 +77,24 @@ write_status() {
 EOF
 }
 
+core_runtime_ready_for() {
+  local py="$1" marker="$2"
+  [[ -f "$marker" && -x "$py" ]] || return 1
+  "$py" -c "import mlx, mlx_lm, fastapi, uvicorn" >/dev/null 2>&1
+}
+
+grammar_runtime_ready_for() {
+  local py="$1"
+  [[ -x "$py" ]] || return 1
+  "$py" -c "import importlib.metadata as m; raise SystemExit(0 if m.version('xgrammar') == '0.2.3' and m.version('apache-tvm-ffi') == '0.1.11' else 1)" >/dev/null 2>&1
+}
+
 core_runtime_ready() {
-  [[ -f "$READY" && -x "$VENV_PY" ]] || return 1
-  "$VENV_PY" -c "import mlx, mlx_lm, fastapi, uvicorn" >/dev/null 2>&1
+  core_runtime_ready_for "$VENV_PY" "$READY"
 }
 
 grammar_runtime_ready() {
-  [[ -x "$VENV_PY" ]] || return 1
-  "$VENV_PY" -c "import importlib.metadata as m; raise SystemExit(0 if m.version('xgrammar') == '0.2.3' and m.version('apache-tvm-ffi') == '0.1.11' else 1)" >/dev/null 2>&1
+  grammar_runtime_ready_for "$VENV_PY"
 }
 
 runtime_ready() {
@@ -177,6 +193,14 @@ PY
 }
 
 find_uv() {
+  if [[ -n "${SLIPSTREAM_UV_BIN:-}" && -x "${SLIPSTREAM_UV_BIN}" ]]; then
+    echo "$SLIPSTREAM_UV_BIN"
+    return 0
+  fi
+  if [[ -x "$HERE/uv" ]]; then
+    echo "$HERE/uv"
+    return 0
+  fi
   if command -v uv >/dev/null 2>&1; then
     command -v uv
     return 0
@@ -190,113 +214,181 @@ find_uv() {
   return 1
 }
 
-find_python311() {
-  local c p
-  for c in python3.11 /opt/homebrew/bin/python3.11 /usr/local/bin/python3.11; do
-    p=""
-    if command -v "$c" >/dev/null 2>&1; then
-      p="$(command -v "$c")"
-    elif [[ -x "$c" ]]; then
-      p="$c"
-    else
-      continue
-    fi
-    if "$p" -c 'import sys; raise SystemExit(0 if sys.version_info[:2]==(3,11) else 1)' 2>/dev/null; then
-      echo "$p"
-      return 0
-    fi
-  done
-  return 1
+assert_managed_runtime_path() {
+  case "$ROOT" in
+    ""|"/"|"."|"$HOME"|"$HOME/"|"/Users"|"/Volumes"|"/tmp"|"/private"|"/private/tmp")
+      echo "refusing unsafe MLX runtime root: $ROOT" >&2
+      return 1
+      ;;
+  esac
+  [[ "$ROOT" == /* ]] || {
+    echo "MLX runtime root must be absolute: $ROOT" >&2
+    return 1
+  }
+  case "$1" in
+    "$STAGE_VENV"|"$PREVIOUS_VENV") return 0 ;;
+    *) echo "refusing unmanaged runtime path: $1" >&2; return 1 ;;
+  esac
 }
 
-ensure_uv() {
+clear_managed_runtime_dir() {
+  local target="$1"
+  assert_managed_runtime_path "$target"
+  [[ ! -e "$target" ]] || rm -rf -- "$target"
+}
+
+clear_staging() {
+  clear_managed_runtime_dir "$STAGE_VENV"
+  rm -f -- "$STAGE_READY"
+}
+
+create_staged_venv() {
   local uv_bin
-  if uv_bin="$(find_uv)"; then
-    echo "$uv_bin"
-    return 0
-  fi
-  write_status "installing" "Downloading uv package manager…" 5
-  curl -LsSf https://astral.sh/uv/install.sh | sh >>"$LOG" 2>&1
-  find_uv
-}
-
-create_venv() {
-  local uv_bin py
   mkdir -p "$ROOT"
-  rm -rf "$VENV_DIR"
-  if uv_bin="$(find_uv)"; then
-    :
-  else
-    uv_bin="$(ensure_uv)" || uv_bin=""
-  fi
-  if [[ -n "$uv_bin" ]]; then
-    write_status "installing" "Creating Python 3.11 venv via uv…" 10
-    "$uv_bin" python install 3.11 >>"$LOG" 2>&1 || true
-    "$uv_bin" venv --python 3.11 "$VENV_DIR" >>"$LOG" 2>&1
-    return 0
-  fi
-  if py="$(find_python311)"; then
-    write_status "installing" "Creating Python 3.11 venv…" 10
-    "$py" -m venv "$VENV_DIR" >>"$LOG" 2>&1
-    return 0
-  fi
-  echo "Need Python 3.11 or uv. Install: brew install python@3.11   or   brew install uv" >&2
-  write_status "failed" "Need Python 3.11 or uv (brew install python@3.11 / uv)." 0
-  return 1
-}
-
-pip_install() {
-  local uv_bin
-  if [[ ! -f "$REQ" ]]; then
-    write_status "failed" "requirements file missing: $REQ" 0
-    echo "missing requirements: $REQ" >&2
+  clear_staging
+  if ! uv_bin="$(find_uv)"; then
+    echo "Verified uv binary missing. Slipstream releases bundle uv; development override: SLIPSTREAM_UV_BIN=/path/to/uv" >&2
+    write_status "failed" "Verified uv binary missing; reinstall Slipstream or set SLIPSTREAM_UV_BIN." 0
     return 1
   fi
-  write_status "installing" "Downloading MLX wheels + deps (one-time, may take several minutes)…" 25
-  if uv_bin="$(find_uv)"; then
-    "$uv_bin" pip install --python "$VENV_PY" -r "$REQ" >>"$LOG" 2>&1
-  else
-    "$VENV_PY" -m pip install --upgrade pip >>"$LOG" 2>&1
-    "$VENV_PY" -m pip install -r "$REQ" >>"$LOG" 2>&1
+  write_status "installing" "Creating isolated Python 3.11 staging runtime…" 10
+  "$uv_bin" python install 3.11 >>"$LOG" 2>&1 || true
+  "$uv_bin" venv --python 3.11 "$STAGE_VENV" >>"$LOG" 2>&1
+  if [[ ! -x "$STAGE_PY" ]]; then
+    write_status "failed" "Staging Python creation failed — see $LOG" 0
+    return 1
   fi
-  pip_install_grammar
-  write_status "installing" "Verifying imports…" 90
 }
 
-pip_install_grammar() {
+install_locked_runtime() {
   local uv_bin
+  if [[ ! -f "$REQ_LOCK" ]]; then
+    write_status "failed" "runtime lock missing: $REQ_LOCK" 0
+    echo "missing runtime lock: $REQ_LOCK" >&2
+    return 1
+  fi
+  if ! uv_bin="$(find_uv)"; then
+    write_status "failed" "Verified uv binary missing." 0
+    return 1
+  fi
+  write_status "installing" "Installing SHA/commit-locked MLX runtime…" 25
+  "$uv_bin" pip install --python "$STAGE_PY" -r "$REQ_LOCK" >>"$LOG" 2>&1
+  install_grammar "$STAGE_PY"
+  write_status "installing" "Verifying staged runtime…" 90
+}
+
+install_grammar() {
+  local target_py="$1" uv_bin
   if [[ ! -f "$GRAMMAR_REQ" ]]; then
     write_status "failed" "grammar requirements file missing: $GRAMMAR_REQ" 0
     echo "missing grammar requirements: $GRAMMAR_REQ" >&2
     return 1
   fi
-  write_status "installing" "Installing lightweight structured-output support…" 85
-  if uv_bin="$(find_uv)"; then
-    "$uv_bin" pip install --python "$VENV_PY" --no-deps -r "$GRAMMAR_REQ" >>"$LOG" 2>&1
-  else
-    "$VENV_PY" -m pip install --no-deps -r "$GRAMMAR_REQ" >>"$LOG" 2>&1
+  if ! uv_bin="$(find_uv)"; then
+    write_status "failed" "Verified uv binary missing." 0
+    return 1
+  fi
+  write_status "installing" "Installing pinned structured-output support…" 85
+  "$uv_bin" pip install --python "$target_py" --no-deps -r "$GRAMMAR_REQ" >>"$LOG" 2>&1
+}
+
+verify_runtime() {
+  local py="$1"
+  if [[ ! -f "$OMLX_FORK_ROOT/omlx/_torch_stub.py" ]]; then
+    echo "oMLX torch stub missing: $OMLX_FORK_ROOT/omlx/_torch_stub.py" >&2
+    return 1
+  fi
+  PYTHONPATH="$OMLX_FORK_ROOT" "$py" - <<'PY'
+import importlib.metadata as metadata
+import sys
+
+if sys.version_info[:2] != (3, 11):
+    raise SystemExit(f"expected Python 3.11, got {sys.version.split()[0]}")
+from omlx._torch_stub import install as install_torch_stub
+install_torch_stub()
+for module in ("mlx", "mlx_lm", "fastapi", "uvicorn", "numpy", "xgrammar"):
+    __import__(module)
+expected = {
+    "mlx": "0.32.0",
+    "xgrammar": "0.2.3",
+    "apache-tvm-ffi": "0.1.11",
+}
+actual = {name: metadata.version(name) for name in expected}
+if actual != expected:
+    raise SystemExit(f"runtime version mismatch: expected={expected!r} actual={actual!r}")
+PY
+}
+
+write_stage_marker() {
+  local mlx_ver python_ver
+  mlx_ver="$("$STAGE_PY" -c "import importlib.metadata as m; print(m.version('mlx'))")"
+  python_ver="$("$STAGE_PY" -c 'import sys; print(sys.version.split()[0])')"
+  {
+    echo "mlx=$mlx_ver"
+    echo "xgrammar=0.2.3"
+    echo "python=$python_ver"
+    echo "ready_unix=$(date +%s)"
+  } >"$STAGE_READY"
+}
+
+restore_previous_runtime() {
+  [[ ! -e "$VENV_DIR" && -e "$PREVIOUS_VENV" ]] && mv "$PREVIOUS_VENV" "$VENV_DIR"
+  [[ ! -e "$READY" && -e "$PREVIOUS_READY" ]] && mv "$PREVIOUS_READY" "$READY"
+}
+
+promote_staged_runtime() {
+  [[ -x "$STAGE_PY" && -f "$STAGE_READY" ]] || {
+    echo "staged runtime is incomplete; refusing promotion" >&2
+    return 1
+  }
+  clear_managed_runtime_dir "$PREVIOUS_VENV"
+  rm -f -- "$PREVIOUS_READY"
+  [[ ! -e "$VENV_DIR" ]] || mv "$VENV_DIR" "$PREVIOUS_VENV"
+  [[ ! -e "$READY" ]] || mv "$READY" "$PREVIOUS_READY"
+  if ! mv "$STAGE_VENV" "$VENV_DIR"; then
+    restore_previous_runtime
+    return 1
+  fi
+  if ! mv "$STAGE_READY" "$READY"; then
+    mv "$VENV_DIR" "$STAGE_VENV"
+    restore_previous_runtime
+    return 1
+  fi
+  if ! runtime_ready; then
+    mv "$VENV_DIR" "$STAGE_VENV"
+    mv "$READY" "$STAGE_READY"
+    restore_previous_runtime
+    echo "promoted runtime failed active verification; restored previous runtime" >&2
+    return 1
   fi
 }
 
-verify_and_mark() {
-  if ! "$VENV_PY" -c "import mlx, mlx_lm, fastapi, uvicorn, numpy"; then
-    write_status "failed" "Import verification failed — see $LOG" 0
+verify_stage_and_promote() {
+  if ! verify_runtime "$STAGE_PY"; then
+    write_status "failed" "Staged runtime verification failed — active runtime unchanged; see $LOG" 0
     return 1
   fi
-  if ! grammar_runtime_ready; then
-    write_status "failed" "Structured-output dependency verification failed — see $LOG" 0
+  write_stage_marker
+  if ! promote_staged_runtime; then
+    write_status "failed" "Atomic runtime activation failed; previous runtime restored." 0
     return 1
   fi
   local mlx_ver
   mlx_ver="$("$VENV_PY" -c "import importlib.metadata as m; print(m.version('mlx'))")"
-  {
-    echo "mlx=$mlx_ver"
-    echo "xgrammar=0.2.3"
-    echo "python=$("$VENV_PY" -c 'import sys; print(sys.version.split()[0])')"
-    echo "ready_unix=$(date +%s)"
-  } >"$READY"
   write_status "ready" "Slipstream mlx-runtime ready (mlx $mlx_ver)." 100
   echo "ready: mlx $mlx_ver → $ROOT"
+}
+
+cleanup_install() {
+  rm -f -- "$LOCK"
+  if [[ -e "$STAGE_VENV" || -e "$STAGE_READY" ]]; then
+    clear_staging
+  fi
+}
+
+fail_without_touching_active() {
+  write_status "failed" "Runtime installation failed; previous runtime remains active — see $LOG" 0
+  return 1
 }
 
 do_install() {
@@ -317,20 +409,17 @@ do_install() {
     emit_json
     return 0
   fi
-  trap 'rm -f "$LOCK"' EXIT
+  trap cleanup_install EXIT
   echo "$$ $(date +%s)" >"$LOCK"
-  if core_runtime_ready && ! grammar_runtime_ready; then
-    : >"$LOG"
-    write_status "installing" "Upgrading MLX runtime for structured output…" 80
-    pip_install_grammar
-    verify_and_mark
-    return 0
-  fi
   write_status "installing" "Starting MLX runtime bootstrap…" 1
-  create_venv
-  pip_install
-  verify_and_mark
+  create_staged_venv || fail_without_touching_active
+  install_locked_runtime || fail_without_touching_active
+  verify_stage_and_promote || fail_without_touching_active
 }
+
+if [[ "${SLIPSTREAM_BOOTSTRAP_SOURCE_ONLY:-0}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 cmd="${1:-install}"
 case "$cmd" in
