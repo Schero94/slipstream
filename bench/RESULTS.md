@@ -3264,3 +3264,18 @@ launch/quit/ports-free smoke. `spctl` still rejects it, as expected: ad-hoc
 signing provides bundle integrity but does not impersonate Developer ID or
 notarization. The test suite is now 40/40 Python contracts; no runtime or model
 content changed.
+
+## Slipstream 0.3.3 release qualification — 2026-08-02
+
+The complete ad-hoc app seal was packaged as v0.3.3. The mounted DMG passes CRC,
+reports 0.3.3 and passes `codesign --verify --deep --strict`; the ZIP passes full
+integrity. The bundle has 477 resource files, all 16 required runtime-manifest
+components, zero Python bytecode caches and zero Ollama payloads. All four
+runtime executables inspected in the app are arm64.
+
+Regression gates remain 183/183 workspace, 96/96 Tauri, 40/40 Python, all six
+Node UI contracts and the atomic oMLX bootstrap. The installed app was upgraded
+from 0.3.2 to 0.3.3, its deep signature verifies, its real launch/quit passes,
+and ports 8080/8081 remain free. The Pages source passes Chromium at 1440×1000
+and 390×844 with zero overflow and no console errors. Artifact hashes and the
+explicit non-notarized boundary are recorded in `docs/RELEASE_0.3.3.md`.
