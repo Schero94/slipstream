@@ -28,8 +28,8 @@ export_engine_tree() {
     local out="$1"
     say "export the engine working tree"
     ( cd "$ENGINE_DIR" \
-      && COPYFILE_DISABLE=1 git ls-files -z --cached --others --exclude-standard \
-         | tar cf "$out" --no-mac-metadata -C . --null -T - )
+      && git ls-files -z --cached --others --exclude-standard \
+         | COPYFILE_DISABLE=1 tar cf "$out" --no-mac-metadata --no-xattrs -C . --null -T - )
     local dirty
     dirty=$(git -C "$ENGINE_DIR" status --porcelain | wc -l | tr -d ' ')
     echo "engine at $(git -C "$ENGINE_DIR" rev-parse --short HEAD)" \

@@ -3102,3 +3102,18 @@ with unchanged swap, but failed the product contract deterministically: it
 returned `42.` instead of exact `42` and answered the forced tool request in
 prose. That is a model/template capability boundary; Granite must not be shown
 as fully tool-compatible merely because the engine is.
+
+### Linux headless requalification — PASS
+
+The exact clean engine commit above was exported into the Debian Trixie gate and
+built without Metal or curl. `libllama` linked with 14 PGRN objects; all portable
+PGRN test targets built and **12/12 tests passed**. This re-proves the Linux/CPU
+headless compile and invariant layer after the OpenAI tool-choice server change.
+It does not add a Linux throughput or CUDA claim.
+
+The first run also exposed that `COPYFILE_DISABLE=1` was scoped to the `git`
+side of a pipeline instead of the archive writer. The engine tar therefore
+carried macOS provenance xattrs and emitted thousands of harmless warnings in
+Linux. The exporter now applies the setting directly to `tar` and disables
+xattrs explicitly. A second complete gate passed with a clean log and a smaller
+archive (156 MiB instead of 160 MiB).
