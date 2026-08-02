@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.slipstream.node</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/slipstream-node</string>
+    <string>serve</string>
+    <string>--listen</string>
+    <string>127.0.0.1:9002</string>
+    <string>--mode</string>
+    <string>local</string>
+    <string>--key</string>
+    <string>node.key</string>
+    <string>--ledger</string>
+    <string>ledger.db</string>
+    <string>--models</string>
+    <string>slipstream</string>
+    <string>--engine</string>
+    <string>auto</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/REPLACE_ME/Library/Application Support/Slipstream/node</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/slipstream-node.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/slipstream-node.err.log</string>
+</dict>
+</plist>

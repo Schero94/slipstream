@@ -14,6 +14,10 @@ path = "src/lib.rs"
 name = "p2p-node"
 path = "src/main.rs"
 
+[[bin]]
+name = "slipstream-node"
+path = "src/bin/slipstream-node.rs"
+
 [features]
 default = []
 # Real oMLX / llama-server process spawn via p2p-engine. Off by default —

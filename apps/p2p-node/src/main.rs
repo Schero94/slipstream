@@ -1,13 +1,13 @@
-//! `p2p-node` — thin Slipstream P2P CLI (standalone; does not touch Tauri release paths).
-//!
-//! Commands: `keygen`, `serve`/`start`, `peers`, `send-job`/`job`, `credits`.
-//!
-//! Engine selection (default **mock**):
-//! - `--engine mock|auto|mlx|llama` or env `SLIPSTREAM_P2P_ENGINE`
-//! - `--dry-run-engine` prints the exact argv that would be launched (no spawn)
-//! - `--spawn-engine` starts that process (requires `--features launch`);
-//!   **DANGER** — refuses if the oMLX/PGRN lock is live or `:8080` (configured
-//!   endpoint) already serves; dual heavy serve can freeze the Mac
+// `p2p-node` — thin Slipstream P2P CLI (standalone; does not touch Tauri release paths).
+//
+// Commands: `keygen`, `serve`/`start`, `peers`, `send-job`/`job`, `credits`.
+//
+// Engine selection (default **mock**):
+// - `--engine mock|auto|mlx|llama` or env `SLIPSTREAM_P2P_ENGINE`
+// - `--dry-run-engine` prints the exact argv that would be launched (no spawn)
+// - `--spawn-engine` starts that process (requires `--features launch`);
+//   **DANGER** — refuses if the oMLX/PGRN lock is live or `:8080` (configured
+//   endpoint) already serves; dual heavy serve can freeze the Mac
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

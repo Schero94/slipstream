@@ -1,0 +1,33 @@
+[Unit]
+Description=Slipstream private LLM inference node
+Documentation=https://schero94.github.io/slipstream/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=slipstream
+Group=slipstream
+StateDirectory=slipstream
+WorkingDirectory=/var/lib/slipstream
+ExecStart=/usr/local/bin/slipstream-node serve --listen 0.0.0.0:9002 --mode private --key /var/lib/slipstream/node.key --ledger /var/lib/slipstream/ledger.db --models slipstream --engine auto
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/slipstream
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

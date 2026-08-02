@@ -1,0 +1,18 @@
+FROM rust:1.88-bookworm AS builder
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY apps ./apps
+COPY crates ./crates
+RUN cargo build --locked --release --bin slipstream-node
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --create-home --home-dir /var/lib/slipstream slipstream
+COPY --from=builder /src/target/release/slipstream-node /usr/local/bin/slipstream-node
+USER slipstream
+WORKDIR /var/lib/slipstream
+EXPOSE 9002/tcp
+ENTRYPOINT ["/usr/local/bin/slipstream-node"]
+CMD ["serve", "--listen", "0.0.0.0:9002", "--mode", "private", "--key", "node.key", "--ledger", "ledger.db", "--models", "slipstream", "--engine", "auto"]
