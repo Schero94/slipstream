@@ -3065,3 +3065,40 @@ The real restart on the same nearly full internal SSD changed the initialized
 PGRN then loaded the same internal model and returned exact `42` at **5.56
 tok/s**; swap stayed at **1348.25 MiB**. Stop again released process, port, and
 lock. Evidence: `bench/results/omlx-ssd-cache-guard-20260802.json`.
+
+## Native llama.cpp/PGRN OpenAI contract — 2026-08-02
+
+The same OpenAI/SSE harness exposed an engine compatibility defect before it
+measured performance: llama.cpp accepted `tool_choice` only as a string and
+rejected OpenAI's specific-function object. The release seam now validates that
+object, selects the named schema, and maps it to the existing required-tool
+grammar. Malformed objects, missing tools, and unknown function names are
+refused. A server unit test covers normal and streamed responses, and a release
+contract test prevents the source patch from silently dropping the fix.
+
+The result below comes from a clean static arm64 build of exact commit
+`0c716f30be270d1fb1077a1a0795684e6faeecf8`, not from the working vendor tree.
+The binary SHA-256 is `0e765b50…e80`; a fresh reconstruction from the pinned
+upstream base plus `patches/slipstream-seams.patch` also applied cleanly.
+
+| Contract | Result | TTFT | Decode | Stream/detail |
+|---|---:|---:|---:|---|
+| exact plain `42` | 2/2 PASS | 2.73 s median | 5.84 tok/s mean | deterministic |
+| strict JSON schema | 2/2 PASS | 0.99 s median | 4.90 tok/s mean | max gap 0.328 s; deterministic |
+| forced `add(19,23)` | 2/2 PASS | 10.63 s median | 6.18 tok/s mean | `tool_calls`; max gap 2.545 s; deterministic |
+
+The model was `Qwen3.6-35B-A3B-UD-Q4_K_XL` on the external SSD, with its PGRN
+expert stream active and a 10 GiB cache. All six requests completed through
+SSE `[DONE]`; server RSS was 13.78 → 14.52 GiB, free+inactive RAM 8.10 → 8.08
+GiB, and swap stayed exactly **1332.25 MiB**. Controlled shutdown released the
+port. Evidence: `bench/results/native-runtime-llamacpp-20260802.json`; the full
+raw harness artifact hashes to `4bbadc20…5a27`.
+
+This is deliberately **not** labelled an internal-SSD large-model result. Only
+about 10 GiB was free on the internal volume, so copying a roughly 22 GiB GGUF
+there would have violated the storage reserve. A small internal-SSD Granite MoE
+probe proved endpoint, streaming, PGRN loading, and strict JSON at 54.16 tok/s,
+with unchanged swap, but failed the product contract deterministically: it
+returned `42.` instead of exact `42` and answered the forced tool request in
+prose. That is a model/template capability boundary; Granite must not be shown
+as fully tool-compatible merely because the engine is.

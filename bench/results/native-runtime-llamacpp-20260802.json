@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "date": "2026-08-02",
+  "engine": "llama.cpp-pgrn",
+  "source_commit": "0c716f30be270d1fb1077a1a0795684e6faeecf8",
+  "clean_binary_sha256": "0e765b507b573e69e5cf2728232591f21178f43985467c4b95659ebcdffc7e80",
+  "model": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+  "model_storage": "external-ssd",
+  "model_api_id": "slipstream",
+  "repetitions": 2,
+  "passed": true,
+  "raw_artifact_sha256": "4bbadc20d927eb3b6c06206cec37fbd4a545229e99f89e5266ff2a1957ad5a27",
+  "resources": {
+    "server_rss_bytes_before": 14796980224,
+    "server_rss_bytes_after": 15588622336,
+    "free_inactive_bytes_before": 8702033920,
+    "free_inactive_bytes_after": 8678735872,
+    "swap_used_mib_before": 1332.25,
+    "swap_used_mib_after": 1332.25
+  },
+  "cases": {
+    "plain": {
+      "passed": true,
+      "deterministic": true,
+      "ttft_seconds": [5.073336, 0.384682],
+      "decode_tokens_per_second": [5.137951, 6.544653],
+      "max_chunk_gap_seconds": 0.30557,
+      "output_sha256": "8334c554c7276f59674810b92fff5197cd46bf6ccbe872742f9b04ca31dfe3d1"
+    },
+    "strict_json": {
+      "passed": true,
+      "deterministic": true,
+      "ttft_seconds": [1.585377, 0.389766],
+      "decode_tokens_per_second": [4.738356, 5.066167],
+      "max_chunk_gap_seconds": 0.327944,
+      "output_sha256": "528f0265ddfe2afb8e9e3f0c336eb6ef0527fc9ff28b73e3d83620cc1be9053c"
+    },
+    "forced_tool": {
+      "passed": true,
+      "deterministic": true,
+      "tool": "add",
+      "arguments": {"a": 19, "b": 23},
+      "finish_reason": "tool_calls",
+      "ttft_seconds": [19.932612, 1.335237],
+      "decode_tokens_per_second": [5.235474, 7.12048],
+      "max_chunk_gap_seconds": 2.544412,
+      "output_sha256": "a58ee95fcbdf0ad05b00cfaea24efb1a15f4c1c223d23a9e364d701d01545ff0"
+    }
+  },
+  "internal_ssd_compatibility_probe": {
+    "model": "granite-3.0-1b-a400m-instruct-Q4_K_M.gguf",
+    "raw_artifact_sha256": "c0b28520f2a81faaf8eff8684efa98c73ef55b56fc599372c4a66cd3d414ba43",
+    "endpoint_and_sse_passed": true,
+    "strict_json_passed": true,
+    "plain_exact_contract_passed": false,
+    "forced_tool_contract_passed": false,
+    "reason": "The model/template deterministically emitted '42.' and answered the tool request in prose; this is a model capability limitation, not an engine crash."
+  }
+}

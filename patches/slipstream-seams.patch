@@ -4403,3 +4403,86 @@ index 20effbb14..5fbfb1104 100644
      llama_backend_init();
      llama_numa_init(params.numa);
  
+diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
+index 78b5c6819..2e0689f49 100644
+--- a/tools/server/server-common.cpp
++++ b/tools/server/server-common.cpp
+@@ -912,7 +912,43 @@ json oaicompat_chat_params_parse(
+     auto tools = json_value(body, "tools", json());
+     auto has_tools = tools.is_array() && !tools.empty();
+     auto stream = json_value(body, "stream", false);
+-    auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
++    auto tool_choice = std::string("auto");
++    if (body.contains("tool_choice")) {
++        const auto & requested_choice = body.at("tool_choice");
++        if (requested_choice.is_string()) {
++            tool_choice = requested_choice.get<std::string>();
++        } else if (requested_choice.is_object()) {
++            const auto type = json_value(requested_choice, "type", std::string());
++            const auto function = json_value(requested_choice, "function", json::object());
++            const auto name = json_value(function, "name", std::string());
++            if (type != "function" || name.empty()) {
++                throw std::invalid_argument(
++                    "tool_choice object must select a non-empty function name");
++            }
++            if (!has_tools) {
++                throw std::invalid_argument("tool_choice function requires tools");
++            }
++
++            json selected = json::array();
++            for (const auto & tool : tools) {
++                const auto tool_function = json_value(tool, "function", json::object());
++                if (json_value(tool_function, "name", std::string()) == name) {
++                    selected.push_back(tool);
++                }
++            }
++            if (selected.empty()) {
++                throw std::invalid_argument(
++                    "tool_choice function '" + name + "' is not present in tools");
++            }
++            // The common grammar understands required/auto/none. Filtering to
++            // the selected schema plus required is equivalent to OpenAI's
++            // specific-function choice and prevents any other call.
++            tools = std::move(selected);
++            tool_choice = "required";
++        } else {
++            throw std::invalid_argument("tool_choice must be a string or function object");
++        }
++    }
+-
++
+     if (!opt.use_jinja) {
+         if (has_tools) {
+diff --git a/tools/server/tests/unit/test_tool_call.py b/tools/server/tests/unit/test_tool_call.py
+index 9fa84d165..af67a51a5 100755
+--- a/tools/server/tests/unit/test_tool_call.py
++++ b/tools/server/tests/unit/test_tool_call.py
+@@ -98,6 +98,27 @@ WEATHER_TOOL = ToolDefinition(
+     ),
+ )
+-
++
++
++@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
++def test_specific_openai_tool_choice_object(stream: CompletionMode):
++    global server
++    server.jinja = True
++    server.chat_template_file = "../../../models/templates/Qwen3-Coder.jinja"
++    server.start()
++    body = server.make_any_request("POST", "/v1/chat/completions", data={
++        "max_tokens": 128,
++        "messages": [{"role": "user", "content": "Run the selected tool."}],
++        "tools": [TEST_TOOL, WEATHER_TOOL],
++        "tool_choice": {"type": "function", "function": {"name": "test"}},
++        "parallel_tool_calls": False,
++        "stream": stream == CompletionMode.STREAMED,
++        "temperature": 0.0,
++    })
++    choice = body["choices"][0]
++    tool_calls = choice["message"].get("tool_calls")
++    assert tool_calls and len(tool_calls) == 1, choice["message"]
++    assert tool_calls[0]["function"]["name"] == "test"
++
+ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict, argument_key: str | None, n_predict, **kwargs):
+     body = server.make_any_request("POST", "/v1/chat/completions", data={
+         "max_tokens": n_predict,
