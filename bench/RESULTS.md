@@ -3279,3 +3279,31 @@ from 0.3.2 to 0.3.3, its deep signature verifies, its real launch/quit passes,
 and ports 8080/8081 remain free. The Pages source passes Chromium at 1440×1000
 and 390×844 with zero overflow and no console errors. Artifact hashes and the
 explicit non-notarized boundary are recorded in `docs/RELEASE_0.3.3.md`.
+
+## 0.3.4 release verification — 2026-08-03
+
+Click-level accessibility fixes shipped (see `docs/RELEASE_0.3.4.md`). Two results
+worth keeping:
+
+**A required runtime component was missing from a signed, verified bundle.** The
+first 0.3.4 candidate built and passed `codesign --verify --deep --strict`, yet
+shipped without `omlx-pgrn/uv`, which `runtime-manifest.json` declares
+`required: true`. `test_runtime_manifest.py` checks the manifest's shape, not whether
+the declared files exist, so nothing failed. The only signal was the `.dmg` being
+67,325,951 → 45 MB, i.e. 22 MB under 0.3.3. Without uv the MLX runtime bootstrap
+cannot install anything on a user's machine.
+
+`app/scripts/test_staged_resources_complete.py` closes it: required components must
+exist, declared-executable components must be `+x`, and staged uv must match the
+version `stage_uv_runtime.sh` pins. Verified red-then-green.
+
+**Artifacts, rebuilt complete:**
+
+| Artifact | Bytes | 0.3.3 for comparison |
+|---|---:|---:|
+| `Slipstream_0.3.4_aarch64.dmg` | 67,325,951 | 67,320,475 |
+| `Slipstream_0.3.4_aarch64.zip` | 65,780,310 | 65,758,148 |
+| `slipstream-node_0.3.4_macos_aarch64.tar.gz` | 4,340,819 | 4,341,131 |
+
+Gates: 9/9 `app/scripts/test_*.py` and 7/7 `app/scripts/test_*.mjs`; the deploy
+headless-asset checks pass; browser click walk 0 failures against `app/dist`.

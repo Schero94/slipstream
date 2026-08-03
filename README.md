@@ -12,9 +12,17 @@ Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that 
 
 It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
-**New in v0.3.3:** the macOS app now has a complete ad-hoc bundle seal. This
-adds verifiable resource integrity while keeping the honest boundary: it is not
-an Apple Developer ID signature and is not notarized.
+**New in v0.3.4:** the app shell is properly clickable and properly announced.
+The four first-run path fields had labels that were never associated with them,
+so they had no accessible name and clicking the visible label text did not focus
+the field. The tab strip had no tablist semantics, so eight tabs read as plain
+buttons with no current item. Every toast — including the first-run "choose a
+model folder" error — was silent for screen readers. All fixed. This is a
+usability and accessibility release; no engine or performance behaviour changed.
+
+Since v0.3.3, the macOS app carries a complete ad-hoc bundle seal. This adds
+verifiable resource integrity while keeping the honest boundary: it is not an
+Apple Developer ID signature and is not notarized.
 
 Since v0.3.2, llama.cpp/PGRN bounds its prompt cache to 512 MiB and,
 when Tools are enabled, warms Slipstream's fixed tool schema after startup. On
