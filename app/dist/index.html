@@ -55,21 +55,21 @@
   </div>
 
   <div class="shell">
-    <nav class="sidenav">
-      <button class="tab tab-active" data-tab="chat"><span class="nav-ico">◆</span><span data-i18n="nav.chat">Chat</span></button>
-      <button class="tab" data-tab="models"><span class="nav-ico">◇</span><span data-i18n="nav.models">Modelle</span></button>
-      <button class="tab" data-tab="downloads"><span class="nav-ico">↓</span><span data-i18n="nav.downloads">Downloads</span></button>
-      <button class="tab" data-tab="benchmarks"><span class="nav-ico">▲</span><span data-i18n="nav.benchmarks">Benchmarks</span></button>
+    <nav class="sidenav" role="tablist" data-i18n-aria="nav.regions" aria-label="Hauptbereiche">
+      <button class="tab tab-active" data-tab="chat" role="tab" aria-selected="true"><span class="nav-ico">◆</span><span data-i18n="nav.chat">Chat</span></button>
+      <button class="tab" data-tab="models" role="tab" aria-selected="false"><span class="nav-ico">◇</span><span data-i18n="nav.models">Modelle</span></button>
+      <button class="tab" data-tab="downloads" role="tab" aria-selected="false"><span class="nav-ico">↓</span><span data-i18n="nav.downloads">Downloads</span></button>
+      <button class="tab" data-tab="benchmarks" role="tab" aria-selected="false"><span class="nav-ico">▲</span><span data-i18n="nav.benchmarks">Benchmarks</span></button>
       <div class="nav-sep"></div>
       <!-- Serving, streaming, memory and system used to be four entries showing
            overlapping numbers from two measurement chains. One entry now, four
            sections inside it, one source per figure. -->
-      <button class="tab" data-tab="status"><span class="nav-ico">◉</span><span data-i18n="nav.live">Live</span></button>
+      <button class="tab" data-tab="status" role="tab" aria-selected="false"><span class="nav-ico">◉</span><span data-i18n="nav.live">Live</span></button>
       <div class="nav-sep"></div>
-      <button class="tab" data-tab="logs"><span class="nav-ico">≡</span><span data-i18n="nav.logs">Logs</span></button>
-      <button class="tab" data-tab="settings"><span class="nav-ico">⚙</span><span data-i18n="nav.settings">Settings</span></button>
+      <button class="tab" data-tab="logs" role="tab" aria-selected="false"><span class="nav-ico">≡</span><span data-i18n="nav.logs">Logs</span></button>
+      <button class="tab" data-tab="settings" role="tab" aria-selected="false"><span class="nav-ico">⚙</span><span data-i18n="nav.settings">Settings</span></button>
       <!-- Soft-hidden from primary journey; still reachable (PRODUCT_CLICK_JOURNEY). -->
-      <button class="tab nav-soft" data-tab="cluster" id="navCluster" data-i18n-tip="tip.cluster"><span class="nav-ico">⌗</span><span data-i18n="nav.cluster">Cluster</span></button>
+      <button class="tab nav-soft" data-tab="cluster" id="navCluster" data-i18n-tip="tip.cluster" role="tab" aria-selected="false"><span class="nav-ico">⌗</span><span data-i18n="nav.cluster">Cluster</span></button>
     </nav>
 
     <div class="content">
@@ -168,13 +168,13 @@
           </div>
           <details class="paths">
             <summary data-i18n="path.summary">Quelle &amp; Speicherort</summary>
-            <label><span data-i18n="path.gguf">GGUF-Ordner</span> <span class="info" data-i18n-tip="tip.gguf">ⓘ</span></label>
+            <label for="pDir"><span data-i18n="path.gguf">GGUF-Ordner</span> <span class="info" data-i18n-tip="tip.gguf">ⓘ</span></label>
             <input type="text" id="pDir" spellcheck="false" />
-            <label><span data-i18n="path.pgrn">PGRN-Pfad (gestreamt)</span> <span class="info" data-i18n-tip="tip.pgrn">ⓘ</span></label>
+            <label for="pPgrn"><span data-i18n="path.pgrn">PGRN-Pfad (gestreamt)</span> <span class="info" data-i18n-tip="tip.pgrn">ⓘ</span></label>
             <input type="text" id="pPgrn" spellcheck="false" />
-            <label data-i18n="path.source">Download-Quelle (HuggingFace-Repo/URL)</label>
+            <label for="pUrl" data-i18n="path.source">Download-Quelle (HuggingFace-Repo/URL)</label>
             <input type="text" id="pUrl" spellcheck="false" />
-            <label data-i18n="path.binary">Server-Binary (unsere llama.cpp-Engine)</label>
+            <label for="pServer" data-i18n="path.binary">Server-Binary (unsere llama.cpp-Engine)</label>
             <input type="text" id="pServer" spellcheck="false" />
           </details>
         </div>
@@ -830,7 +830,7 @@
     </div>
   </div>
 
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="tooltip" class="tooltip"></div>
   <script src="app.js"></script>
 </body>

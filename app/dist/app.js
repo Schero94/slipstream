@@ -332,6 +332,7 @@ const I18N = {
     "header.sub": "Large coding models, local on your Mac — streamed from SSD",
     "nav.chat": "Chat", "nav.models": "Models", "nav.downloads": "Downloads", "nav.benchmarks": "Benchmarks", "nav.cluster": "Cluster",
     "nav.logs": "Logs", "nav.settings": "Settings",
+    "nav.regions": "Main areas",
     "chat.empty": "Start a conversation with the local model.", "chat.placeholder": "Message the local model…",
     "journey.title": "Models larger than RAM stream from SSD",
     "journey.step1": "Choose model folder",
@@ -467,6 +468,7 @@ const I18N = {
     "header.sub": "Große Coding-Modelle lokal auf dem Mac — von SSD gestreamt",
     "nav.chat": "Chat", "nav.models": "Modelle", "nav.downloads": "Downloads", "nav.benchmarks": "Benchmarks", "nav.cluster": "Cluster",
     "nav.logs": "Logs", "nav.settings": "Einstellungen",
+    "nav.regions": "Hauptbereiche",
     "chat.empty": "Starte eine Unterhaltung mit dem lokalen Modell.", "chat.placeholder": "Nachricht an das lokale Modell…",
     "journey.title": "Modelle größer als RAM streamen von der SSD",
     "journey.step1": "Modellordner wählen",
@@ -1006,6 +1008,7 @@ function applyLang(lang) {
   document.querySelectorAll("[data-i18n-tip]").forEach((el) => { el.setAttribute("data-tip", t(el.dataset.i18nTip)); });
   document.querySelectorAll("[data-i18n-html]").forEach((el) => { el.innerHTML = t(el.dataset.i18nHtml); });
   document.querySelectorAll("[data-i18n-ph]").forEach((el) => { el.setAttribute("placeholder", t(el.dataset.i18nPh)); });
+  document.querySelectorAll("[data-i18n-aria]").forEach((el) => { el.setAttribute("aria-label", t(el.dataset.i18nAria)); });
   const ls = $("lang"); if (ls) ls.value = LANG;
   try { markLangCoverage(); } catch {}
   try { renderModelNote(); } catch {}
@@ -1065,8 +1068,14 @@ function urlFor(m) {
 function showTab(name) {
   const btn = document.querySelector(`.tab[data-tab="${name}"]`);
   if (!btn || btn.disabled) return false;
-  document.querySelectorAll(".tab").forEach((t) => t.classList.remove("tab-active"));
+  // aria-selected must follow the visual state, or the tab strip reads as eight
+  // plain buttons with no current item.
+  document.querySelectorAll(".tab").forEach((t) => {
+    t.classList.remove("tab-active");
+    t.setAttribute("aria-selected", "false");
+  });
   btn.classList.add("tab-active");
+  btn.setAttribute("aria-selected", "true");
   document.querySelectorAll(".panel").forEach((p) => (p.hidden = p.dataset.panel !== name));
   localStorage.setItem("slipstream.tab", name);
   // Canvases have no width while their panel is hidden — repaint on reveal.
