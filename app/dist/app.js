@@ -202,6 +202,16 @@ const MODELS = [
     repo: "unsloth/DeepSeek-V2-Lite-GGUF", file: "DeepSeek-V2-Lite.Q4_K_M.gguf",
     gb: 11, mtp: false, activeB: 2.4, spec: "none", draft: "",
     note: "note.deepseek" },
+  // Dense Llama-3.1 8B — full Metal load (no MoE experts → no PGRN convert/stream).
+  { id: "dolphin3-cyber-8b", name: "Dolphin3-Cyber-8B (dense)", subdir: "dolphin3-cyber-8b-q4",
+    repo: "RavichandranJ/Dolphin3-Cyber-8B-GGUF",
+    file: "Dolphin3.0-Llama3.1-8B-abliterated.Q4_K_M.gguf",
+    gb: 5, mtp: false, activeB: 8, spec: "none", draft: "", dense: true, kv: "q8_0",
+    quants: [
+      { label: "Q4_K_M", tier: "qual.fast", file: "Dolphin3.0-Llama3.1-8B-abliterated.Q4_K_M.gguf", gb: 5, subdir: "dolphin3-cyber-8b-q4" },
+      { label: "Q5_K_M", tier: "qual.more", file: "Dolphin3.0-Llama3.1-8B-abliterated.Q5_K_M.gguf", gb: 6, subdir: "dolphin3-cyber-8b-q5" },
+    ],
+    note: "note.dolphin3" },
   { id: "glm-4.5-air", name: "GLM-4.5-Air (106B-A12B)", subdir: "glm-4.5-air-q4",
     repo: "unsloth/GLM-4.5-Air-GGUF", file: "GLM-4.5-Air-UD-Q4_K_XL.gguf",
     gb: 63, mtp: false, activeB: 12, spec: "none", draft: "",
@@ -666,7 +676,10 @@ const I18N_EXT = {
     "reco.peak": "<b>Metal Peak (qualified)</b> — 14 GiB + io=4; needs ≥17 GiB free (prefer ≥22; admit ≥21.5). Measured ~18–19 tok/s warm.", "reco.fast": "Fast — needs lots of free RAM; close apps first.", "reco.aggr": "Aggressive — only with lots of free RAM, else swapping.",
     "act.prefill": "Prefill — reading the prompt", "act.decode": "Generating answer", "act.idleReady": "Ready — waiting for a request", "act.stopped": "Server stopped", "act.running": "running…", "act.tokens": "tokens",
     "note.qwen36": "Strongest compatible coder with MTP speed.", "note.qwen30": "Smaller, no MTP — good for weaker Macs.",
-    "note.deepseek": "Small & fast, lowest RAM need.", "note.glm": "Large, lots of disk — strong quality.",
+    "note.deepseek": "Small & fast, lowest RAM need.",
+    "note.dolphin3": "Dense 8B cybersecurity assistant (Llama 3.1 chat). Full Metal load — no PGRN streaming. Q4_K_M ≈5 GiB.",
+    "note.glm": "Large, lots of disk — strong quality.",
+    "st.denseReady": "Dense GGUF ready — full Metal load (no PGRN).",
     "note.laguna": "Strongest model. Tip: PGRN on the fastest SSD (streamed), GGUF anywhere (load only).",
     "note.qwencoder": "Coding MoE, 35B active. XL — big fast SSD + PGRN sidecar needed.", "note.maverick": "Fastest decode of the giants (17B active). XL — big SSD + PGRN.",
     "note.dsv3": "671B/37B all-rounder. XL — big SSD + PGRN sidecar.", "note.dsr1": "Reasoning model — thinking tokens slow agent use. XL — big SSD.",
@@ -782,7 +795,10 @@ const I18N_EXT = {
     "reco.peak": "<b>Metal Peak (qualifiziert)</b> — 14 GiB + io=4; braucht ≥17 GiB frei (besser ≥22; Zulassung ≥21.5). Gemessen ~18–19 tok/s warm.", "reco.fast": "Schnell — braucht viel freien RAM; erst Apps schließen.", "reco.aggr": "Aggressiv — nur bei viel freiem RAM, sonst Swapping.",
     "act.prefill": "Prefill — Prompt wird gelesen", "act.decode": "Antwort wird generiert", "act.idleReady": "Bereit — wartet auf Anfrage", "act.stopped": "Server gestoppt", "act.running": "läuft…", "act.tokens": "Tokens",
     "note.qwen36": "Stärkster kompatibler Coder mit MTP-Speed.", "note.qwen30": "Kleiner, ohne MTP — gut für schwächere Macs.",
-    "note.deepseek": "Klein & schnell, geringster RAM-Bedarf.", "note.glm": "Groß, viel Disk — starke Qualität.",
+    "note.deepseek": "Klein & schnell, geringster RAM-Bedarf.",
+    "note.dolphin3": "Dichtes 8B-Cybersecurity-Modell (Llama-3.1-Chat). Volllast Metal — kein PGRN-Streaming. Q4_K_M ≈5 GiB.",
+    "note.glm": "Groß, viel Disk — starke Qualität.",
+    "st.denseReady": "Dichtes GGUF bereit — Volllast Metal (kein PGRN).",
     "note.laguna": "Stärkstes Modell. Tipp: PGRN auf die schnellste SSD (gestreamt), GGUF egal (nur Load).",
     "note.qwencoder": "Coding-MoE, 35B aktiv. XL — große schnelle SSD + PGRN-Sidecar nötig.", "note.maverick": "Schnellster Decode der Riesen (17B aktiv). XL — große SSD + PGRN.",
     "note.dsv3": "671B/37B Allrounder. XL — große SSD + PGRN-Sidecar.", "note.dsr1": "Reasoning-Modell — Thinking-Tokens bremsen Agent. XL — große SSD.",
@@ -1191,6 +1207,10 @@ function effectiveMtp() {
   if (q && Object.prototype.hasOwnProperty.call(q, "mtp")) return !!q.mtp;
   return !!state.model.mtp;
 }
+/** Dense GGUF (no MoE experts) — Start on GGUF alone; skip PGRN convert/stream. */
+function isDenseModel(m = state.model) {
+  return !!(m && m.dense);
+}
 
 function renderQualitySelector() {
   const wrap = $("qualityWrap"), sel = $("qualitySel");
@@ -1337,6 +1357,11 @@ async function refreshModel() {
     dlStatus.textContent = t("st.ready");
     dlBar.style.width = "100%";
     dlNote.textContent = `GGUF ${fmtGiB(st.gguf_bytes)} GiB · PGRN ${fmtGiB(st.pgrn_bytes)} GiB · ${t("reco.free")} ${st.disk_free_gib.toFixed(0)} GiB`;
+  } else if (st.gguf_bytes > 0 && isDenseModel()) {
+    badge.className = "badge ready"; badge.textContent = t("badge.ready");
+    dlStatus.textContent = t("st.denseReady");
+    dlBar.style.width = "100%";
+    dlNote.textContent = `GGUF ${fmtGiB(st.gguf_bytes)} GiB · dense Metal · ${t("reco.free")} ${st.disk_free_gib.toFixed(0)} GiB`;
   } else if (st.gguf_bytes > 0) {
     badge.className = "badge partial"; badge.textContent = t("st.needConvert");
     dlStatus.textContent = t("st.notConverted");
@@ -1358,7 +1383,9 @@ async function refreshModel() {
 
   // power button reflects readiness when server is stopped
   if (!state.running) {
-    const ready = st.pgrn_bytes > 0 && st.gguf_bytes > 0;
+    const ready = isDenseModel()
+      ? st.gguf_bytes > 0
+      : (st.pgrn_bytes > 0 && st.gguf_bytes > 0);
     $("powerBtn").disabled = !ready;
     $("powerBtn").textContent = ready ? t("btn.start") : t("btn.notReady");
   }
@@ -1850,6 +1877,7 @@ async function startServer() {
     pgrn_compact: $("compactSlots") ? $("compactSlots").checked : true,
     grammar_draft: $("grammarDraft") ? $("grammarDraft").checked : true,
     kv_quant: state.model.kv || "q8_0",
+    dense: isDenseModel(),
     backend: state.backend,
     mlx_dir: mlxDir,
     omlx_bin: "",
@@ -1948,12 +1976,21 @@ const GiB = 1073741824;
 function computeReco() {
   const s = state.sys, st = state.mstatus, m = state.model;
   if (!s || !s.total_gib) return null;
+  const free = typeof s.free_gib === "number" ? s.free_gib : 0;
+  // Dense 8B-class: full GGUF residency; PGRN cache/io/compact knobs do not apply.
+  if (isDenseModel(m)) {
+    const resident = (st && st.gguf_bytes)
+      ? st.gguf_bytes / GiB
+      : (m.gb || 5);
+    const headroom = 2;
+    const ctx = free >= 14 ? 16384 : free >= 8 ? 8192 : 4096;
+    return { cache: 4, ctx, io: 1, resident, pgrnGb: 0, band: "dense", headroom };
+  }
   // resident (non-expert) weights ~= gguf - pgrn; fall back to a rough fraction.
   const resident = (st && st.gguf_bytes && st.pgrn_bytes && st.gguf_bytes > st.pgrn_bytes)
     ? (st.gguf_bytes - st.pgrn_bytes) / GiB : m.gb * 0.12;
   const pgrnGb = (st && st.pgrn_bytes) ? st.pgrn_bytes / GiB : m.gb * 0.88;
   const draftGb = m.draft ? 2.2 : 0;
-  const free = typeof s.free_gib === "number" ? s.free_gib : 0;
   // Qualified Metal bands (HANDOVER / METAL_PEAK_VS_SMOKE). Headroom fixed at 3 GiB;
   // keep post-load free estimate ≥ 2 GiB. io=4 is the 2×-qualified balanced width.
   // Peak preferred quiet ≥22; admit band ≥21.5 (0.5 GiB tolerance) so 21.81 is not refused.
@@ -1984,11 +2021,17 @@ function updateReco() {
   if (!el) return;
   if (!r) { el.textContent = t("reco.computing"); return; }
   const s = state.sys;
-  el.innerHTML =
-    `${t("reco.for")} (<b>${s.total_gib.toFixed(0)} GiB</b> RAM, ${s.free_gib.toFixed(0)} ${t("reco.free")}) ${t("reco.with")} <b>${state.model.name.split(" ")[0]}</b>: ` +
-    `Cache <b>${r.cache} GiB</b> &middot; ${t("lbl.context")} <b>${r.ctx / 1024}k</b> &middot; io <b>${r.io}</b> &middot; ` +
-    `${t("reco.pgrnFast")}` +
-    (state.model.draft ? ` &middot; <b>DFlash</b>` : (effectiveSpec() === "draft-mtp" ? ` &middot; <b>MTP</b>` : ""));
+  if (isDenseModel()) {
+    el.innerHTML =
+      `${t("reco.for")} (<b>${s.total_gib.toFixed(0)} GiB</b> RAM, ${s.free_gib.toFixed(0)} ${t("reco.free")}) ${t("reco.with")} <b>${state.model.name.split(" ")[0]}</b>: ` +
+      `dense Metal · ${t("lbl.context")} <b>${r.ctx / 1024}k</b> · ngl <b>99</b> · no PGRN`;
+  } else {
+    el.innerHTML =
+      `${t("reco.for")} (<b>${s.total_gib.toFixed(0)} GiB</b> RAM, ${s.free_gib.toFixed(0)} ${t("reco.free")}) ${t("reco.with")} <b>${state.model.name.split(" ")[0]}</b>: ` +
+      `Cache <b>${r.cache} GiB</b> &middot; ${t("lbl.context")} <b>${r.ctx / 1024}k</b> &middot; io <b>${r.io}</b> &middot; ` +
+      `${t("reco.pgrnFast")}` +
+      (state.model.draft ? ` &middot; <b>DFlash</b>` : (effectiveSpec() === "draft-mtp" ? ` &middot; <b>MTP</b>` : ""));
+  }
   state.reco = r;
 }
 // Memory panel: what actually has to fit in RAM. Every line is either measured
@@ -2098,10 +2141,13 @@ async function renderInstalled() {
     const gguf = `${ggufDir}/${m.file}`;
     const pgrn = `${base}/${currentSubdir()}/${currentFile().replace(/\.gguf$/i, ".pgrn")}`;
     let st; try { st = await invoke("model_status", { gguf, pgrn, dir: ggufDir }); } catch { st = null; }
-    const has = st && st.pgrn_bytes > 0 && st.gguf_bytes > 0;
+    const denseOk = !!(m.dense && st && st.gguf_bytes > 0);
+    const has = denseOk || (st && st.pgrn_bytes > 0 && st.gguf_bytes > 0);
     const part = st && st.gguf_bytes > 0;
     return { m, cls: has ? "ready" : part ? "partial" : "missing",
-      txt: has ? `${(st.gguf_bytes / 1073741824).toFixed(0)}+${(st.pgrn_bytes / 1073741824).toFixed(0)} GiB` : part ? "GGUF only" : "—" };
+      txt: denseOk
+        ? `${(st.gguf_bytes / 1073741824).toFixed(1)} GiB dense`
+        : has ? `${(st.gguf_bytes / 1073741824).toFixed(0)}+${(st.pgrn_bytes / 1073741824).toFixed(0)} GiB` : part ? "GGUF only" : "—" };
   }));
   host.innerHTML = "";
   rows.forEach((r) => {

@@ -276,6 +276,9 @@ struct ServerConfig {
     grammar_draft: bool, // default-on: grammar-forced drafts for structured output (JSON/tool-calls); adaptive-guarded + lossless. Measured +45% tok/s fetch-bound on rigid schemas, neutral on easy JSON (guard stands down)
     #[serde(default = "default_kv_quant")]
     kv_quant: String, // per-model KV type: "q8_0" for full-attention models (KV-RAM becomes cache headroom), "f16" for hybrids (S1 measured q8-KV at -12..-28% decode on the resident hybrid 35B; its linear-attention KV is tiny, so q8 buys nothing there)
+    /// Dense GGUF (no MoE experts): allow Metal start without a PGRN sidecar.
+    #[serde(default)]
+    dense: bool,
     /// "metal" | "mlx" | "auto" | "heuristic". Auto/heuristic resolved at start (see mlx::resolve_backend).
     #[serde(default = "default_backend")]
     backend: String,
@@ -350,7 +353,8 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
     if file_size(&cfg.model) == 0 {
         return Err("Modell (.gguf) fehlt - erst herunterladen.".into());
     }
-    if file_size(&cfg.pgrn) == 0 {
+    let has_pgrn = file_size(&cfg.pgrn) > 0;
+    if !has_pgrn && !cfg.dense {
         return Err("PGRN-Sidecar fehlt - erst konvertieren.".into());
     }
     let log = OpenOptions::new()
@@ -362,27 +366,26 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
 
     let mut cmd = Command::new(&cfg.server);
-    // Advanced I/O levers (opt-in): dual-SSD striping + buffered reads. The engine
-    // reads these env vars; both default-off, parity-safe (mirror is CRC-checked).
-    if !cfg.pgrn_mirror.trim().is_empty() {
-        cmd.env("PGRN_MIRROR", cfg.pgrn_mirror.trim());
-    }
-    if cfg.pgrn_buffered {
-        cmd.env("PGRN_BUFFERED", "1");
-    }
-    if cfg.pgrn_online {
-        cmd.env("PGRN_ONLINE_PREDICT", "1");
-    }
-    // Compact slots (zero-copy): GPU reads experts directly from arena slots — no re-upload
-    // copy. Measured +13-24% decode across cache 4-8 GiB, neutral higher, swap-safe. Default-on.
-    if cfg.pgrn_compact {
-        cmd.arg("--pgrn-compact-slots");
+    if has_pgrn {
+        // Advanced I/O levers (opt-in): dual-SSD striping + buffered reads. The engine
+        // reads these env vars; both default-off, parity-safe (mirror is CRC-checked).
+        if !cfg.pgrn_mirror.trim().is_empty() {
+            cmd.env("PGRN_MIRROR", cfg.pgrn_mirror.trim());
+        }
+        if cfg.pgrn_buffered {
+            cmd.env("PGRN_BUFFERED", "1");
+        }
+        if cfg.pgrn_online {
+            cmd.env("PGRN_ONLINE_PREDICT", "1");
+        }
+        // Compact slots (zero-copy): GPU reads experts directly from arena slots — no re-upload
+        // copy. Measured +13-24% decode across cache 4-8 GiB, neutral higher, swap-safe. Default-on.
+        if cfg.pgrn_compact {
+            cmd.arg("--pgrn-compact-slots");
+        }
     }
     cmd.args([
         "--model", &cfg.model,
-        "--pgrn", &cfg.pgrn,
-        "--pgrn-cache-gb", &num(cfg.cache_gb),
-        "--pgrn-headroom-gb", &num(cfg.headroom_gb),
         "--gpu-layers", "99",
         "--ctx-size", &cfg.ctx.to_string(),
         "--parallel", "1",
@@ -404,48 +407,65 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         // Serving counters for the menubar's Serving Stats submenu.
         "--metrics",
     ]);
+    if has_pgrn {
+        cmd.args([
+            "--pgrn", &cfg.pgrn,
+            "--pgrn-cache-gb", &num(cfg.cache_gb),
+            "--pgrn-headroom-gb", &num(cfg.headroom_gb),
+        ]);
+    }
     // KV type per model family: f16 = engine default (skip the flags entirely).
     if !cfg.kv_quant.is_empty() && cfg.kv_quant != "f16" {
         cmd.args(["-ctk", &cfg.kv_quant, "-ctv", &cfg.kv_quant]);
     }
-    // Width-weighted cache partition: auto-enable when a weights sidecar sits next
-    // to the PGRN (bench.m1.partition_weights). Engine is fail-soft (equal split on
-    // any file problem). Measured 2026-07-27 on the streamed 35B: +11% warm decode,
-    // output byte-identical.
-    if let Some(weights) = std::path::Path::new(&cfg.pgrn)
-        .parent()
-        .map(|dir| dir.join("partition-weights.txt"))
-        .filter(|p| p.exists())
-    {
-        cmd.arg("--pgrn-partition-weights").arg(weights);
-    }
-    if cfg.io_threads > 1 {
-        cmd.arg("--pgrn-io-threads").arg(cfg.io_threads.to_string());
-    }
-    // Speculative decoding is model-specific: Qwen Q4 ships an MTP head (no draft
-    // file); Laguna uses a separate DFlash draft. "none" disables it.
-    // UD-Q5_K_XL / UD-Q6 have no MTP layers — draft-max=4 aborts load (MTP context).
-    let model_lc = cfg.model.to_ascii_lowercase();
-    let no_mtp_quant = model_lc.contains("ud-q5") || model_lc.contains("ud-q6")
-        || model_lc.contains("q5_k_xl") || model_lc.contains("q6_k_xl");
-    let spec_type = if no_mtp_quant { "none".to_string() } else { cfg.spec_type.clone() };
-    if spec_type != "none" && !spec_type.is_empty() {
-        cmd.args(["--spec-type", &spec_type, "--spec-draft-n-max", "4"]);
-        if !cfg.draft_model.is_empty() && file_size(&cfg.draft_model) > 0 {
-            cmd.args(["--model-draft", &cfg.draft_model, "--spec-draft-ngl", "99"]);
+    if has_pgrn {
+        // Width-weighted cache partition: auto-enable when a weights sidecar sits next
+        // to the PGRN (bench.m1.partition_weights). Engine is fail-soft (equal split on
+        // any file problem). Measured 2026-07-27 on the streamed 35B: +11% warm decode,
+        // output byte-identical.
+        if let Some(weights) = std::path::Path::new(&cfg.pgrn)
+            .parent()
+            .map(|dir| dir.join("partition-weights.txt"))
+            .filter(|p| p.exists())
+        {
+            cmd.arg("--pgrn-partition-weights").arg(weights);
         }
-        // Grammar-forced drafts ride the same verify path (needs a draft path, so gated here).
-        // Engine defaults on + adaptive-guarded; pass 0 only when the user disables it.
-        cmd.args(["--spec-grammar-draft", if cfg.grammar_draft { "1" } else { "0" }]);
+        if cfg.io_threads > 1 {
+            cmd.arg("--pgrn-io-threads").arg(cfg.io_threads.to_string());
+        }
+        // Speculative decoding is model-specific: Qwen Q4 ships an MTP head (no draft
+        // file); Laguna uses a separate DFlash draft. "none" disables it.
+        // UD-Q5_K_XL / UD-Q6 have no MTP layers — draft-max=4 aborts load (MTP context).
+        let model_lc = cfg.model.to_ascii_lowercase();
+        let no_mtp_quant = model_lc.contains("ud-q5") || model_lc.contains("ud-q6")
+            || model_lc.contains("q5_k_xl") || model_lc.contains("q6_k_xl");
+        let spec_type = if no_mtp_quant { "none".to_string() } else { cfg.spec_type.clone() };
+        if spec_type != "none" && !spec_type.is_empty() {
+            cmd.args(["--spec-type", &spec_type, "--spec-draft-n-max", "4"]);
+            if !cfg.draft_model.is_empty() && file_size(&cfg.draft_model) > 0 {
+                cmd.args(["--model-draft", &cfg.draft_model, "--spec-draft-ngl", "99"]);
+            }
+            // Grammar-forced drafts ride the same verify path (needs a draft path, so gated here).
+            // Engine defaults on + adaptive-guarded; pass 0 only when the user disables it.
+            cmd.args(["--spec-grammar-draft", if cfg.grammar_draft { "1" } else { "0" }]);
+        }
     }
     // Couple sampler to thinking mode. Thinking-on uses Qwen3's recommended
     // sampler AND a bounded reasoning budget, so the model can't over-think into
     // an endless-looking chain that never answers. Coding (thinking off) stays
     // deterministic and skips reasoning entirely.
+    // Dense chat models (Dolphin/Llama-3.1): mild temp when thinking is off —
+    // temp 0 is for agentic coding MoE, not conversational cyber assistants.
     if cfg.thinking {
         cmd.args([
             "--temp", "0.6", "--top-p", "0.95", "--top-k", "20",
             "--reasoning-budget", "2048",
+        ]);
+    } else if cfg.dense {
+        cmd.args([
+            "--reasoning", "off",
+            "--temp", "0.7", "--top-p", "0.9", "--top-k", "40",
+            "--repeat-penalty", "1.1",
         ]);
     } else {
         cmd.args(["--reasoning", "off", "--temp", "0"]);
@@ -453,10 +473,15 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
     cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log_err));
     let child = cmd.spawn().map_err(|e| format!("Start fehlgeschlagen: {e}"))?;
     *guard = Some(child);
+    let load_msg = if has_pgrn {
+        "Server gestartet - lädt Modell (~60s)..."
+    } else {
+        "Server gestartet - dense Metal Vollast (~15–30s)..."
+    };
     Ok(annotate_auto_backend(
         &cfg.backend,
         "metal",
-        "Server gestartet - lädt Modell (~60s)...".into(),
+        load_msg.into(),
     ))
 }
 
