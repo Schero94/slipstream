@@ -1024,11 +1024,8 @@ const COCKPIT_I18N = {
     "tip.cockpitWhy": "An estimate from live counters, not a profiler. SSD-bound: 15 % or more of expert lookups miss the RAM cache while experts stream. Memory-bound: under 12 % of RAM free or more than 800 MB in swap. Otherwise compute-bound. A change is announced once it has held for three seconds.",
     "anchor.label": "Live sections",
     "adv.nextTitle": "Upcoming engine options",
-    "adv.nextTag": "needs a newer engine",
-    "adv.nextHint": "Saved now and sent with Start. The engine in this build ignores them until it supports them, so they change nothing yet.",
     "adv.lookahead": "Lookahead prefetch",
     "adv.lossless": "lossless",
-    "adv.lookaheadDepth": "Layers ahead",
     "hint.lookahead": "Predicts which experts the next layers will route to and reads them from the SSD before they are needed. Output stays identical; a wrong guess costs some extra SSD reads.",
     "tip.lookahead": "Engine setting PGRN_LOOKAHEAD = layers ahead (default 2). Unlike predictive prefetch, which learns co-firing experts over time, lookahead predicts the next layer’s experts from the current one. Off by default.",
     "adv.steer": "Cache-steered routing (Turbo)",
@@ -1061,11 +1058,8 @@ const COCKPIT_I18N = {
     "tip.cockpitWhy": "Eine Schätzung aus Live-Zählern, kein Profiler. SSD-begrenzt: 15 % oder mehr der Experten-Zugriffe verfehlen den RAM-Cache, während Experten streamen. RAM-begrenzt: unter 12 % RAM frei oder mehr als 800 MB Swap. Sonst rechen-begrenzt. Ein Wechsel wird angesagt, sobald er drei Sekunden hält.",
     "anchor.label": "Live-Abschnitte",
     "adv.nextTitle": "Kommende Engine-Optionen",
-    "adv.nextTag": "braucht neuere Engine",
-    "adv.nextHint": "Wird jetzt gespeichert und beim Start mitgeschickt. Die Engine in diesem Build ignoriert die Werte, bis sie sie unterstützt – sie ändern also noch nichts.",
     "adv.lookahead": "Lookahead-Prefetch",
     "adv.lossless": "verlustfrei",
-    "adv.lookaheadDepth": "Layer voraus",
     "hint.lookahead": "Sagt voraus, welche Experten die nächsten Layer brauchen, und liest sie vorher von der SSD. Die Ausgabe bleibt identisch; ein falscher Tipp kostet zusätzliche SSD-Reads.",
     "tip.lookahead": "Engine-Einstellung PGRN_LOOKAHEAD = Layer voraus (Standard 2). Anders als Predictive Prefetch, das gemeinsam feuernde Experten über die Zeit lernt, sagt Lookahead die Experten des nächsten Layers aus dem aktuellen voraus. Standard aus.",
     "adv.steer": "Cache-gesteuertes Routing (Turbo)",
@@ -1076,6 +1070,104 @@ const COCKPIT_I18N = {
   },
 };
 Object.keys(COCKPIT_I18N).forEach((l) => Object.assign(I18N[l], COCKPIT_I18N[l]));
+
+// Short first-run journey: Model → Start → Connect editor. Overrides the older
+// wording (jargon such as GGUF/PGRN/convert stays only under "Manual steps").
+const JOURNEY_I18N = {
+  en: {
+    "nav.models": "Model", "nav.connect": "Connect editor", "nav.downloads": "Library",
+    "journey.title": "Run a coding model on your Mac",
+    "journey.step1": "Set up a model", "journey.step2": "Start it", "journey.step3": "Connect your editor",
+    "journey.codingTip": "Or type below to chat with it right here.",
+    "hint.startPath": "Set up a model, then Start",
+    "btn.notReady": "Set up model…",
+    "sec.selectModel": "Model",
+    "path.summary": "Where models are stored",
+    "prep.manual": "Manual steps", "toast.convDone": "Model prepared — ready to start",
+    "prep.download": "Download & prepare · ~{size} GiB",
+    "prep.downloadDense": "Download · ~{size} GiB",
+    "prep.prepare": "Prepare for SSD streaming",
+    "prep.downloadMissing": "Download model file",
+    "prep.cancel": "Cancel",
+    "prep.start": "Start",
+    "prep.connect": "Connect your editor →",
+    "prep.soon": "Not available yet",
+    "prep.auto": "After the download, preparation starts by itself.",
+    "st.notThere": "Not downloaded yet.",
+    "st.notConverted": "Downloaded. One step left: a one-time preparation for SSD streaming.",
+    "st.needConvert": "needs preparing",
+    "st.convRunning": "Preparing for SSD streaming…",
+    "st.ready": "Ready to start.",
+    "st.denseReady": "Ready to start (loads fully into RAM).",
+    "badge.notLoaded": "not downloaded",
+    "dl.intro": "Download the model file (GGUF), then prepare it once for SSD streaming (writes a .pgrn file). Large models download in parts and are prepared in one pass.",
+    "sec.connectAgent": "Connect your editor",
+    "agent.intro": "Slipstream speaks the OpenAI API on your Mac. Kilo Code and OpenCode are set up with one click; for any other editor, copy its config. The first answer after a start can take a while, so give your editor a request timeout of 300 s or more.",
+    "agent.patched": "{name}: set up in {path}. Restart {app}.",
+    "agent.copiedToast": "{name} config copied",
+    "connect.notRunning": "The model is not running yet. Start it (top right); your editor will reach it at the address below.",
+    "connect.running": "The model is running. Your editor can connect now.",
+    "sec.indexingOpt": "Codebase indexing",
+    "reco.title": "Tuned for your Mac",
+    "reco.auto": "Applied automatically at Start until you change a setting yourself.",
+    "reco.manual": "You changed settings by hand. Apply best returns to the recommendation.",
+    "adv.engine": "Advanced engine settings", "adv.presets": "Presets",
+    "runtime.check": "System check",
+    "adv.nextTitle": "Expert prefetch & Turbo",
+    "adv.steer": "Turbo (experimental)",
+    "hint.lookahead": "Reads the experts the next layer is predicted to need before it asks for them. Measured lossless, 29–33 % faster decoding at 4–8 GiB cache. On by default.",
+    "tip.lookahead": "Engine setting PGRN_LOOKAHEAD. Unlike predictive prefetch, which learns co-firing experts over time, lookahead predicts the next layer’s experts from the current one. Output is identical with it on or off.",
+    "adv.steerWarn": "Trades some quality for speed: when experts score almost the same, the router prefers one already in RAM, so answers can differ from the unmodified model. Its quality cost has not been measured yet. Start low (0.02–0.05) and compare on your own prompts.",
+    "tip.steer": "Engine setting PGRN_STEER = strength from 0 to 0.10. Off by default.",
+  },
+  de: {
+    "nav.models": "Modell", "nav.connect": "Editor verbinden", "nav.downloads": "Bibliothek",
+    "journey.title": "Ein Coding-Modell lokal auf deinem Mac",
+    "journey.step1": "Modell einrichten", "journey.step2": "Starten", "journey.step3": "Editor verbinden",
+    "journey.codingTip": "Oder unten direkt hier chatten.",
+    "hint.startPath": "Modell einrichten, dann Start",
+    "btn.notReady": "Modell einrichten…",
+    "sec.selectModel": "Modell",
+    "path.summary": "Speicherort der Modelle",
+    "prep.manual": "Manuelle Schritte", "toast.convDone": "Modell vorbereitet — startbereit",
+    "prep.download": "Laden & vorbereiten · ~{size} GiB",
+    "prep.downloadDense": "Laden · ~{size} GiB",
+    "prep.prepare": "Für SSD-Streaming vorbereiten",
+    "prep.downloadMissing": "Modelldatei laden",
+    "prep.cancel": "Abbrechen",
+    "prep.start": "Starten",
+    "prep.connect": "Editor verbinden →",
+    "prep.soon": "Noch nicht verfügbar",
+    "prep.auto": "Nach dem Download startet die Vorbereitung von selbst.",
+    "st.notThere": "Noch nicht geladen.",
+    "st.notConverted": "Geladen. Ein Schritt fehlt: eine einmalige Vorbereitung für SSD-Streaming.",
+    "st.needConvert": "Vorbereitung nötig",
+    "st.convRunning": "Wird für SSD-Streaming vorbereitet…",
+    "st.ready": "Startbereit.",
+    "st.denseReady": "Startbereit (lädt komplett in den RAM).",
+    "badge.notLoaded": "nicht geladen",
+    "dl.intro": "Modelldatei (GGUF) laden, dann einmalig für SSD-Streaming vorbereiten (schreibt eine .pgrn-Datei). Große Modelle laden in Teilen und werden in einem Durchgang vorbereitet.",
+    "sec.connectAgent": "Editor verbinden",
+    "agent.intro": "Slipstream spricht die OpenAI-API auf deinem Mac. Kilo Code und OpenCode werden mit einem Klick eingerichtet; für jeden anderen Editor die Config kopieren. Die erste Antwort nach einem Start kann dauern – gib deinem Editor ein Request-Timeout von 300 s oder mehr.",
+    "agent.patched": "{name}: eingerichtet in {path}. {app} neu starten.",
+    "agent.copiedToast": "{name}-Config kopiert",
+    "connect.notRunning": "Das Modell läuft noch nicht. Starte es (oben rechts); dein Editor erreicht es dann unter der Adresse unten.",
+    "connect.running": "Das Modell läuft. Dein Editor kann sich jetzt verbinden.",
+    "sec.indexingOpt": "Codebase-Indexierung",
+    "reco.title": "Für deinen Mac abgestimmt",
+    "reco.auto": "Wird beim Start automatisch angewendet, bis du selbst etwas änderst.",
+    "reco.manual": "Du hast Einstellungen von Hand geändert. „Beste anwenden“ kehrt zur Empfehlung zurück.",
+    "adv.engine": "Erweiterte Engine-Einstellungen", "adv.presets": "Voreinstellungen",
+    "runtime.check": "Systemprüfung",
+    "adv.nextTitle": "Experten-Prefetch & Turbo",
+    "adv.steer": "Turbo (experimentell)",
+    "hint.lookahead": "Liest die Experten, die der nächste Layer voraussichtlich braucht, bevor er sie anfragt. Gemessen verlustfrei, 29–33 % schnelleres Decoding bei 4–8 GiB Cache. Standardmäßig an.",
+    "tip.lookahead": "Engine-Einstellung PGRN_LOOKAHEAD. Anders als Predictive Prefetch, das gemeinsam feuernde Experten über die Zeit lernt, sagt Lookahead die Experten des nächsten Layers aus dem aktuellen voraus. Die Ausgabe ist mit und ohne identisch.",
+    "adv.steerWarn": "Tauscht etwas Qualität gegen Tempo: Wenn Experten fast gleich bewertet sind, bevorzugt der Router einen, der schon im RAM liegt – Antworten können vom unveränderten Modell abweichen. Der Qualitätsverlust ist noch nicht gemessen. Niedrig anfangen (0,02–0,05) und an eigenen Prompts vergleichen.",
+    "tip.steer": "Engine-Einstellung PGRN_STEER = Stärke von 0 bis 0,10. Standard aus.",
+  },
+};
+Object.keys(JOURNEY_I18N).forEach((l) => Object.assign(I18N[l], JOURNEY_I18N[l]));
 
 let LANG = localStorage.getItem("slipstream.lang") ||
   (navigator.language || "en").slice(0, 2);
@@ -1466,14 +1558,84 @@ async function refreshModel() {
   }
 
   // power button reflects readiness when server is stopped
+  const ready = isDenseModel()
+    ? st.gguf_bytes > 0
+    : (st.pgrn_bytes > 0 && st.gguf_bytes > 0);
+  state.modelReady = ready && !st.downloading && !st.converting;
   if (!state.running) {
-    const ready = isDenseModel()
-      ? st.gguf_bytes > 0
-      : (st.pgrn_bytes > 0 && st.gguf_bytes > 0);
-    $("powerBtn").disabled = !ready;
-    $("powerBtn").textContent = ready ? t("btn.start") : t("btn.notReady");
+    // Not ready is not a dead end: the button says what to do and goes there.
+    const b = $("powerBtn");
+    b.disabled = false;
+    b.textContent = state.modelReady ? t("btn.start") : t("btn.notReady");
+    b.className = state.modelReady ? "btn btn-primary btn-power" : "btn btn-power";
+  }
+  maybeAutoPrepare(st);
+  renderPrepare(st);
+  markJourney();
+}
+
+// ---- one-button model preparation ------------------------------------------
+// Download → one-time SSD-streaming preparation (convert) → Start → editor.
+// It only clicks the original buttons, so their invoke() contracts are untouched.
+function goToModelSetup() {
+  showTab("models");
+  const b = $("prepareBtn");
+  if (b) b.focus();
+}
+function prepareState(st) {
+  const m = state.model;
+  if (m.soon) return "soon";
+  if (!st) return "unknown";
+  if (st.downloading || st.converting) return "busy";
+  if (state.running) return "running";
+  if (state.modelReady) return "ready";
+  if (st.gguf_bytes > 0 && !isDenseModel()) return st.pgrn_bytes > 0 ? "ready" : "convert";
+  if (st.pgrn_bytes > 0) return "needGguf";
+  return "download";
+}
+function renderPrepare(st) {
+  const b = $("prepareBtn");
+  if (!b) return;
+  const kind = prepareState(st);
+  const q = currentQuant();
+  const size = q ? q.gb : state.model.gb;
+  const label = {
+    soon: t("prep.soon"),
+    unknown: "…",
+    busy: t("prep.cancel"),
+    running: t("prep.connect"),
+    ready: t("prep.start"),
+    convert: t("prep.prepare"),
+    needGguf: t("prep.downloadMissing"),
+    download: fillVars(t(isDenseModel() ? "prep.downloadDense" : "prep.download"), { size: String(size) }),
+  }[kind];
+  b.textContent = label;
+  b.dataset.kind = kind;
+  b.disabled = kind === "soon" || kind === "unknown";
+  b.className = "btn prepare-btn" + (kind === "busy" ? " btn-danger" : kind === "running" ? "" : " btn-primary");
+}
+function maybeAutoPrepare(st) {
+  // A finished download chains straight into preparation — but only when the file
+  // is complete (matches the remote size), never after a cancel or a failure.
+  if (!state.autoPrepare || !st || st.downloading || st.converting) return;
+  if (isDenseModel() || st.pgrn_bytes > 0) { state.autoPrepare = false; return; }
+  const complete = state.remoteBytes > 0 && st.gguf_bytes >= state.remoteBytes * 0.999;
+  if (st.gguf_bytes > 0 && complete) {
+    state.autoPrepare = false;
+    $("convBtn").click();
   }
 }
+if ($("prepareBtn")) $("prepareBtn").onclick = () => {
+  const kind = $("prepareBtn").dataset.kind;
+  if (kind === "busy") { state.autoPrepare = false; $("dlCancel").click(); return; }
+  if (kind === "running") { showTab("connect"); return; }
+  if (kind === "ready") { startServer(); return; }
+  if (kind === "convert") { $("convBtn").click(); return; }
+  if (kind === "download" || kind === "needGguf") {
+    state.autoPrepare = kind === "download" && !isDenseModel();
+    $("dlBtn").click();
+  }
+};
 
 $("dlBtn").onclick = async () => {
   const url = $("pUrl").value.trim();
@@ -1559,6 +1721,7 @@ function renderNativeRuntimeStatus() {
   const ready = !!(runtime && runtime.ready && diskReady);
   badge.className = `badge ${ready ? "ready" : "missing"}`;
   badge.textContent = ready ? t("badge.ready") : t("badge.missing");
+  if ($("runtimeDetails") && runtime && !ready) $("runtimeDetails").open = true;
   let note = !runtime || !runtime.ready ? t("runtime.incomplete")
     : !diskReady ? t("runtime.diskUnsafe")
     : pgrnStorage && !pgrnStorage.placement_ok ? t("runtime.externalPgrn")
@@ -1872,16 +2035,16 @@ function wirePgrnMlxSettings() {
   loadPgrnMlxSettings();
 }
 
-// ---- upcoming engine options (Metal / PGRN) --------------------------------
-// Default OFF. Persisted like the other slipstream.pgrn.* settings and sent with
-// Start as cfg.pgrn_lookahead (int, 0 = off) and cfg.pgrn_steer (float, 0 = off).
-// TODO(engine): ServerConfig in app/src-tauri/src/main.rs has no such fields yet —
-// serde drops unknown keys, so today these are inert. To connect them, add
-//   #[serde(default)] pgrn_lookahead: u32,   -> if > 0: cmd.env("PGRN_LOOKAHEAD", n.to_string())
-//   #[serde(default)] pgrn_steer: f64,       -> if > 0: cmd.env("PGRN_STEER", format!("{:.2}", s))
-// next to the PGRN_ONLINE_PREDICT mapping. Engine reads PGRN_LOOKAHEAD (int, e.g. 2)
-// and PGRN_STEER (float, 0–0.10). Then drop the "needs a newer engine" tag in index.html.
-const LOOKAHEAD_DEFAULT = 2;
+// ---- expert prefetch + Turbo (Metal / PGRN) --------------------------------
+// Persisted like the other slipstream.pgrn.* settings; sent with Start as
+//   cfg.pgrn_lookahead  1 = on (default), 0 = off. main.rs maps > 0 to
+//                       PGRN_LOOKAHEAD=<value>; 1 means on with margin 0.
+//                       Measured lossless, +29–33 % decode at 4–8 GiB cache.
+//   cfg.pgrn_steer      Turbo strength 0–0.10, 0 = off (default) → PGRN_STEER.
+//                       Lossy; quality cost not measured yet.
+// TODO(engine): if ServerConfig does not declare these fields yet, serde drops
+// them silently — add `#[serde(default)] pgrn_lookahead: u32` and
+// `#[serde(default)] pgrn_steer: f64` next to pgrn_online.
 const STEER_MAX = 0.10;
 const STEER_DEFAULT = 0.05;
 function clampSteer(v) {
@@ -1889,13 +2052,13 @@ function clampSteer(v) {
   if (!Number.isFinite(n)) return STEER_DEFAULT;
   return Math.min(STEER_MAX, Math.max(0, Math.round(n * 100) / 100));
 }
+function lookaheadPreference() {
+  const v = localStorage.getItem("slipstream.pgrn.lookahead");
+  return v === null ? true : v === "1";
+}
 function pgrnLookaheadFromUi() {
-  const on = $("pgrnLookahead") ? $("pgrnLookahead").checked
-    : localStorage.getItem("slipstream.pgrn.lookahead") === "1";
-  if (!on) return 0;
-  const d = parseInt(($("pgrnLookaheadDepth") && $("pgrnLookaheadDepth").value)
-    || localStorage.getItem("slipstream.pgrn.lookaheadDepth") || LOOKAHEAD_DEFAULT, 10);
-  return d >= 1 && d <= 4 ? d : LOOKAHEAD_DEFAULT;
+  const on = $("pgrnLookahead") ? $("pgrnLookahead").checked : lookaheadPreference();
+  return on ? 1 : 0;
 }
 function pgrnSteerFromUi() {
   const on = $("pgrnSteer") ? $("pgrnSteer").checked
@@ -1906,27 +2069,20 @@ function pgrnSteerFromUi() {
 }
 function syncNextEngineUi() {
   const metalOff = state.backend === "mlx";
-  const la = $("pgrnLookahead"), st = $("pgrnSteer");
-  const laOn = !!(la && la.checked) && !metalOff, stOn = !!(st && st.checked) && !metalOff;
-  if ($("pgrnLookaheadDepth")) $("pgrnLookaheadDepth").disabled = !laOn;
-  if ($("pgrnLookaheadDepthWrap")) $("pgrnLookaheadDepthWrap").setAttribute("aria-disabled", String(!laOn));
+  const st = $("pgrnSteer");
+  const stOn = !!(st && st.checked) && !metalOff;
   if ($("pgrnSteerStrength")) $("pgrnSteerStrength").disabled = !stOn;
   if ($("pgrnSteerStrengthWrap")) $("pgrnSteerStrengthWrap").setAttribute("aria-disabled", String(!stOn));
   if ($("pgrnSteerVal") && $("pgrnSteerStrength")) $("pgrnSteerVal").textContent = dec(clampSteer($("pgrnSteerStrength").value), 2);
 }
 function persistNextEngineSettings() {
   if ($("pgrnLookahead")) localStorage.setItem("slipstream.pgrn.lookahead", $("pgrnLookahead").checked ? "1" : "0");
-  if ($("pgrnLookaheadDepth")) localStorage.setItem("slipstream.pgrn.lookaheadDepth", $("pgrnLookaheadDepth").value);
   if ($("pgrnSteer")) localStorage.setItem("slipstream.pgrn.steer", $("pgrnSteer").checked ? "1" : "0");
   if ($("pgrnSteerStrength")) localStorage.setItem("slipstream.pgrn.steerStrength", String(clampSteer($("pgrnSteerStrength").value)));
   syncNextEngineUi();
 }
 function loadNextEngineSettings() {
-  if ($("pgrnLookahead")) $("pgrnLookahead").checked = localStorage.getItem("slipstream.pgrn.lookahead") === "1";
-  if ($("pgrnLookaheadDepth")) {
-    const d = localStorage.getItem("slipstream.pgrn.lookaheadDepth");
-    $("pgrnLookaheadDepth").value = ["1", "2", "3", "4"].includes(d) ? d : String(LOOKAHEAD_DEFAULT);
-  }
+  if ($("pgrnLookahead")) $("pgrnLookahead").checked = lookaheadPreference();
   if ($("pgrnSteer")) $("pgrnSteer").checked = localStorage.getItem("slipstream.pgrn.steer") === "1";
   if ($("pgrnSteerStrength")) {
     const v = localStorage.getItem("slipstream.pgrn.steerStrength");
@@ -1935,7 +2091,7 @@ function loadNextEngineSettings() {
   syncNextEngineUi();
 }
 function wireNextEngineSettings() {
-  ["pgrnLookahead", "pgrnLookaheadDepth", "pgrnSteer"].forEach((id) => {
+  ["pgrnLookahead", "pgrnSteer"].forEach((id) => {
     if ($(id)) $(id).onchange = persistNextEngineSettings;
   });
   if ($("pgrnSteerStrength")) {
@@ -2017,6 +2173,8 @@ async function startServer() {
     ? resolveAutoBackend(promptChars, hasExperts)
     : (state.backend === "mlx" ? "mlx" : "metal");
   if (!(await ensureNativeStartReady(resolved))) return;
+  // Untouched settings follow the recommendation computed for this Mac right now.
+  if (!state.userTuned) applyRecoValues(computeReco());
   const cfg = {
     server: $("pServer").value.trim(),
     model: ggufPath(),
@@ -2033,8 +2191,8 @@ async function startServer() {
     pgrn_mirror: ($("pMirror") && $("pMirror").value.trim()) || "",
     pgrn_buffered: !!($("bufferedReads") && $("bufferedReads").checked),
     pgrn_online: !!($("onlinePredict") && $("onlinePredict").checked),
-    // Upcoming engine options (default 0 = off). TODO(engine): not read by main.rs
-    // ServerConfig yet → PGRN_LOOKAHEAD (int) / PGRN_STEER (float). See wireNextEngineSettings.
+    // Expert prefetch (1 = on, default) and Turbo (0–0.10, default 0).
+    // main.rs → PGRN_LOOKAHEAD / PGRN_STEER. See wireNextEngineSettings.
     pgrn_lookahead: pgrnLookaheadFromUi(),
     pgrn_steer: pgrnSteerFromUi(),
     pgrn_compact: $("compactSlots") ? $("compactSlots").checked : true,
@@ -2111,14 +2269,29 @@ async function stopServer() {
   toast(t("toast.serverStopped"));
   applyBackendUi();
 }
-$("powerBtn").onclick = () => (state.running ? stopServer() : startServer());
+$("powerBtn").onclick = () => {
+  if (state.running) return stopServer();
+  if (state.modelReady === false) return goToModelSetup();
+  return startServer();
+};
 
 function setPill(mode) {
   const p = $("statusPill"), b = $("powerBtn");
   state.pillMode = mode;
   if (mode === "on") { p.className = "pill pill-on"; p.textContent = t("pill.running"); b.textContent = t("btn.stop"); b.className = "btn btn-danger btn-power"; b.disabled = false; }
   else if (mode === "loading") { p.className = "pill pill-loading"; p.textContent = t("pill.starting"); b.textContent = t("btn.stop"); b.className = "btn btn-danger btn-power"; b.disabled = false; }
-  else { p.className = "pill pill-off"; p.textContent = t("pill.stopped"); b.className = "btn btn-primary btn-power"; }
+  else {
+    p.className = "pill pill-off"; p.textContent = t("pill.stopped");
+    b.className = state.modelReady === false ? "btn btn-power" : "btn btn-primary btn-power";
+    if (state.modelReady === false) b.textContent = t("btn.notReady");
+  }
+  try { updateChatP2pHint(); } catch {}
+  const cs = $("connectState");
+  if (cs) {
+    cs.textContent = t(mode === "on" ? "connect.running" : "connect.notRunning");
+    cs.dataset.state = mode;
+  }
+  try { if (state.mstatus) renderPrepare(state.mstatus); } catch {}
   // The start hint is for the first run; once the engine is up it is noise.
   const tip = $("startTip");
   if (tip) tip.hidden = mode !== "off";
@@ -2128,8 +2301,9 @@ function setPill(mode) {
 // First-run steps reflect where the user actually is: done steps get a check,
 // the next one is highlighted and marked as the current step.
 function markJourney() {
-  const ready = !!(state.running || ($("powerBtn") && !$("powerBtn").disabled));
-  const done = { journeyStep1: ready, journeyStep2: !!state.running, journeyStep3: false };
+  const ready = !!(state.running || state.modelReady);
+  const done = { journeyStep1: ready, journeyStep2: !!state.running,
+    journeyStep3: localStorage.getItem("slipstream.editorConnected") === "1" };
   let nextSet = false;
   ["journeyStep1", "journeyStep2", "journeyStep3"].forEach((id) => {
     const el = $(id);
@@ -2212,11 +2386,12 @@ function updateReco() {
   } else {
     el.innerHTML =
       `${t("reco.for")} (<b>${s.total_gib.toFixed(0)} GiB</b> RAM, ${s.free_gib.toFixed(0)} ${t("reco.free")}) ${t("reco.with")} <b>${state.model.name.split(" ")[0]}</b>: ` +
-      `Cache <b>${r.cache} GiB</b> &middot; ${t("lbl.context")} <b>${r.ctx / 1024}k</b> &middot; io <b>${r.io}</b> &middot; ` +
-      `${t("reco.pgrnFast")}` +
-      (state.model.draft ? ` &middot; <b>DFlash</b>` : (effectiveSpec() === "draft-mtp" ? ` &middot; <b>MTP</b>` : ""));
+      // Plain summary; I/O width and speculative-decoding details live under Advanced.
+      `${t("lbl.cache")} <b>${r.cache} GiB</b> &middot; ${t("lbl.context")} <b>${r.ctx / 1024}k</b>`;
   }
   state.reco = r;
+  // Until the user tunes by hand, the controls show what Start will use.
+  if (!state.userTuned && !state.running) applyRecoValues(r);
 }
 // Memory panel: what actually has to fit in RAM. Every line is either measured
 // (resident share from the real file sizes, KV from the engine's own log) or a
@@ -2255,9 +2430,29 @@ function renderPartitionNote() {
     : t("partition.equal");
 }
 
+// Write the recommendation into the controls without a toast (auto-tune path).
+function applyRecoValues(r) {
+  if (!r) return;
+  $("cache").value = r.cache; $("cacheVal").textContent = r.cache; updateCacheRec();
+  $("ctx").value = String(r.ctx);
+  $("io").value = String(r.io);
+}
+function markUserTuned(on) {
+  state.userTuned = !!on;
+  const el = $("recoAuto");
+  if (el) {
+    el.dataset.i18n = on ? "reco.manual" : "reco.auto";
+    el.textContent = t(el.dataset.i18n);
+  }
+}
+["cache", "ctx", "io"].forEach((id) => {
+  const el = $(id);
+  if (el) el.addEventListener(id === "cache" ? "input" : "change", () => markUserTuned(true));
+});
 function applyReco() {
   const r = state.reco || computeReco();
   if (!r) { toast(t("toast.noSys"), true); return; }
+  markUserTuned(false);
   $("cache").value = r.cache; $("cacheVal").textContent = r.cache; updateCacheRec();
   $("ctx").value = String(r.ctx);
   $("io").value = String(r.io);
@@ -2267,6 +2462,7 @@ function applyReco() {
   renderObsStrip(state.live || {});
 }
 function applyPeak() {
+  markUserTuned(true);
   // Qualified Metal Peak: cache=14 · headroom=3 · io=4 (~18–19 tok/s warm when free allows).
   // Preferred quiet ≥22; admit ≥21.5 (0.5 tol) without confirm; confirm only below admit band.
   const free = state.sys && typeof state.sys.free_gib === "number" ? state.sys.free_gib : null;
@@ -2286,6 +2482,7 @@ function applyPeak() {
   renderObsStrip(state.live || {});
 }
 function applyGoodTokens() {
+  markUserTuned(true);
   // Shared coding path: temperature 0 + thinking off (Metal + oMLX).
   if ($("thinking")) $("thinking").checked = false;
   if ($("chatThink")) $("chatThink").checked = false;
@@ -2659,14 +2856,20 @@ async function doAgent(a) {
         cfg: { home: state.def ? state.def.home : "", base_url: BASE_URL, model: agentModelId(),
                api_key: "sk-local", ctx: +$("ctx").value, max_out: 4096, target: a.target },
       });
-      $("agentNote").innerHTML = `<b>${a.name}</b>: gepatcht -> <code>${path}</code> &middot; ${a.restart} neu starten.`;
-      toast(`In ${a.name} gepatcht - ${a.restart} neu starten`);
+      const note = fillVars(t("agent.patched"), { name: a.name, path: "\u0000", app: a.restart });
+      $("agentNote").textContent = "";
+      const [before, after] = note.split("\u0000");
+      const code = document.createElement("code"); code.textContent = path;
+      $("agentNote").append(before, code, after);
+      toast(fillVars(t("agent.patched"), { name: a.name, path, app: a.restart }));
+      localStorage.setItem("slipstream.editorConnected", "1"); markJourney();
     } catch (e) { toast(String(e), true); }
   } else {
     try {
       await navigator.clipboard.writeText(a.snippet());
       $("agentNote").innerHTML = `<b>${a.name}</b>: ${t("toast.copied")}. ${t(a.how)}`;
-      toast(`${a.name}-Config kopiert`);
+      toast(fillVars(t("agent.copiedToast"), { name: a.name }));
+      localStorage.setItem("slipstream.editorConnected", "1"); markJourney();
     } catch { toast(t("toast.copyFail"), true); }
   }
 }
@@ -4264,51 +4467,19 @@ function chatEmptyHtml() {
     + '</div>';
 }
 
-async function journeyChooseFolder() {
-  showTab("models");
-  try { await preferDefaultModelPaths(); } catch {}
-  const prefer = state.preferMetalDir || preferredMetalModelDir();
-  if ($("pModelsRoot") && prefer && !$("pModelsRoot").value.trim()) $("pModelsRoot").value = prefer;
-  if ($("pModelsRoot")) {
-    await pickInto("pModelsRoot", { directory: true });
-    return;
-  }
-  // Fallback for older DOM: Metal → GGUF folder, MLX → mlx dir.
-  const useMlx = effectiveBackend() === "mlx";
-  if (useMlx) {
-    const mlxPrefer = state.preferMlxDir || preferredMlxModelDir();
-    if ($("pMlx") && mlxPrefer && !$("pMlx").value.trim()) $("pMlx").value = mlxPrefer;
-    if ($("pMlx")) await pickInto("pMlx", { directory: true });
-    else showTab("settings");
-    return;
-  }
-  if ($("pDir")) {
-    try { applyModelPaths(); } catch {}
-    await pickInto("pDir", { directory: true });
-  }
-}
 function journeyStartServer() {
   if (state.running) return;
-  const btn = $("powerBtn");
-  if (btn && !btn.disabled) { btn.click(); return; }
+  if (state.modelReady) { startServer(); return; }
   toast(t("journey.needModel"), true);
-  showTab("models");
-}
-function journeySendPrompt() {
-  showTab("chat");
-  const input = $("chatInput");
-  if (!input) return;
-  if (!input.value.trim()) input.value = t("journey.promptSample");
-  input.focus();
-  input.dispatchEvent(new Event("input"));
+  goToModelSetup();
 }
 function wireJourney() {
   const s1 = $("journeyStep1");
-  if (s1) s1.onclick = () => { journeyChooseFolder(); };
+  if (s1) s1.onclick = () => { goToModelSetup(); };
   const s2 = $("journeyStep2");
   if (s2) s2.onclick = () => { journeyStartServer(); };
   const s3 = $("journeyStep3");
-  if (s3) s3.onclick = () => { journeySendPrompt(); };
+  if (s3) s3.onclick = () => { showTab("connect"); };
 }
 function wireJourneyCta() { wireJourney(); }
 function renderChatEmpty() {
@@ -4530,6 +4701,8 @@ function updateChatP2pHint() {
   } else {
     note.textContent = t("chat.serverHint");
   }
+  // "The server must be running" is only true advice while it is not.
+  note.hidden = !!state.running;
 }
 
 function initP2p() {

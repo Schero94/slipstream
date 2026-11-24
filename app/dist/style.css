@@ -732,3 +732,30 @@ details summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margi
   .chat-schema-label::before { transition: none; }
   .meter-fill, .stack > i { transition: none; }
 }
+
+/* ---- Short journey: Model → Start → Connect editor ----------------------- */
+.obs-item[hidden] { display: none; }
+/* One prepare box: status + progress on the left, the one button on the right. */
+.prepare { display: flex; align-items: flex-end; gap: var(--sp-3); margin-top: var(--sp-3);
+  padding: var(--sp-3); border-radius: var(--radius); background: var(--panel-2); }
+.prepare .dl-info { flex: 1; min-width: 0; }
+.prepare .meter { background: var(--panel); }
+.prepare-btn { flex: none; min-height: 34px; padding: 6px 18px; }
+@media (max-width: 640px) { .prepare { flex-direction: column; align-items: stretch; } }
+details.manual-steps summary { display: flex; align-items: center; gap: var(--sp-1); }
+details.manual-steps .badge { font-size: 11px; }
+/* Settings: the recommendation is the page; tuning folds away. */
+.settings-advanced { margin-top: var(--sp-3); border-top: 1px solid var(--rule); padding-top: var(--sp-2); }
+.settings-advanced > summary { font-size: 13px; font-weight: 600; color: var(--text); margin-top: 0; }
+.settings-advanced[open] > summary { margin-bottom: var(--sp-3); }
+.adv-section { margin-top: var(--sp-4); padding-top: var(--sp-3); border-top: 1px solid var(--rule); }
+.adv-h { font-size: 13px; font-weight: 600; margin: 0 0 var(--sp-2); }
+.reco { margin-top: 0; }
+.reco .reco-auto { margin-top: 4px; font-size: 12px; }
+#runtimeDetails .runtime-status { margin: var(--sp-2) 0 0; }
+.connect-state { margin: 0 0 var(--sp-3); padding: 8px var(--sp-2); border-radius: var(--radius-sm);
+  font-size: 12.5px; background: var(--yellow-tint); color: var(--text); }
+.connect-state:empty { display: none; }
+.connect-state[data-state="on"] { background: var(--green-tint); }
+.preset-row { display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
+.preset-row .hint { margin: 0 4px 0 0; }
