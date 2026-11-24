@@ -1,0 +1,3 @@
+20261124-223957	label=la0	cache=8	decode_tps=15.57	prefill_tps=18.79	hit=NA	la_recall=NA	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261124-224138	label=la2	cache=8	decode_tps=14.44	prefill_tps=19.44	hit=NA	la_recall=NA	swap_delta_mb=-8.00	out=e6c6a36552db	env=PGRN_LOOKAHEAD=2
+20261124-224310	label=la4	cache=8	decode_tps=13.49	prefill_tps=15.19	hit=NA	la_recall=NA	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=4

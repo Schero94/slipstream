@@ -409,6 +409,13 @@ pgr_stream_status pgr_stream_get_many(
     return rc;
 }
 
+int pgr_stream_is_resident(const pgr_stream *s, long key) {
+    if (!s || !s->policy) return 0;
+    int slot = -1;
+    uint64_t generation = 0;
+    return pgr_tier_peek(s->policy, key, &slot, &generation) != PGR_TIER_COLD ? 1 : 0;
+}
+
 int pgr_stream_prefetch_many(
         pgr_stream *s, const long *keys, const float *heats, int n) {
     /* Best-effort cache warm: read the COLD keys in parallel (up to io_width) and publish

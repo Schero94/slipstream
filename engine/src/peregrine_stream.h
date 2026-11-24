@@ -93,6 +93,8 @@ int pgr_stream_prefetch_many(
 /* Start a new graph-use epoch, releasing the prior epoch's slot pins. The slot
  * variant pins the returned resident slot until the next begin call. */
 void pgr_stream_batch_begin(pgr_stream *s);
+/* 1 when `key` is resident right now (pure observation: no score/clock update). */
+int pgr_stream_is_resident(const pgr_stream *s, long key);
 pgr_stream_status pgr_stream_get_key_heat_slot(
         pgr_stream *s, long key, float heat,
         const void **data, size_t *data_size, int *hit,

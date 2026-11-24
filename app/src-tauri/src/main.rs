@@ -270,6 +270,14 @@ struct ServerConfig {
     pgrn_buffered: bool, // advanced: buffered reads (skip F_NOCACHE) for non-NVMe drives
     #[serde(default)]
     pgrn_online: bool,   // advanced: online co-activation predictor -> speculative prefetch
+    /// Lookahead gating (lossless): extra experts beyond top-k predicted for the next layer
+    /// from this layer's hidden state and warmed during compute. 0 = off. -> PGRN_LOOKAHEAD
+    #[serde(default)]
+    pgrn_lookahead: u32,
+    /// Cache-steered routing / Turbo (lossy, opt-in): selection bonus for resident experts.
+    /// 0 = off (exact routing). -> PGRN_STEER
+    #[serde(default)]
+    pgrn_steer: f64,
     #[serde(default = "default_true")]
     pgrn_compact: bool,  // default-on: zero-copy compact slots -> +13-24% decode at moderate cache, swap-safe (measured)
     #[serde(default = "default_true")]
@@ -377,6 +385,12 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         }
         if cfg.pgrn_online {
             cmd.env("PGRN_ONLINE_PREDICT", "1");
+        }
+        if cfg.pgrn_lookahead > 0 {
+            cmd.env("PGRN_LOOKAHEAD", cfg.pgrn_lookahead.min(16).to_string());
+        }
+        if cfg.pgrn_steer.is_finite() && cfg.pgrn_steer > 0.0 {
+            cmd.env("PGRN_STEER", format!("{:.3}", cfg.pgrn_steer.min(0.5)));
         }
         // Compact slots (zero-copy): GPU reads experts directly from arena slots — no re-upload
         // copy. Measured +13-24% decode across cache 4-8 GiB, neutral higher, swap-safe. Default-on.

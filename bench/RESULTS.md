@@ -3307,3 +3307,27 @@ version `stage_uv_runtime.sh` pins. Verified red-then-green.
 
 Gates: 9/9 `app/scripts/test_*.py` and 7/7 `app/scripts/test_*.mjs`; the deploy
 headless-asset checks pass; browser click walk 0 failures against `app/dist`.
+
+## Lookahead-gate prefetch (PGRN_LOOKAHEAD) — KEEP — 2026-11-24
+
+- Idea (Eliseev & Mazur 2312.17238; PSR 2610.34721): score layer L+1's router
+  (`ffn_gate_inp[L+1]`) on layer L's MoE input inside the graph, read the top-(k+m) at
+  layer L's existing top-k callback (no extra GPU sync), warm the cold ones on the
+  background prefetch thread while layer L's experts and layer L+1's attention run.
+  Replaces the old "warm up to half the partition" table prefetch (−8 % measured).
+- Host: M3 Pro 36 GB, macOS 27.0.1. Qwen3.6-35B-A3B UD-Q4_K_XL, GGUF + PGRN on the
+  internal NVMe. llama-completion, greedy, 160 tokens, compact slots on, io 8, ctx 4096.
+  Interleaved base/la0/la2/la4 × 2 reps per cache, 25 s cooldown. Same binary (env-gated).
+- Decode tok/s (mean of 2; min–max):
+
+  | cache | base | m=0 | m=2 | m=4 |
+  |---|---|---|---|---|
+  | 4 GiB | 6.30 (6.22–6.38) | 8.13 (6.96–9.30) **+29 %** | 8.06 (7.10–9.02) +28 % | 8.48 (8.43–8.54) +35 % |
+  | 8 GiB | 11.83 (11.46–12.20) | 15.72 (15.57–15.87) **+33 %** | 14.07 (13.71–14.44) +19 % | 12.91 (12.34–13.49) +9 % |
+
+- Parity: output SHA-256 prefix `e6c6a36552db` identical in all 16 arms (+4 smoke arms).
+  Swap growth 0 MB in every arm.
+- Reading: extra margin helps only when the cache is small; at 8 GiB the extra
+  speculative reads cost more than they save. Default m=0 (predict exactly top-k).
+- Verdict: **KEEP**, lossless, default-on candidate in the app. Hit-rate/recall were
+  not logged in this sweep (llama-completion did not print PGRN stats; fixed after).

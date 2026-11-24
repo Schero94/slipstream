@@ -1,0 +1,7 @@
+<|im_start|>user
+Write a complete, well-commented Python module that implements an LRU cache with a time-to-live per entry, thread safety, and statistics (hits, misses, evictions). Include type hints and a short usage example.<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+

@@ -90,6 +90,14 @@ int pgr_runtime_has_online(const pgr_runtime * runtime);
 void pgr_runtime_prefetch_kick_online(pgr_runtime * runtime, uint16_t src_layer,
                                       const int32_t * fired, int n_fired);
 void pgr_runtime_prefetch_settle(pgr_runtime * runtime, uint16_t layer);
+/* Lookahead-gate prefetch: warm an explicit, already-ranked expert list for `layer` on the
+ * background thread (same settle contract as the other kicks). At most `n` experts, capped
+ * at half the layer's partition. Parity-neutral: warms only, never changes selection. */
+void pgr_runtime_prefetch_kick_list(pgr_runtime * runtime, uint16_t layer,
+                                    const uint16_t * experts, int n);
+/* Residency snapshot of one layer: mask[e] = 1 when expert e is resident. Joins any
+ * in-flight prefetch first so the snapshot is deterministic. Returns resident count or -1. */
+int pgr_runtime_resident_mask(pgr_runtime * runtime, uint16_t layer, uint8_t * mask, int n_expert);
 size_t pgr_runtime_cache_capacity(const pgr_runtime * runtime);
 size_t pgr_runtime_cache_bytes(const pgr_runtime * runtime);
 size_t pgr_runtime_high_water_bytes(const pgr_runtime * runtime);

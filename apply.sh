@@ -4,7 +4,7 @@ set -euo pipefail
 PIN=79bba02a6741
 DIR=${1:-llama.cpp-slipstream}
 HERE=$(cd "$(dirname "$0")" && pwd)
-git clone https://github.com/ggml-org/llama.cpp "$DIR"
+git clone "${UPSTREAM:-https://github.com/ggml-org/llama.cpp}" "$DIR"
 cd "$DIR" && git checkout "$PIN"
 cp -R "$HERE"/engine/* .
 git apply "$HERE/patches/slipstream-seams.patch"

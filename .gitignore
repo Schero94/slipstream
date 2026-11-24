@@ -18,3 +18,8 @@ __pycache__/
 # models / large data
 *.gguf
 *.pgrn
+# fetch-wall raw run logs stay local; summary.tsv is the tracked record
+bench/fetchwall/results/*.log
+bench/fetchwall/results/*.log.out
+bench/fetchwall/results/*.bin
+bench/fetchwall/results/*.txt

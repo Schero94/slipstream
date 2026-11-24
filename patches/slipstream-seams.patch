@@ -440,10 +440,30 @@ index bffc1767a..fb5697399 100644
      bool display_prompt    = true;  // print prompt before generation
      bool no_kv_offload     = false; // disable KV offloading
 diff --git a/common/sampling.cpp b/common/sampling.cpp
-index 75a299e23..88cac1616 100644
+index 75a299e23..33b41a94e 100644
 --- a/common/sampling.cpp
 +++ b/common/sampling.cpp
-@@ -537,6 +537,31 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl) {
+@@ -509,6 +509,19 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
+         auto & data = data_ctx;
+ 
+         data = llama_perf_context(ctx);
++        if (data.pgrn_cache_bytes > 0) {
++            const uint64_t acc = data.pgrn_cache_hits + data.pgrn_cache_misses;
++            LOG_INF("%s: PGRN cache = %.2f MiB, hits = %llu, misses = %llu (%.2f%%), fetch = %.2f ms, stage = %.2f ms\n",
++                    __func__, data.pgrn_cache_bytes / 1048576.0,
++                    (unsigned long long) data.pgrn_cache_hits, (unsigned long long) data.pgrn_cache_misses,
++                    acc ? 100.0 * data.pgrn_cache_hits / acc : 0.0, data.pgrn_fetch_ms, data.pgrn_stage_ms);
++            if (data.pgrn_lookahead_total > 0) {
++                LOG_INF("%s: PGRN lookahead recall = %.2f%% (%llu/%llu)\n", __func__,
++                        100.0 * data.pgrn_lookahead_hits / data.pgrn_lookahead_total,
++                        (unsigned long long) data.pgrn_lookahead_hits,
++                        (unsigned long long) data.pgrn_lookahead_total);
++            }
++        }
+ 
+         const double t_end_ms = 1e-3 * ggml_time_us();
+ 
+@@ -537,6 +550,31 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl) {
      return gsmpl->chain;
  }
  
@@ -1785,7 +1805,7 @@ index 9efb36f8a..b5707f11f 100644
  
          # Feed-forward up
 diff --git a/include/llama.h b/include/llama.h
-index a311ac202..741051161 100644
+index a311ac202..34585840f 100644
 --- a/include/llama.h
 +++ b/include/llama.h
 @@ -319,6 +319,20 @@ extern "C" {
@@ -1844,7 +1864,7 @@ index a311ac202..741051161 100644
  
      /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
      LLAMA_API struct llama_sampler * llama_sampler_init_penalties(
-@@ -1539,6 +1567,26 @@ extern "C" {
+@@ -1539,6 +1567,28 @@ extern "C" {
          int32_t n_p_eval;   // number of prompt tokens
          int32_t n_eval;     // number of generated tokens
          int32_t n_reused;   // number of times a ggml compute graph had been reused
@@ -1868,6 +1888,8 @@ index a311ac202..741051161 100644
 +        double   pgrn_stage_ms;
 +        double   pgrn_fetch_ms;
 +        double   pgrn_upload_ms;
++        uint64_t pgrn_lookahead_hits;   // routed experts the previous layer's lookahead predicted
++        uint64_t pgrn_lookahead_total;  // routed experts checked against a lookahead prediction
      };
  
      struct llama_perf_sampler_data {
@@ -1987,7 +2009,7 @@ index b74d53af4..c397c7512 100644
      LLM_TENSOR_CLS_OUT,
      LLM_TENSOR_CLS_NORM,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 3a469bc90..cfd0e1004 100644
+index 3a469bc90..300354f3e 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -11,6 +11,8 @@
@@ -2027,11 +2049,20 @@ index 3a469bc90..cfd0e1004 100644
  
          //const auto t_start_us = ggml_time_us();
  
-@@ -1343,7 +1357,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+@@ -1343,7 +1357,22 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
          //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
      }
  
 +    pgrn_error.clear();
++    if (model.pgrn_enabled()) {
++        const size_t nl = model.hparams.n_layer_all;
++        pgrn_la_tensor.assign(nl, nullptr);
++        if (pgrn_la_pred.size() != nl) pgrn_la_pred.assign(nl, {});
++        else for (auto & p : pgrn_la_pred) p.clear();
++        // Steering mask is a snapshot taken here, before the graph runs, so the selected
++        // experts depend only on cache state at ubatch start, never on I/O timing.
++        if (model.pgrn_steer_bonus() > 0.0f) model.pgrn_steer_refresh();
++    }
      const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
 +    if (!pgrn_error.empty()) {
 +        LLAMA_LOG_ERROR("%s: PGRN staging failed: %s\n", __func__, pgrn_error.c_str());
@@ -2041,7 +2072,7 @@ index 3a469bc90..cfd0e1004 100644
      if (status != GGML_STATUS_SUCCESS) {
          LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
          ret = status;
-@@ -2433,6 +2453,122 @@ ggml_status llama_context::graph_compute(
+@@ -2433,6 +2462,155 @@ ggml_status llama_context::graph_compute(
      return status;
  }
  
@@ -2079,6 +2110,10 @@ index 3a469bc90..cfd0e1004 100644
 +    uint16_t layer = 0;
 +    bool compact = false;
 +    const bool is_pgrn = tensor && llama_pgrn_tensor_layer(tensor->name, &layer, &compact);
++    if (ask && tensor && !is_pgrn && std::strncmp(tensor->name, "pgrn_lookahead-", 15) == 0) {
++        const int la_layer = std::atoi(tensor->name + 15);
++        if (la_layer >= 0 && (size_t) la_layer < pgrn_la_tensor.size()) pgrn_la_tensor[la_layer] = tensor;
++    }
 +    if (ask) {
 +        const bool user_wants = cparams.cb_eval && cparams.cb_eval(tensor, true, cparams.cb_eval_user_data);
 +        const bool wants = is_pgrn || user_wants;
@@ -2120,6 +2155,29 @@ index 3a469bc90..cfd0e1004 100644
 +        ggml_backend_tensor_get_2d(tensor, pgrn_ids.data(), 0, row_bytes,
 +                rows, tensor->nb[1], row_bytes);
 +        pgrn_topk_read_us += ggml_time_us() - read_start;
++        // Lookahead recall: how many of this layer's routed experts did the previous
++        // layer's lookahead predict? (raw expert ids, before any compact slot remap)
++        if (layer < pgrn_la_pred.size() && !pgrn_la_pred[layer].empty()) {
++            const auto & pred = pgrn_la_pred[layer];
++            for (size_t i = 0; i < rows * row_ids; ++i) {
++                ++pgrn_la_total;
++                if (std::find(pred.begin(), pred.end(), pgrn_ids[i]) != pred.end()) ++pgrn_la_hits;
++            }
++        }
++        // Read this layer's lookahead prediction for layer+1 now (it was computed earlier
++        // in the same split, so no extra GPU sync is needed).
++        std::vector<int32_t> * la_next = nullptr;
++        if (layer < pgrn_la_tensor.size() && pgrn_la_tensor[layer] && layer + 1u < pgrn_la_pred.size()) {
++            ggml_tensor * la = pgrn_la_tensor[layer];
++            pgrn_la_tensor[layer] = nullptr;
++            const size_t la_n = (size_t) ggml_nelements(la);
++            if (la->type == GGML_TYPE_I32 && la_n <= 4096 && ggml_is_contiguous(la)) {
++                pgrn_la_buf.resize(la_n);
++                ggml_backend_tensor_get(la, pgrn_la_buf.data(), 0, la_n * sizeof(int32_t));
++                la_next = &pgrn_la_pred[layer + 1];
++                la_next->assign(pgrn_la_buf.begin(), pgrn_la_buf.end());
++            }
++        }
 +        size_t copied = 0;
 +        size_t uploaded = 0;
 +        uint64_t fetch_us = 0;
@@ -2149,7 +2207,13 @@ index 3a469bc90..cfd0e1004 100644
 +        // Warm the NEXT layer's predicted experts on a background thread, overlapping this
 +        // layer's expert GEMM + the next layer's attention. Cache warm only - parity-neutral,
 +        // so the compact path's remapped ids here only ever waste a speculative read.
-+        model.pgrn_prefetch_kick(layer, pgrn_ids.data(), rows * row_ids);
++        if (la_next && !la_next->empty()) {
++            model.pgrn_steer_mark((uint16_t) (layer + 1), la_next->data(), la_next->size());
++            model.pgrn_prefetch_list((uint16_t) (layer + 1), la_next->data(), la_next->size());
++            ++pgrn_la_kicks;
++        } else {
++            model.pgrn_prefetch_kick(layer, pgrn_ids.data(), rows * row_ids);
++        }
 +        pgrn_stage_us += ggml_time_us() - stage_start;
 +        pgrn_experts_staged += copied;
 +        pgrn_bytes_uploaded += uploaded;
@@ -2164,7 +2228,7 @@ index 3a469bc90..cfd0e1004 100644
  llm_graph_cb llama_context::graph_get_cb() const {
      return [&](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
          if (il >= 0) {
-@@ -3171,6 +3307,24 @@ llama_perf_context_data llama_context::perf_get_data() const {
+@@ -3171,6 +3349,26 @@ llama_perf_context_data llama_context::perf_get_data() const {
      data.n_p_eval    = std::max(1, n_p_eval);
      data.n_eval      = std::max(1, n_eval);
      data.n_reused    = std::max(0, n_reused);
@@ -2186,10 +2250,12 @@ index 3a469bc90..cfd0e1004 100644
 +    data.pgrn_stage_ms               = 1e-3 * pgrn_stage_us;
 +    data.pgrn_fetch_ms               = 1e-3 * pgrn_fetch_us;
 +    data.pgrn_upload_ms              = 1e-3 * pgrn_upload_us;
++    data.pgrn_lookahead_hits         = pgrn_la_hits;
++    data.pgrn_lookahead_total        = pgrn_la_total;
  
      return data;
  }
-@@ -3180,6 +3334,10 @@ void llama_context::perf_reset() {
+@@ -3180,6 +3378,10 @@ void llama_context::perf_reset() {
      t_eval_us   = n_eval = 0;
      t_p_eval_us = n_p_eval = 0;
      n_reused    = 0;
@@ -2200,7 +2266,7 @@ index 3a469bc90..cfd0e1004 100644
  }
  
  llama_memory_breakdown llama_context::memory_breakdown() const {
-@@ -3549,6 +3707,22 @@ llama_context * llama_init_from_model(
+@@ -3549,6 +3751,22 @@ llama_context * llama_init_from_model(
  
      try {
          auto * ctx = new llama_context(*model, params);
@@ -2223,7 +2289,7 @@ index 3a469bc90..cfd0e1004 100644
          return ctx;
      } catch (const std::exception & err) {
          LLAMA_LOG_ERROR("%s: failed to initialize the context: %s\n", __func__, err.what());
-@@ -4076,6 +4250,25 @@ void llama_perf_context_print(const llama_context * ctx) {
+@@ -4076,6 +4294,32 @@ void llama_perf_context_print(const llama_context * ctx) {
              __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
      LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
      LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
@@ -2237,6 +2303,13 @@ index 3a469bc90..cfd0e1004 100644
 +                __func__, (unsigned long long) data.pgrn_hot_slots, (unsigned long long) data.pgrn_warm_slots,
 +                (unsigned long long) data.pgrn_hot_hits, (unsigned long long) data.pgrn_warm_hits,
 +                (unsigned long long) data.pgrn_promotions, (unsigned long long) data.pgrn_demotions);
++        uint64_t la_hits = 0, la_total = 0, la_kicks = 0;
++        ctx->pgrn_lookahead_stats(&la_hits, &la_total, &la_kicks);
++        if (la_total > 0) {
++            LLAMA_LOG_INFO("%s: PGRN lookahead recall = %.2f%% (%llu/%llu routed), kicks = %llu\n", __func__,
++                    100.0 * la_hits / la_total, (unsigned long long) la_hits,
++                    (unsigned long long) la_total, (unsigned long long) la_kicks);
++        }
 +        LLAMA_LOG_INFO("%s: PGRN compact slot compute = %s\n",
 +                __func__, data.pgrn_compact_slots ? "enabled" : "disabled");
 +        LLAMA_LOG_INFO("%s: PGRN scratch = %.2f MiB, staged experts = %llu, uploaded = %.2f MiB\n",
@@ -2250,7 +2323,7 @@ index 3a469bc90..cfd0e1004 100644
  
  void llama_perf_context_reset(llama_context * ctx) {
 diff --git a/src/llama-context.h b/src/llama-context.h
-index bf91daa8b..e0aaef4a2 100644
+index bf91daa8b..e9867839d 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -262,6 +262,9 @@ private:
@@ -2263,7 +2336,7 @@ index bf91daa8b..e0aaef4a2 100644
      // disable auto fused ops (Flash Attention, Gated Delta Net) whose op lands on a device
      // that differs from the layer it belongs to (usually due to missing backend support)
      void resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs);
-@@ -281,6 +284,17 @@ private:
+@@ -281,6 +284,30 @@ private:
  
      llama_cparams cparams;
  
@@ -2277,6 +2350,19 @@ index bf91daa8b..e0aaef4a2 100644
 +    int64_t pgrn_stage_us = 0;
 +    uint64_t pgrn_fetch_us = 0;
 +    uint64_t pgrn_upload_us = 0;
++    // lookahead gating: per-layer predicted tensor (captured in the ask pass) and the
++    // prediction made for each layer by its predecessor, for live recall accounting.
++    std::vector<ggml_tensor *> pgrn_la_tensor;
++    std::vector<std::vector<int32_t>> pgrn_la_pred;
++    std::vector<int32_t> pgrn_la_buf;
++    uint64_t pgrn_la_hits = 0;
++    uint64_t pgrn_la_total = 0;
++    uint64_t pgrn_la_kicks = 0;
++public:
++    void pgrn_lookahead_stats(uint64_t * hits, uint64_t * total, uint64_t * kicks) const {
++        *hits = pgrn_la_hits; *total = pgrn_la_total; *kicks = pgrn_la_kicks;
++    }
++private:
 +
      llama_adapter_cvec_ptr  cvec;
      llama_adapter_loras_ptr loras;
@@ -2709,7 +2795,7 @@ index a3928523b..22061f5ff 100644
      const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index eaf3f35d2..87f219ad9 100644
+index eaf3f35d2..b7d678ef5 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -7,6 +7,11 @@
@@ -2762,7 +2848,7 @@ index eaf3f35d2..87f219ad9 100644
  
      uint64_t n_elements = 0;
  
-@@ -1002,6 +1015,14 @@ struct llama_model::impl {
+@@ -1002,6 +1015,22 @@ struct llama_model::impl {
      // contexts where the model tensors metadata is stored as well as the corresponding buffers:
      std::vector<std::pair<ggml_context_ptr, std::vector<ggml_backend_buffer_ptr>>> ctxs_bufs;
  
@@ -2772,12 +2858,20 @@ index eaf3f35d2..87f219ad9 100644
 +    pgr_runtime * pgrn_runtime = nullptr;
 +    pgr_scratch * pgrn_scratch = nullptr;
 +    pgr_compact * pgrn_compact = nullptr;
++    int   pgrn_lookahead = -1;
++    float pgrn_steer = 0.0f;
++    bool  pgrn_steer_la = false;
++    ggml_context_ptr pgrn_steer_ctx;
++    ggml_backend_buffer_ptr pgrn_steer_buf;
++    ggml_tensor * pgrn_steer_t = nullptr;
++    std::vector<float> pgrn_steer_host;
++    std::vector<uint8_t> pgrn_steer_mask;
 +    pgr_admission_plan pgrn_plan = {};
 +
      buft_list_t cpu_buft_list;
      std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
  
-@@ -1491,6 +1512,151 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1491,6 +1520,176 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
      }
      ml.done_getting_tensors();
  
@@ -2920,6 +3014,31 @@ index eaf3f35d2..87f219ad9 100644
 +            }
 +        }
 +        pimpl->pgrn_external_ctx = std::move(external);
++        if (const char * env = std::getenv("PGRN_LOOKAHEAD")) {
++            pimpl->pgrn_lookahead = std::atoi(env);
++        }
++        if (const char * env = std::getenv("PGRN_STEER")) {
++            pimpl->pgrn_steer = (float) std::atof(env);
++        }
++        if (const char * env = std::getenv("PGRN_STEER_LA")) {
++            pimpl->pgrn_steer_la = std::atoi(env) != 0;
++        }
++        if (pimpl->pgrn_steer > 0.0f && hparams.n_expert > 0) {
++            ggml_init_params ip = { ggml_tensor_overhead() * 2, nullptr, true };
++            pimpl->pgrn_steer_ctx.reset(ggml_init(ip));
++            pimpl->pgrn_steer_t = ggml_new_tensor_2d(pimpl->pgrn_steer_ctx.get(), GGML_TYPE_F32,
++                    hparams.n_expert, hparams.n_layer_all);
++            ggml_set_name(pimpl->pgrn_steer_t, "pgrn_steer_bias");
++            pimpl->pgrn_steer_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(
++                    pimpl->pgrn_steer_ctx.get(), scratch_buft));
++            if (!pimpl->pgrn_steer_buf) throw std::runtime_error("PGRN steer bias allocation failed");
++            pimpl->pgrn_steer_host.assign((size_t) hparams.n_expert * hparams.n_layer_all, 0.0f);
++            pimpl->pgrn_steer_mask.assign(hparams.n_expert, 0);
++            ggml_backend_tensor_set(pimpl->pgrn_steer_t, pimpl->pgrn_steer_host.data(), 0,
++                    ggml_nbytes(pimpl->pgrn_steer_t));
++        }
++        LLAMA_LOG_INFO("%s: PGRN lookahead margin = %d, steer bonus = %.4f\n", __func__,
++                pimpl->pgrn_lookahead, pimpl->pgrn_steer);
 +        LLAMA_LOG_INFO("%s: PGRN admitted cache = %.2f MiB, scratch = %.2f MiB, headroom = %.2f MiB\n",
 +                __func__, pgr_runtime_cache_bytes(pimpl->pgrn_runtime) / 1048576.0,
 +                pgr_scratch_bytes(pimpl->pgrn_scratch) / 1048576.0,
@@ -2929,7 +3048,7 @@ index eaf3f35d2..87f219ad9 100644
      // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
      // If sidecar scales exist, the output weight must be an actual output tensor.
      GGML_ASSERT(!(output && tok_embd &&
-@@ -1503,6 +1669,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1503,6 +1702,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
              tensors_by_name.emplace_back(ggml_get_name(cur), cur);
          }
      }
@@ -2942,7 +3061,7 @@ index eaf3f35d2..87f219ad9 100644
  
      ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
      pimpl->mappings.reserve(ml.mappings.size());
-@@ -1991,6 +2163,151 @@ bool llama_model::has_tensor_overrides() const {
+@@ -1991,6 +2196,212 @@ bool llama_model::has_tensor_overrides() const {
      return pimpl->has_tensor_overrides;
  }
  
@@ -3031,6 +3150,67 @@ index eaf3f35d2..87f219ad9 100644
 +    }
 +}
 +
++int llama_model::pgrn_lookahead_margin() const {
++    return pgrn_enabled() ? pimpl->pgrn_lookahead : -1;
++}
++
++void llama_model::pgrn_prefetch_list(uint16_t layer, const int32_t * experts, size_t n) const {
++    if (!pgrn_enabled() || !experts || n == 0) return;
++    uint16_t list[256];
++    int m = 0;
++    for (size_t i = 0; i < n && m < 256; ++i) {
++        const int32_t v = experts[i];
++        if (v < 0 || v > 0xFFFF) continue;
++        bool dup = false;
++        for (int k = 0; k < m; ++k) if (list[k] == (uint16_t) v) { dup = true; break; }
++        if (!dup) list[m++] = (uint16_t) v;
++    }
++    pgr_runtime_prefetch_kick_list(pimpl->pgrn_runtime, layer, list, m);
++}
++
++float llama_model::pgrn_steer_bonus() const {
++    return pgrn_enabled() ? pimpl->pgrn_steer : 0.0f;
++}
++
++ggml_tensor * llama_model::pgrn_steer_tensor() const {
++    return pgrn_enabled() ? pimpl->pgrn_steer_t : nullptr;
++}
++
++void llama_model::pgrn_steer_refresh() const {
++    if (!pgrn_enabled() || !pimpl->pgrn_steer_t) return;
++    const int n_expert = (int) hparams.n_expert;
++    const float bonus = pimpl->pgrn_steer;
++    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
++        float * row = pimpl->pgrn_steer_host.data() + (size_t) il * n_expert;
++        if (pgr_runtime_resident_mask(pimpl->pgrn_runtime, (uint16_t) il,
++                    pimpl->pgrn_steer_mask.data(), n_expert) < 0) {
++            std::fill(row, row + n_expert, 0.0f);
++            continue;
++        }
++        for (int e = 0; e < n_expert; ++e) row[e] = pimpl->pgrn_steer_mask[e] ? bonus : 0.0f;
++    }
++    ggml_backend_tensor_set(pimpl->pgrn_steer_t, pimpl->pgrn_steer_host.data(), 0,
++            ggml_nbytes(pimpl->pgrn_steer_t));
++}
++
++void llama_model::pgrn_steer_mark(uint16_t layer, const int32_t * experts, size_t n) const {
++    if (!pgrn_enabled() || !pimpl->pgrn_steer_t || !pimpl->pgrn_steer_la || !experts) return;
++    const int n_expert = (int) hparams.n_expert;
++    if (layer >= hparams.n_layer_all) return;
++    float * row = pimpl->pgrn_steer_host.data() + (size_t) layer * n_expert;
++    bool changed = false;
++    for (size_t i = 0; i < n; ++i) {
++        const int32_t e = experts[i];
++        if (e < 0 || e >= n_expert || row[e] != 0.0f) continue;
++        row[e] = pimpl->pgrn_steer;
++        changed = true;
++    }
++    if (changed) {
++        const size_t row_bytes = (size_t) n_expert * sizeof(float);
++        ggml_backend_tensor_set(pimpl->pgrn_steer_t, row, (size_t) layer * row_bytes, row_bytes);
++    }
++}
++
 +bool llama_model::pgrn_has_coupling() const {
 +    return pgrn_enabled() && pgr_runtime_has_coupling(pimpl->pgrn_runtime) != 0;
 +}
@@ -3094,7 +3274,7 @@ index eaf3f35d2..87f219ad9 100644
  const ggml_tensor * llama_model::get_tensor(const char * name) const {
      auto it = std::find_if(tensors_by_name.begin(), tensors_by_name.end(),
              [name](const std::pair<std::string, ggml_tensor *> & it) {
-@@ -2310,6 +2627,17 @@ llama_model_params llama_model_default_params() {
+@@ -2310,6 +2721,17 @@ llama_model_params llama_model_default_params() {
          /*.progress_callback           =*/ nullptr,
          /*.progress_callback_user_data =*/ nullptr,
          /*.kv_overrides                =*/ nullptr,
@@ -3112,7 +3292,7 @@ index eaf3f35d2..87f219ad9 100644
          /*.vocab_only                  =*/ false,
          /*.use_mmap                    =*/ true,
          /*.use_direct_io               =*/ false,
-@@ -2318,6 +2646,7 @@ llama_model_params llama_model_default_params() {
+@@ -2318,6 +2740,7 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -3120,7 +3300,7 @@ index eaf3f35d2..87f219ad9 100644
      };
  
      return result;
-@@ -2538,6 +2867,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -2538,6 +2961,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_COGVLM:
          case LLM_ARCH_PANGU_EMBED:
          case LLM_ARCH_AFMOE:
@@ -3128,7 +3308,7 @@ index eaf3f35d2..87f219ad9 100644
          case LLM_ARCH_QWEN3NEXT:
          case LLM_ARCH_MIMO2:
          case LLM_ARCH_STEP35:
-@@ -2708,6 +3038,10 @@ int32_t llama_model_n_expert(const struct llama_model * model) {
+@@ -2708,6 +3132,10 @@ int32_t llama_model_n_expert(const struct llama_model * model) {
      return model->hparams.n_expert;
  }
  
@@ -3140,7 +3320,7 @@ index eaf3f35d2..87f219ad9 100644
      return (int32_t)model->devices.size();
  }
 diff --git a/src/llama-model.h b/src/llama-model.h
-index 45b054ced..b22cff9c6 100644
+index 45b054ced..ce53bd9b1 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
 @@ -1,6 +1,7 @@
@@ -3159,7 +3339,7 @@ index 45b054ced..b22cff9c6 100644
      LLM_TYPE_31B_A3_5B,
      LLM_TYPE_35B_A3B, // Qwen3.5
      LLM_TYPE_48B_A3B, // Kimi Linear
-@@ -661,6 +663,36 @@ struct llama_model {
+@@ -661,6 +663,51 @@ struct llama_model {
  
      bool has_tensor_overrides() const;
  
@@ -3177,7 +3357,22 @@ index 45b054ced..b22cff9c6 100644
 +     * experts that fired at src_layer) when one is loaded, else the marginal hot set for
 +     * src_layer+1. `fired` are the router's selected expert ids for src_layer. */
 +    void pgrn_prefetch_kick(uint16_t src_layer, const int32_t * fired, size_t n_fired) const;
-+    bool pgrn_has_coupling() const;                    /* a PGCC1 coupled table is loaded */
++    bool pgrn_has_coupling() const;
++    // Lookahead gating: next layer's router applied to this layer's MoE input predicts the
++    // next layer's experts; they are warmed while this layer computes. Lossless (warm only).
++    // PGRN_LOOKAHEAD=<extra experts beyond top-k>; unset/negative = off.
++    int  pgrn_lookahead_margin() const;
++    void pgrn_prefetch_list(uint16_t layer, const int32_t * experts, size_t n) const;
++    // Cache-steered routing (opt-in, lossy): a per-layer bonus added to the router's
++    // SELECTION probabilities for experts resident at ubatch start; mixing weights stay
++    // the unbiased probabilities. PGRN_STEER=<bonus>, 0/unset = off (exact routing).
++    float pgrn_steer_bonus() const;
++    ggml_tensor * pgrn_steer_tensor() const;          /* [n_expert, n_layer] F32 or nullptr */
++    void pgrn_steer_refresh() const;                  /* upload bonus*resident mask */
++    // PSR synergy (PGRN_STEER_LA=1): experts the lookahead is prefetching for `layer` join the
++    // logical cache, so they get the bonus too. Called at the previous layer's top-k sync,
++    // before `layer` runs; deterministic (depends on the prediction, not on I/O timing).
++    void pgrn_steer_mark(uint16_t layer, const int32_t * experts, size_t n) const;                    /* a PGCC1 coupled table is loaded */
 +    size_t pgrn_cache_bytes() const;
 +    size_t pgrn_cache_high_water_bytes() const;
 +    size_t pgrn_scratch_bytes() const;
@@ -3511,10 +3706,10 @@ index beab9f6bc..b51d4401f 100644
      llama_model_ernie4_5(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index 7b0876cbb..1a27864c1 100644
+index 7b0876cbb..ad4bc477c 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
-@@ -497,12 +497,17 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+@@ -497,13 +497,36 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
      // Check if this is an MoE layer
      GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
  
@@ -3523,19 +3718,39 @@ index 7b0876cbb..1a27864c1 100644
 +    ggml_tensor * compact_up = compact ? model.pgrn_compact_tensor(static_cast<uint16_t>(il), 1) : nullptr;
 +    ggml_tensor * compact_gate = compact ? model.pgrn_compact_tensor(static_cast<uint16_t>(il), 0) : nullptr;
 +    ggml_tensor * compact_down = compact ? model.pgrn_compact_tensor(static_cast<uint16_t>(il), 2) : nullptr;
++    // Lookahead gating: score the NEXT layer's router on this layer's MoE input. The
++    // eval callback reads it at this layer's top-k sync (no extra GPU sync) and warms the
++    // predicted experts while this layer's experts and the next attention run.
++    const int la_margin = model.pgrn_lookahead_margin();
++    if (la_margin >= 0 && n_tokens <= 8 && il + 1 < (int) hparams.n_layer() &&
++            model.layers[il + 1].ffn_gate_inp != nullptr) {
++        const int64_t la_k = std::min<int64_t>(n_expert, n_expert_used + la_margin);
++        ggml_tensor * la_logits = build_lora_mm(model.layers[il + 1].ffn_gate_inp, cur);
++        ggml_tensor * la = ggml_argsort_top_k(ctx0, la_logits, la_k);
++        cb(la, "pgrn_lookahead", il);
++        ggml_set_output(la);
++        ggml_build_forward_expand(gf, la);
++    }
++    // Cache-steered routing: bonus on resident experts' SELECTION probability only.
++    ggml_tensor * steer = nullptr;
++    if (ggml_tensor * st = model.pgrn_steer_tensor()) {
++        steer = ggml_view_1d(ctx0, st, st->ne[0], (size_t) il * st->nb[1]);
++    }
      ggml_tensor * moe_out =
          build_moe_ffn(cur,
              model.layers[il].ffn_gate_inp,
 -            model.layers[il].ffn_up_exps,
 -            model.layers[il].ffn_gate_exps,
 -            model.layers[il].ffn_down_exps,
+-            nullptr,
 +            compact ? compact_up : model.layers[il].ffn_up_exps,
 +            compact ? compact_gate : model.layers[il].ffn_gate_exps,
 +            compact ? compact_down : model.layers[il].ffn_down_exps,
-             nullptr,
++            steer,
              n_expert, n_expert_used,
              LLM_FFN_SILU, true,
-@@ -511,7 +516,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+             hparams.expert_weights_scale,
+@@ -511,7 +534,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
              nullptr, model.layers[il].ffn_gate_up_exps,
              model.layers[il].ffn_up_exps_s,
              model.layers[il].ffn_gate_exps_s,
@@ -3546,7 +3761,7 @@ index 7b0876cbb..1a27864c1 100644
      cb(moe_out, "ffn_moe_out", il);
  
      // Add shared experts if present - following Qwen3Next reference implementation
-@@ -675,12 +682,14 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
+@@ -675,12 +700,14 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
      cb(cur, "mtp_attn_post_norm", il);
  
      // MoE FFN — routed experts plus gated shared expert (mirrors qwen35moe).
@@ -3564,7 +3779,7 @@ index 7b0876cbb..1a27864c1 100644
              nullptr,
              n_expert, n_expert_used,
              LLM_FFN_SILU, true,
-@@ -689,7 +698,9 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
+@@ -689,7 +716,9 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
              nullptr, layer.ffn_gate_up_exps,
              layer.ffn_up_exps_s,
              layer.ffn_gate_exps_s,
@@ -4078,6 +4293,55 @@ index b5c40884f..1fed5c770 100644
      server-chat.cpp
      server-chat.h
      server-task.cpp
+diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
+index 78b5c6819..2e0689f49 100644
+--- a/tools/server/server-common.cpp
++++ b/tools/server/server-common.cpp
+@@ -912,7 +912,43 @@ json oaicompat_chat_params_parse(
+     auto tools = json_value(body, "tools", json());
+     auto has_tools = tools.is_array() && !tools.empty();
+     auto stream = json_value(body, "stream", false);
+-    auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
++    auto tool_choice = std::string("auto");
++    if (body.contains("tool_choice")) {
++        const auto & requested_choice = body.at("tool_choice");
++        if (requested_choice.is_string()) {
++            tool_choice = requested_choice.get<std::string>();
++        } else if (requested_choice.is_object()) {
++            const auto type = json_value(requested_choice, "type", std::string());
++            const auto function = json_value(requested_choice, "function", json::object());
++            const auto name = json_value(function, "name", std::string());
++            if (type != "function" || name.empty()) {
++                throw std::invalid_argument(
++                    "tool_choice object must select a non-empty function name");
++            }
++            if (!has_tools) {
++                throw std::invalid_argument("tool_choice function requires tools");
++            }
++
++            json selected = json::array();
++            for (const auto & tool : tools) {
++                const auto tool_function = json_value(tool, "function", json::object());
++                if (json_value(tool_function, "name", std::string()) == name) {
++                    selected.push_back(tool);
++                }
++            }
++            if (selected.empty()) {
++                throw std::invalid_argument(
++                    "tool_choice function '" + name + "' is not present in tools");
++            }
++            // The common grammar understands required/auto/none. Filtering to
++            // the selected schema plus required is equivalent to OpenAI's
++            // specific-function choice and prevents any other call.
++            tools = std::move(selected);
++            tool_choice = "required";
++        } else {
++            throw std::invalid_argument("tool_choice must be a string or function object");
++        }
++    }
+ 
+     if (!opt.use_jinja) {
+         if (has_tools) {
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
 index 7564ad4e9..1843a4e15 100644
 --- a/tools/server/server-context.cpp
@@ -4403,56 +4667,6 @@ index 20effbb14..5fbfb1104 100644
      llama_backend_init();
      llama_numa_init(params.numa);
  
-diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
-index 78b5c6819..2e0689f49 100644
---- a/tools/server/server-common.cpp
-+++ b/tools/server/server-common.cpp
-@@ -912,7 +912,43 @@ json oaicompat_chat_params_parse(
-     auto tools = json_value(body, "tools", json());
-     auto has_tools = tools.is_array() && !tools.empty();
-     auto stream = json_value(body, "stream", false);
--    auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
-+    auto tool_choice = std::string("auto");
-+    if (body.contains("tool_choice")) {
-+        const auto & requested_choice = body.at("tool_choice");
-+        if (requested_choice.is_string()) {
-+            tool_choice = requested_choice.get<std::string>();
-+        } else if (requested_choice.is_object()) {
-+            const auto type = json_value(requested_choice, "type", std::string());
-+            const auto function = json_value(requested_choice, "function", json::object());
-+            const auto name = json_value(function, "name", std::string());
-+            if (type != "function" || name.empty()) {
-+                throw std::invalid_argument(
-+                    "tool_choice object must select a non-empty function name");
-+            }
-+            if (!has_tools) {
-+                throw std::invalid_argument("tool_choice function requires tools");
-+            }
-+
-+            json selected = json::array();
-+            for (const auto & tool : tools) {
-+                const auto tool_function = json_value(tool, "function", json::object());
-+                if (json_value(tool_function, "name", std::string()) == name) {
-+                    selected.push_back(tool);
-+                }
-+            }
-+            if (selected.empty()) {
-+                throw std::invalid_argument(
-+                    "tool_choice function '" + name + "' is not present in tools");
-+            }
-+            // The common grammar understands required/auto/none. Filtering to
-+            // the selected schema plus required is equivalent to OpenAI's
-+            // specific-function choice and prevents any other call.
-+            tools = std::move(selected);
-+            tool_choice = "required";
-+        } else {
-+            throw std::invalid_argument("tool_choice must be a string or function object");
-+        }
-+    }
--
-+
-     if (!opt.use_jinja) {
-         if (has_tools) {
 diff --git a/tools/server/tests/unit/test_tool_call.py b/tools/server/tests/unit/test_tool_call.py
 index 9fa84d165..af67a51a5 100755
 --- a/tools/server/tests/unit/test_tool_call.py
@@ -4460,8 +4674,7 @@ index 9fa84d165..af67a51a5 100755
 @@ -98,6 +98,27 @@ WEATHER_TOOL = ToolDefinition(
      ),
  )
--
-+
+ 
 +
 +@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
 +def test_specific_openai_tool_choice_object(stream: CompletionMode):

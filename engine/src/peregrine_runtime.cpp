@@ -761,6 +761,45 @@ void pgr_runtime_prefetch_kick_online(pgr_runtime * runtime, uint16_t src_layer,
     runtime->co_prev_layer = (int) src_layer;
 }
 
+void pgr_runtime_prefetch_kick_list(pgr_runtime * runtime, uint16_t layer,
+                                    const uint16_t * experts, int n) {
+    if (!runtime || !experts || n <= 0) return;
+    if (pgr_runtime_layer_index(runtime, layer) == SIZE_MAX) return;
+    pgr_runtime_prefetch_join(runtime);   /* one prefetch in flight */
+    const int cap = (int) pgr_runtime_layer_capacity(runtime, layer) / 2;
+    if (n > cap) n = cap;
+    if (n <= 0) return;
+    /* Only spawn a thread when something is actually cold: a fully-resident prediction
+     * (the common case at high hit-rates) must cost nothing. */
+    const size_t index = pgr_runtime_layer_index(runtime, layer);
+    std::vector<uint16_t> cold;
+    cold.reserve((size_t) n);
+    for (int i = 0; i < n; ++i) {
+        const long key = static_cast<long>((static_cast<unsigned long>(layer) << 16) | experts[i]);
+        if (!pgr_stream_is_resident(runtime->streams[index], key)) cold.push_back(experts[i]);
+    }
+    if (cold.empty()) return;
+    runtime->prefetch_pending = true;
+    runtime->prefetch_layer = layer;
+    runtime->prefetch_thread = std::thread([runtime, layer, cold]() {
+        pgr_runtime_prefetch(runtime, layer, cold.data(), (int) cold.size());
+    });
+}
+
+int pgr_runtime_resident_mask(pgr_runtime * runtime, uint16_t layer, uint8_t * mask, int n_expert) {
+    if (!runtime || !mask || n_expert <= 0) return -1;
+    pgr_runtime_prefetch_join(runtime);
+    const size_t index = pgr_runtime_layer_index(runtime, layer);
+    if (index == SIZE_MAX) { std::memset(mask, 0, (size_t) n_expert); return 0; }
+    int count = 0;
+    for (int e = 0; e < n_expert; ++e) {
+        const long key = static_cast<long>((static_cast<unsigned long>(layer) << 16) | (unsigned) e);
+        mask[e] = (uint8_t) pgr_stream_is_resident(runtime->streams[index], key);
+        count += mask[e];
+    }
+    return count;
+}
+
 void pgr_runtime_prefetch_settle(pgr_runtime * runtime, uint16_t layer) {
     if (runtime && runtime->prefetch_pending && runtime->prefetch_layer == layer) {
         pgr_runtime_prefetch_join(runtime);
