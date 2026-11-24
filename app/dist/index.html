@@ -17,7 +17,7 @@
     </div>
     <div class="topbar-right">
       <!-- Always-visible AI-server observability: tok/s · cache · RSS (honest – when down). -->
-      <div id="obsStrip" class="obs-strip" title="Server: last tok/s · cache hit · RSS" aria-label="Server status">
+      <button type="button" id="obsStrip" class="obs-strip" title="Server: last tok/s · cache hit · RSS">
         <span class="obs-item"><span class="obs-k" data-i18n="obs.tps">tok/s</span> <span id="obsTps" class="obs-v">–</span></span>
         <span class="obs-sep" aria-hidden="true">·</span>
         <span class="obs-item"><span class="obs-k" data-i18n="obs.cache">cache</span> <span id="obsCache" class="obs-v">–</span></span>
@@ -25,7 +25,7 @@
         <span class="obs-item"><span class="obs-k" data-i18n="obs.rss">RSS</span> <span id="obsRss" class="obs-v">–</span></span>
         <span class="obs-sep" aria-hidden="true">·</span>
         <span class="obs-item"><span class="obs-k" data-i18n="obs.cfg">cfg</span> <span id="obsCfg" class="obs-v">–</span></span>
-      </div>
+      </button>
       <div class="top-cluster">
         <select id="lang" class="langsel" title="Language" aria-label="Language">
           <option value="en">EN</option>
@@ -49,6 +49,7 @@
     <div class="act-body">
       <div class="act-title" id="actTitle"></div>
       <div class="act-sub" id="actSub"></div>
+      <div class="act-why" id="actWhy"></div>
       <div class="meter act-meter"><div id="actBar" class="meter-fill"></div></div>
     </div>
     <div class="act-pct" id="actPct"></div>
@@ -273,7 +274,51 @@
            behind it; where two used to show the same quantity, the duplicate is
            gone rather than relabelled. -->
       <section class="panel" data-panel="status" hidden>
-        <nav class="anchors" id="statusAnchors">
+        <!-- Engine cockpit: the four numbers that decide how fast a streamed MoE
+             runs, each with its last minute as a trend, and one line saying what
+             limits speed right now. Fed by the same live_stats tick as the
+             sections below; a slot whose reading does not exist hides itself. -->
+        <section class="card cockpit" id="cockpit" aria-labelledby="cockpitTitle">
+          <div class="cockpit-head">
+            <h2 id="cockpitTitle" data-i18n="cockpit.title">Engine</h2>
+            <span class="cockpit-model" id="cockpitModel">–</span>
+          </div>
+          <p class="cockpit-why" id="cockpitWhy" data-kind="stopped">
+            <span class="why-mark" aria-hidden="true"></span>
+            <span id="cockpitWhyText">–</span>
+            <span class="info" data-i18n-tip="tip.cockpitWhy">ⓘ</span>
+          </p>
+          <div class="cockpit-grid">
+            <div class="ck ck-lead" id="ckTps" role="group" aria-labelledby="ckTpsLabel">
+              <div class="ck-label" id="ckTpsLabel" data-i18n="cockpit.tps">Decode speed</div>
+              <div class="ck-value" id="ckTpsValWrap"><span id="ckTpsVal">–</span><span class="ck-unit">tok/s</span></div>
+              <canvas id="ckTpsSpark" class="ck-spark" aria-hidden="true"></canvas>
+              <div class="ck-note" id="ckTpsNote"></div>
+            </div>
+            <div class="ck" id="ckHit" role="group" aria-labelledby="ckHitLabel">
+              <div class="ck-label" id="ckHitLabel" data-i18n="cockpit.hit">Expert cache hits</div>
+              <div class="ck-value" id="ckHitValWrap"><span id="ckHitVal">–</span><span class="ck-unit">%</span></div>
+              <canvas id="ckHitSpark" class="ck-spark" aria-hidden="true"></canvas>
+              <div class="ck-note" id="ckHitNote"></div>
+            </div>
+            <div class="ck" id="ckSsd" role="group" aria-labelledby="ckSsdLabel">
+              <div class="ck-label" id="ckSsdLabel" data-i18n="cockpit.ssd">SSD reads</div>
+              <div class="ck-value" id="ckSsdValWrap"><span id="ckSsdVal">–</span><span class="ck-unit">MB/s</span></div>
+              <canvas id="ckSsdSpark" class="ck-spark" aria-hidden="true"></canvas>
+              <div class="ck-note" id="ckSsdNote"></div>
+            </div>
+            <div class="ck" id="ckRam" role="group" aria-labelledby="ckRamLabel">
+              <div class="ck-label" id="ckRamLabel" data-i18n="cockpit.ram">RAM headroom</div>
+              <div class="ck-value" id="ckRamValWrap"><span id="ckRamVal">–</span><span class="ck-unit">GiB</span></div>
+              <canvas id="ckRamSpark" class="ck-spark" aria-hidden="true"></canvas>
+              <div class="ck-note" id="ckRamNote"></div>
+            </div>
+          </div>
+          <!-- Announces only when the limiting factor changes, not every tick. -->
+          <div class="sr-only" id="cockpitAnnounce" role="status" aria-live="polite"></div>
+        </section>
+
+        <nav class="anchors" id="statusAnchors" data-i18n-aria="anchor.label" aria-label="Live sections">
           <button class="anchor anchor-on" data-anchor="secServing" data-i18n="anchor.serving">Serving</button>
           <button class="anchor" data-anchor="secStreaming" data-i18n="anchor.streaming">Streaming</button>
           <button class="anchor" data-anchor="secMemory" data-i18n="anchor.memory">Speicher</button>
@@ -776,6 +821,40 @@
             <div class="adv-warn" data-i18n="adv.mirrorWarn">⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.</div>
             <label class="chk adv-chk"><input type="checkbox" id="bufferedReads" /> <span data-i18n="adv.buffered">Advanced: gepufferte Reads (Nicht-NVMe-Laufwerke)</span></label>
             <label class="chk adv-chk"><input type="checkbox" id="onlinePredict" /> <span data-i18n="adv.predict">Advanced: Predictive Prefetch (experimentell)</span> <span class="info" data-i18n-tip="tip.predict">ⓘ</span></label>
+
+            <!-- Upcoming engine options. Default OFF, persisted like the other
+                 slipstream.pgrn.* settings and sent with Start as
+                 cfg.pgrn_lookahead / cfg.pgrn_steer. TODO(engine): the Rust
+                 ServerConfig does not read them yet (serde drops unknown
+                 fields); it should map them to PGRN_LOOKAHEAD (int, layers
+                 ahead, e.g. 2) and PGRN_STEER (float strength 0–0.10), next to
+                 PGRN_ONLINE_PREDICT. -->
+            <fieldset class="adv-group" id="nextEngineOptions">
+              <legend><span data-i18n="adv.nextTitle">Upcoming engine options</span> <span class="tag" data-i18n="adv.nextTag">needs a newer engine</span></legend>
+              <p class="hint" data-i18n="adv.nextHint">Saved now and sent with Start. The engine in this build ignores them until it supports them, so they change nothing yet.</p>
+              <div class="adv-opt">
+                <label class="chk adv-chk" for="pgrnLookahead"><input type="checkbox" id="pgrnLookahead" aria-describedby="pgrnLookaheadHint" /> <span data-i18n="adv.lookahead">Lookahead prefetch</span> <span class="tag tag-lossless" data-i18n="adv.lossless">lossless</span> <span class="info" data-i18n-tip="tip.lookahead">ⓘ</span></label>
+                <div class="adv-sub" id="pgrnLookaheadDepthWrap" aria-disabled="true">
+                  <label for="pgrnLookaheadDepth" data-i18n="adv.lookaheadDepth">Layers ahead</label>
+                  <select id="pgrnLookaheadDepth" disabled>
+                    <option value="1">1</option>
+                    <option value="2" selected>2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                  </select>
+                </div>
+                <p class="hint" id="pgrnLookaheadHint" data-i18n="hint.lookahead">Predicts which experts the next layers will route to and reads them from SSD before they are needed. Output stays identical; costs some extra SSD reads when a guess is wrong.</p>
+              </div>
+              <div class="adv-opt">
+                <label class="chk adv-chk" for="pgrnSteer"><input type="checkbox" id="pgrnSteer" aria-describedby="pgrnSteerWarn" /> <span data-i18n="adv.steer">Cache-steered routing (Turbo)</span> <span class="tag tag-lossy" data-i18n="adv.lossy">changes output</span> <span class="info" data-i18n-tip="tip.steer">ⓘ</span></label>
+                <div class="adv-sub" id="pgrnSteerStrengthWrap" aria-disabled="true">
+                  <label for="pgrnSteerStrength" data-i18n="adv.steerStrength">Strength</label>
+                  <input type="range" id="pgrnSteerStrength" min="0" max="0.10" step="0.01" value="0.05" disabled aria-describedby="pgrnSteerWarn" />
+                  <output id="pgrnSteerVal" for="pgrnSteerStrength">0.05</output>
+                </div>
+                <p class="adv-warn" id="pgrnSteerWarn" data-i18n="adv.steerWarn">Trades a little quality for speed: when two experts score almost the same, the router prefers the one already in RAM. Answers can differ from the unmodified model. Start low (0.02–0.05) and compare on your own prompts.</p>
+              </div>
+            </fieldset>
           </details>
         </div>
 
