@@ -3525,3 +3525,24 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 - Turbo v2 quality re-check on the new pin (new-pin exact-routing base): decode (ub 1) KLD
   0.0199 / same top-1 92.5 % / PPL ratio 0.998 ± 0.007; prefill (ub 512) KLD 0.000 / 100 %.
   Matches the old pin (0.020 / 92.9 %) — the differing Turbo output hash is a near-tie flip.
+
+## Grammar-forced drafts without MTP (ngram never-draft carrier) — REJECT; crash fixed — 2026-11-25
+
+- Goal: keep grammar-forced drafts (measured +32..45 % on rigid schemas with MTP/DFlash) now
+  that streamed runs drop MTP. Carrier: `--spec-type ngram-simple --spec-ngram-simple-size-n 64
+  --spec-ngram-simple-min-hits 1000000 --spec-draft-n-max 16 --spec-grammar-draft 1`, so only
+  grammar drafts are ever verified. Request: rigid 7-key tool-call json_schema (prompt_tool.txt).
+- First run crashed: `common_speculative_accept` asserted n_accepted == 0 when no impl had
+  drafted; grammar drafts have no owning impl. Fixed (aed41e2) — this also affected any
+  non-MTP speculative type combined with grammar drafts.
+- llama-server, lookahead on, 2 reps, identical output `3e88f7c80626` in every run:
+
+  | cache | no speculation | grammar drafts only | acceptance |
+  |---|---|---|---|
+  | 4 GiB | 8.92 | 8.27 (−7 %) | 25/66 = 38 % |
+  | 10 GiB | 14.79 | 13.19 (−11 %) | 25/66 = 38 % |
+
+- Reading: forced spans are verified as multi-token steps (expensive when streaming, see the
+  MTP entry), and only 38 % of forced tokens are accepted — the grammar forces characters
+  whose tokenization differs from the model's own tokens. Without a draft model to amortize,
+  grammar drafts do not pay here. Streamed runs stay without speculation.
