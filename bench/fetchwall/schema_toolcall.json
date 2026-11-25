@@ -1,0 +1,10 @@
+{"type":"object","additionalProperties":false,
+ "required":["tool_invocation_name","repository_relative_file_path","replacement_start_line_number","replacement_end_line_number","replacement_source_code","human_readable_change_summary","requires_followup_test_execution"],
+ "properties":{
+  "tool_invocation_name":{"type":"string","enum":["apply_structured_source_edit"]},
+  "repository_relative_file_path":{"type":"string"},
+  "replacement_start_line_number":{"type":"integer"},
+  "replacement_end_line_number":{"type":"integer"},
+  "replacement_source_code":{"type":"string"},
+  "human_readable_change_summary":{"type":"string"},
+  "requires_followup_test_execution":{"type":"boolean"}}}

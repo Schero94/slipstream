@@ -442,7 +442,7 @@ index f19bd27c4..6f9312a29 100644
  //
  // will cross-reference the sampled tokens with a batch of draft tokens and accept those that match
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index db54aef53..4a88f4845 100644
+index db54aef53..275693c97 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
 @@ -1,5 +1,9 @@
@@ -784,7 +784,18 @@ index db54aef53..4a88f4845 100644
              case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
                  common_ngram_map ngram_map = get_common_ngram_map(config.type, config.params.ngram_simple);
  
-@@ -3757,3 +3932,26 @@ void common_speculative_print_stats(const common_speculative * spec) {
+@@ -3655,7 +3830,9 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, u
+     common_speculative_impl * impl = spec->impl_last[seq_id];
+ 
+     if (impl == nullptr) {
+-        GGML_ASSERT(n_accepted == 0);
++        // No implementation produced this step's draft. Slipstream's grammar-forced drafts
++        // can still inject one (server), so accepted tokens without an owning impl are valid:
++        // there are just no per-impl stats to update.
+         return;
+     }
+ 
+@@ -3757,3 +3934,26 @@ void common_speculative_print_stats(const common_speculative * spec) {
                  str_perf.c_str());
      }
  }

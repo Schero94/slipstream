@@ -18,7 +18,12 @@ env "$@" "$BIN" -m "$GGUF" --pgrn "$PGRN" --pgrn-cache-gb "$CACHE" --pgrn-io-thr
   ${SPEC_ARGS---spec-type draft-mtp --spec-draft-n-max 4} --host 127.0.0.1 --port "$PORT" > "$LOG" 2>&1 &
 PID=$!
 for i in $(seq 1 600); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; kill -0 $PID 2>/dev/null || break; sleep 1; done
-req() { python3 -c 'import json,sys; print(json.dumps({"prompt": open(sys.argv[1]).read(), "n_predict": int(sys.argv[2]), "temperature": 0, "seed": 1, "ignore_eos": True, "cache_prompt": False}))' "${PROMPT_FILE:-$HERE/prompt_code.txt}" "$1"; }
+req() { python3 -c 'import json,sys,os
+r={"prompt": open(sys.argv[1]).read(), "n_predict": int(sys.argv[2]), "temperature": 0, "seed": 1, "cache_prompt": False}
+sf=os.environ.get("SCHEMA_FILE")
+if sf: r["json_schema"]=json.load(open(sf))
+else: r["ignore_eos"]=True
+print(json.dumps(r))' "${PROMPT_FILE:-$HERE/prompt_code.txt}" "$1"; }
 curl -s "http://127.0.0.1:$PORT/completion" -d "$(req 16)" >/dev/null   # warm-up
 R=$(curl -s "http://127.0.0.1:$PORT/completion" -d "$(req "$NTOK")")
 kill $PID; wait $PID 2>/dev/null

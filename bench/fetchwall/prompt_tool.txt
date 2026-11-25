@@ -1,0 +1,7 @@
+<|im_start|>user
+In the file src/cache/lru.py, lines 40 to 44 contain a get() method that does not update the recency order. Produce the edit as a JSON tool call that replaces those lines with a corrected get() that moves the key to the end of the OrderedDict.<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
