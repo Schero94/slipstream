@@ -3588,3 +3588,14 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 - App default changed to `-b 4096 -ub 4096` for the main server (consistent −20/−21 % TTFT at
   4/10 GiB, identical output, decode unchanged, 0 MB swap). Caveat: larger Metal compute
   buffers — RAM headroom on 16 GB Macs is not yet measured (admission still refuses unsafe plans).
+- Split measured (llama-completion, same 39,512-token prompt, ub 2048, lookahead on):
+
+  | cache | prompt eval | PGRN staging (fetch) | rest (compute + sync) | prefill hit-rate |
+  |---|---|---|---|---|
+  | 4 GiB | 238.6 s | 111.0 s (102.6 s) | ~127.6 s | 0.9 % |
+  | 10 GiB | 233.2 s | 105.8 s (97.5 s) | ~127.4 s | 6.5 % |
+
+  ~45–47 % of the prefill is expert staging and a bigger cache barely helps (each 2048-row pass
+  sweeps every expert). Layer-major prefill (read each expert once per prompt) can remove most
+  of the staging → estimated first-turn TTFT ~130 s, then compute-bound (~310 tok/s). Getting
+  the follow-up turns fast needs prefix reuse (E2), not I/O work.

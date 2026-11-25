@@ -141,3 +141,11 @@
 20261125-074158	label=la-off	cache=4	decode_tps=6.30	prefill_tps=20.71	hit=68.89	la_recall=NA	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=-1
 20261125-074340	label=la0	cache=4	decode_tps=10.41	prefill_tps=20.86	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
 20261125-082528	srv	label=bundle-dmg	cache=4	decode_tps=9.99	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=
+20261125-234816	srv	label=pf-ub2048	cache=4	decode_tps=7.38	prompt_n=39515	ttft_s=259.1	prefill_tps=152.5	draft_acc=None/None	swap_delta_mb=0	out=54edf738c5a8	env=
+20261125-235838	srv	label=pf-ub4096	cache=4	decode_tps=7.74	prompt_n=39515	ttft_s=207.0	prefill_tps=190.9	draft_acc=None/None	swap_delta_mb=-16.00	out=54edf738c5a8	env=
+20261126-000709	srv	label=pf-ub2048-io16	cache=4	decode_tps=7.27	prompt_n=39515	ttft_s=249.0	prefill_tps=158.7	draft_acc=None/None	swap_delta_mb=-16.00	out=54edf738c5a8	env=
+20261126-001659	srv	label=pf-ub2048	cache=10	decode_tps=10.40	prompt_n=39515	ttft_s=231.3	prefill_tps=170.8	draft_acc=None/None	swap_delta_mb=0	out=54edf738c5a8	env=
+20261126-002618	srv	label=pf-ub4096	cache=10	decode_tps=10.43	prompt_n=39515	ttft_s=181.9	prefill_tps=217.3	draft_acc=None/None	swap_delta_mb=0	out=54edf738c5a8	env=
+20261126-003354	srv	label=pf-ub2048-io16	cache=10	decode_tps=9.87	prompt_n=39515	ttft_s=228.2	prefill_tps=173.1	draft_acc=None/None	swap_delta_mb=0	out=54edf738c5a8	env=
+20261126-004330	label=split-ub2048	cache=4	decode_tps=5.73	prefill_tps=165.59	hit=0.90	la_recall=75.11	swap_delta_mb=0	out=a67c6448ecef	env=
+20261126-004855	label=split-ub2048	cache=10	decode_tps=6.98	prefill_tps=169.41	hit=6.45	la_recall=75.11	swap_delta_mb=0	out=a67c6448ecef	env=
