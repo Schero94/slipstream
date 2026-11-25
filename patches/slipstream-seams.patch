@@ -3819,10 +3819,10 @@ index 7b0876cbb..d37f9482d 100644
  
      if (layer.ffn_up_shexp != nullptr) {
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 855295c15..f0ce3485e 100644
+index 855295c15..f4b4c5984 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -311,3 +311,162 @@ if (TARGET gguf-model-data)
+@@ -311,3 +311,169 @@ if (TARGET gguf-model-data)
      target_link_libraries(test-export-graph-ops PRIVATE gguf-model-data)
      target_compile_definitions(test-export-graph-ops PRIVATE LLAMA_HF_FETCH)
  endif()
@@ -3978,13 +3978,20 @@ index 855295c15..f0ce3485e 100644
 +target_include_directories(test-peregrine-model PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 +add_dependencies(test-peregrine-model test-llama-archs)
 +find_package(Python3 COMPONENTS Interpreter REQUIRED)
++# Repo root = the directory holding bench/: apply.sh puts the tree one level below it
++# (slipstream/llama.cpp-slipstream), older layouts two levels (slipstream/vendor/llama.cpp).
++if (EXISTS ${PROJECT_SOURCE_DIR}/../bench/m1/convert_gguf_to_pgrn.py)
++    set(PGR_REPO_ROOT ${PROJECT_SOURCE_DIR}/..)
++else()
++    set(PGR_REPO_ROOT ${PROJECT_SOURCE_DIR}/../..)
++endif()
 +add_test(
 +    NAME test-peregrine-model-e2e
 +    COMMAND ${Python3_EXECUTABLE}
 +        ${CMAKE_CURRENT_SOURCE_DIR}/test-peregrine-model-e2e.py
 +        --generator $<TARGET_FILE:test-llama-archs>
 +        --driver $<TARGET_FILE:test-peregrine-model>
-+        --repo-root ${PROJECT_SOURCE_DIR}/../..)
++        --repo-root ${PGR_REPO_ROOT})
 diff --git a/tests/test-arg-parser.cpp b/tests/test-arg-parser.cpp
 index e83ee85dd..3f5b225d2 100644
 --- a/tests/test-arg-parser.cpp

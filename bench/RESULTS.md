@@ -3459,3 +3459,11 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   the PGRN size) and lookahead is on. Resident runs keep MTP (README: 42 vs 29 tok/s).
   Cost: grammar-forced drafts share the verify path and are off in this mode — follow-up:
   grammar drafts without a draft model. Laguna/DFlash untouched (not measured here).
+
+## Engine unit + parity tests — 14/14 PASS — 2026-11-25
+
+- `ctest -R peregrine` on the feat/fetch-wall build: 14/14 pass. The e2e parity proof
+  (streamed vs resident, qwen3moe + qwen35moe fixtures, CPU + Metal, compact on/off,
+  decoder + MTP modes) reports nmse=0 / max_abs=0 everywhere, also with PGRN_LOOKAHEAD=0.
+- Fixed a pre-existing layout bug: the e2e test assumed the repo root two levels above the
+  llama.cpp tree, but apply.sh reconstructs it one level below; it now detects bench/.
