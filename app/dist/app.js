@@ -262,7 +262,10 @@ const state = {
   model: defaultModel(),
   running: false,
   lastMisses: null, lastT: null,
-  ssd: [], hit: [], tps: [],  // rolling buffers
+  ssd: [], hit: [], tps: [], free: [],  // rolling buffers (60 ticks ≈ 1 min)
+  ssdPeak: 0,         // highest SSD MB/s seen while this server runs
+  activity: null,     // last parseActivity() result while running
+  ckKind: null, ckCandidate: null, ckHold: 0,  // cockpit verdict + hysteresis
   remoteBytes: 0,
   kvMiB: null,        // KV allocation as reported by the engine at load
   bench: null,        // last benchmark result set
@@ -993,6 +996,209 @@ const MISC = {
 };
 Object.keys(MISC).forEach((l) => Object.assign(I18N[l], MISC[l]));
 
+// Engine cockpit (Live view) + upcoming engine options (Settings → SSD streaming → Advanced).
+// `why.*` strings may carry <b> and are set with innerHTML; every value spliced into
+// them is a number formatted by us, never text from the engine.
+const COCKPIT_I18N = {
+  en: {
+    "cockpit.title": "Engine",
+    "cockpit.tps": "Decode speed", "cockpit.hit": "Expert cache hits", "cockpit.ssd": "SSD reads", "cockpit.ram": "RAM headroom",
+    "cockpit.tpsNote": "avg {avg} · prefill {pp} tok/s",
+    "cockpit.tpsNoteNone": "Shows with the first answer",
+    "cockpit.hitNote": "{miss} % of lookups go to the SSD",
+    "cockpit.ssdNote": "peak {peak} MB/s this session",
+    "cockpit.ramNote": "free of {total} GiB · swap {swap}",
+    "cockpit.noSwap": "none",
+    "cockpit.noModel": "No model running",
+    "why.stopped": "Engine stopped. Start a model to see what limits its speed.",
+    "why.loading": "Loading the model. First answers are slower while experts warm up from the SSD.",
+    "why.idle": "Ready and idle. The figures show the last answer.",
+    "why.prefill": "Reading the prompt (prefill){rate}. Decode speed shows once the answer starts.",
+    "why.prefillRate": " at {rate} tok/s",
+    "why.memory": "<b>Memory-bound:</b> {free} GiB free{swap}. The Mac is short of RAM, which slows everything. Lower the cache size or close apps.",
+    "why.swapPart": " and {swap} GiB in swap",
+    "why.ssd": "<b>SSD-bound:</b> {miss} % of expert lookups miss the RAM cache and stream from the SSD at {ssd} MB/s ({peak} % of this session’s peak).",
+    "why.compute": "<b>Compute-bound:</b> {hit} % of experts come from RAM{gpu}. The SSD is not the limit right now.",
+    "why.gpu": ", GPU at {gpu} %",
+    "why.noExperts": "Generating at {tps} tok/s. This model reports no expert-streaming counters (dense or MLX), so the SSD share is unknown.",
+    "tip.cockpitWhy": "An estimate from live counters, not a profiler. SSD-bound: 15 % or more of expert lookups miss the RAM cache while experts stream. Memory-bound: under 12 % of RAM free or more than 800 MB in swap. Otherwise compute-bound. A change is announced once it has held for three seconds.",
+    "anchor.label": "Live sections",
+    "adv.nextTitle": "Upcoming engine options",
+    "adv.lookahead": "Lookahead prefetch",
+    "adv.lossless": "lossless",
+    "hint.lookahead": "Predicts which experts the next layers will route to and reads them from the SSD before they are needed. Output stays identical; a wrong guess costs some extra SSD reads.",
+    "tip.lookahead": "Engine setting PGRN_LOOKAHEAD = layers ahead (default 2). Unlike predictive prefetch, which learns co-firing experts over time, lookahead predicts the next layer’s experts from the current one. Off by default.",
+    "adv.steer": "Cache-steered routing (Turbo)",
+    "adv.lossy": "changes output",
+    "adv.steerWarn": "Trades a little quality for speed: when experts score almost the same, the router prefers one already in RAM. Answers can differ from the unmodified model. Start low (0.02–0.05) and compare on your own prompts.",
+    "tip.steer": "Engine setting PGRN_STEER = strength from 0 to 0.10. 0 means unmodified routing. Off by default.",
+  },
+  de: {
+    "cockpit.title": "Engine",
+    "cockpit.tps": "Decode-Tempo", "cockpit.hit": "Experten-Cache-Treffer", "cockpit.ssd": "SSD-Reads", "cockpit.ram": "RAM-Reserve",
+    "cockpit.tpsNote": "Ø {avg} · Prefill {pp} tok/s",
+    "cockpit.tpsNoteNone": "Erscheint mit der ersten Antwort",
+    "cockpit.hitNote": "{miss} % der Zugriffe gehen an die SSD",
+    "cockpit.ssdNote": "Spitze {peak} MB/s in dieser Sitzung",
+    "cockpit.ramNote": "frei von {total} GiB · Swap {swap}",
+    "cockpit.noSwap": "keiner",
+    "cockpit.noModel": "Kein Modell aktiv",
+    "why.stopped": "Engine gestoppt. Starte ein Modell, um zu sehen, was sein Tempo begrenzt.",
+    "why.loading": "Modell lädt. Die ersten Antworten sind langsamer, solange Experten von der SSD warmlaufen.",
+    "why.idle": "Bereit, keine Anfrage. Die Werte zeigen die letzte Antwort.",
+    "why.prefill": "Prompt wird gelesen (Prefill){rate}. Das Decode-Tempo erscheint, sobald die Antwort beginnt.",
+    "why.prefillRate": " mit {rate} tok/s",
+    "why.memory": "<b>RAM-begrenzt:</b> {free} GiB frei{swap}. Dem Mac fehlt Arbeitsspeicher, das bremst alles. Cache-Größe senken oder Apps schließen.",
+    "why.swapPart": " und {swap} GiB im Swap",
+    "why.ssd": "<b>SSD-begrenzt:</b> {miss} % der Experten-Zugriffe verfehlen den RAM-Cache und streamen mit {ssd} MB/s von der SSD ({peak} % der Sitzungsspitze).",
+    "why.compute": "<b>Rechen-begrenzt:</b> {hit} % der Experten kommen aus dem RAM{gpu}. Die SSD ist gerade nicht die Grenze.",
+    "why.gpu": ", GPU bei {gpu} %",
+    "why.noExperts": "Generiert mit {tps} tok/s. Dieses Modell meldet keine Experten-Streaming-Zähler (dense oder MLX), der SSD-Anteil ist daher unbekannt.",
+    "tip.cockpitWhy": "Eine Schätzung aus Live-Zählern, kein Profiler. SSD-begrenzt: 15 % oder mehr der Experten-Zugriffe verfehlen den RAM-Cache, während Experten streamen. RAM-begrenzt: unter 12 % RAM frei oder mehr als 800 MB Swap. Sonst rechen-begrenzt. Ein Wechsel wird angesagt, sobald er drei Sekunden hält.",
+    "anchor.label": "Live-Abschnitte",
+    "adv.nextTitle": "Kommende Engine-Optionen",
+    "adv.lookahead": "Lookahead-Prefetch",
+    "adv.lossless": "verlustfrei",
+    "hint.lookahead": "Sagt voraus, welche Experten die nächsten Layer brauchen, und liest sie vorher von der SSD. Die Ausgabe bleibt identisch; ein falscher Tipp kostet zusätzliche SSD-Reads.",
+    "tip.lookahead": "Engine-Einstellung PGRN_LOOKAHEAD = Layer voraus (Standard 2). Anders als Predictive Prefetch, das gemeinsam feuernde Experten über die Zeit lernt, sagt Lookahead die Experten des nächsten Layers aus dem aktuellen voraus. Standard aus.",
+    "adv.steer": "Cache-gesteuertes Routing (Turbo)",
+    "adv.lossy": "ändert Ausgabe",
+    "adv.steerWarn": "Tauscht etwas Qualität gegen Tempo: Wenn Experten fast gleich bewertet sind, bevorzugt der Router einen, der schon im RAM liegt. Antworten können vom unveränderten Modell abweichen. Niedrig anfangen (0,02–0,05) und an eigenen Prompts vergleichen.",
+    "tip.steer": "Engine-Einstellung PGRN_STEER = Stärke von 0 bis 0,10. 0 bedeutet unverändertes Routing. Standard aus.",
+  },
+};
+Object.keys(COCKPIT_I18N).forEach((l) => Object.assign(I18N[l], COCKPIT_I18N[l]));
+
+// Short first-run journey: Model → Start → Connect editor. Overrides the older
+// wording (jargon such as GGUF/PGRN/convert stays only under "Manual steps").
+const JOURNEY_I18N = {
+  en: {
+    "nav.models": "Model", "nav.connect": "Connect editor", "nav.downloads": "Library",
+    "journey.title": "Run a coding model on your Mac",
+    "journey.step1": "Set up a model", "journey.step2": "Start it", "journey.step3": "Connect your editor",
+    "journey.codingTip": "Or type below to chat with it right here.",
+    "hint.startPath": "Set up a model, then Start",
+    "btn.notReady": "Set up model…",
+    "sec.selectModel": "Model",
+    "path.summary": "Where models are stored",
+    "prep.manual": "Manual steps (advanced)", "toast.convDone": "Model prepared — ready to start",
+    "prep.manualHint": "The button above does both steps for you. Use these only to redo one step for the selected model:",
+    "prep.starting": "Starting… the model is loading into memory (about a minute).",
+    "prep.running": "Running — your editor can connect.",
+    "prep.incomplete": "Download incomplete.",
+    "prep.resume": "Resume download",
+    "prep.failed": "Preparation failed. Try again, or see Logs.",
+    "prep.retry": "Try again",
+    "prep.wait": "Starting…",
+    "lbl.auto": "auto",
+    "reco.inUse": "In use now",
+    "reco.running": "These are the settings the running model was started with. Changes apply at the next Start.",
+    "grp.speed": "Memory & speed", "grp.turbo": "Turbo", "grp.backend": "Backend", "grp.chat": "Chat behaviour", "grp.storage": "Storage overrides",
+    "hint.presets": "Metal Peak: the largest cache, for the fastest decoding when 22 GiB or more RAM are free. Good tokens: the measured balanced setup for everyday coding.",
+    "tip.applyPeak": "Cache 14 GiB · I/O 4 · needs ≥ 22 GiB free RAM",
+    "tip.goodTokens": "Balanced, measured setup for everyday coding",
+    "adv.mirror": "Second SSD mirror (dual SSD)", "adv.buffered": "Buffered reads (for non-NVMe drives)", "adv.predict": "Predictive prefetch (experimental)",
+    "prep.download": "Download & prepare · ~{size} GiB",
+    "prep.downloadDense": "Download · ~{size} GiB",
+    "prep.prepare": "Prepare for SSD streaming",
+    "prep.downloadMissing": "Download model file",
+    "prep.cancel": "Cancel",
+    "prep.start": "Start",
+    "prep.connect": "Connect your editor →",
+    "prep.soon": "Not available yet",
+    "prep.auto": "After the download, preparation starts by itself.",
+    "st.notThere": "Not downloaded yet.",
+    "st.notConverted": "Downloaded. One step left: a one-time preparation for SSD streaming.",
+    "st.needConvert": "needs preparing",
+    "st.convRunning": "Preparing for SSD streaming…",
+    "st.ready": "Ready to start.",
+    "st.denseReady": "Ready to start (loads fully into RAM).",
+    "badge.notLoaded": "not downloaded",
+    "dl.intro": "Download the model file (GGUF), then prepare it once for SSD streaming (writes a .pgrn file). Large models download in parts and are prepared in one pass.",
+    "sec.connectAgent": "Connect your editor",
+    "agent.intro": "Slipstream speaks the OpenAI API on your Mac. Kilo Code and OpenCode are set up with one click; for any other editor, copy its config. The first answer after a start can take a while, so give your editor a request timeout of 300 s or more.",
+    "agent.patched": "{name}: set up in {path}. Restart {app}.",
+    "agent.copiedToast": "{name} config copied",
+    "connect.notRunning": "The model is not running yet. Start it (top right); your editor will reach it at the address below.",
+    "connect.running": "The model is running. Your editor can connect now.",
+    "sec.indexingOpt": "Codebase indexing",
+    "reco.title": "Tuned for your Mac",
+    "reco.auto": "Applied automatically at Start until you change a setting yourself.",
+    "reco.manual": "You changed settings by hand. Apply best returns to the recommendation.",
+    "adv.engine": "Advanced engine settings", "adv.presets": "Presets",
+    "runtime.check": "System check",
+    "adv.nextTitle": "Expert prefetch & Turbo",
+    "adv.steer": "Turbo (experimental)",
+    "hint.lookahead": "Reads the experts the next layer is predicted to need before it asks for them. Measured lossless, 29–33 % faster decoding at 4–8 GiB cache. On by default.",
+    "tip.lookahead": "Engine setting PGRN_LOOKAHEAD. Unlike predictive prefetch, which learns co-firing experts over time, lookahead predicts the next layer’s experts from the current one. Output is identical with it on or off.",
+    "adv.steerWarn": "About 28 % faster on small caches. Answers can differ slightly from the unmodified model (≈1.6 % higher perplexity in our test).",
+    "tip.steer": "Nudges the router toward experts already in RAM (engine setting PGRN_STEER = 0.01). Off by default.",
+  },
+  de: {
+    "nav.models": "Modell", "nav.connect": "Editor verbinden", "nav.downloads": "Bibliothek",
+    "journey.title": "Ein Coding-Modell lokal auf deinem Mac",
+    "journey.step1": "Modell einrichten", "journey.step2": "Starten", "journey.step3": "Editor verbinden",
+    "journey.codingTip": "Oder unten direkt hier chatten.",
+    "hint.startPath": "Modell einrichten, dann Start",
+    "btn.notReady": "Modell einrichten…",
+    "sec.selectModel": "Modell",
+    "path.summary": "Speicherort der Modelle",
+    "prep.manual": "Manuelle Schritte (fortgeschritten)", "toast.convDone": "Modell vorbereitet — startbereit",
+    "prep.manualHint": "Der Button oben erledigt beide Schritte. Diese hier nur nutzen, um einen Schritt für das gewählte Modell zu wiederholen:",
+    "prep.starting": "Startet… das Modell wird in den Speicher geladen (etwa eine Minute).",
+    "prep.running": "Läuft — dein Editor kann sich verbinden.",
+    "prep.incomplete": "Download unvollständig.",
+    "prep.resume": "Download fortsetzen",
+    "prep.failed": "Vorbereitung fehlgeschlagen. Nochmal versuchen oder Logs ansehen.",
+    "prep.retry": "Nochmal versuchen",
+    "prep.wait": "Startet…",
+    "lbl.auto": "auto",
+    "reco.inUse": "Gerade in Verwendung",
+    "reco.running": "Mit diesen Einstellungen wurde das laufende Modell gestartet. Änderungen gelten beim nächsten Start.",
+    "grp.speed": "Speicher & Tempo", "grp.turbo": "Turbo", "grp.backend": "Backend", "grp.chat": "Chat-Verhalten", "grp.storage": "Speicherort-Overrides",
+    "hint.presets": "Metal Peak: größter Cache, für schnellstes Decoding, wenn 22 GiB oder mehr RAM frei sind. Gute Tokens: das gemessene, ausgewogene Setup fürs tägliche Coden.",
+    "tip.applyPeak": "Cache 14 GiB · I/O 4 · braucht ≥ 22 GiB freien RAM",
+    "tip.goodTokens": "Ausgewogenes, gemessenes Setup fürs tägliche Coden",
+    "adv.mirror": "Zweite SSD als Mirror (Dual-SSD)", "adv.buffered": "Gepufferte Reads (für Nicht-NVMe-Laufwerke)", "adv.predict": "Predictive Prefetch (experimentell)",
+    "prep.download": "Laden & vorbereiten · ~{size} GiB",
+    "prep.downloadDense": "Laden · ~{size} GiB",
+    "prep.prepare": "Für SSD-Streaming vorbereiten",
+    "prep.downloadMissing": "Modelldatei laden",
+    "prep.cancel": "Abbrechen",
+    "prep.start": "Starten",
+    "prep.connect": "Editor verbinden →",
+    "prep.soon": "Noch nicht verfügbar",
+    "prep.auto": "Nach dem Download startet die Vorbereitung von selbst.",
+    "st.notThere": "Noch nicht geladen.",
+    "st.notConverted": "Geladen. Ein Schritt fehlt: eine einmalige Vorbereitung für SSD-Streaming.",
+    "st.needConvert": "Vorbereitung nötig",
+    "st.convRunning": "Wird für SSD-Streaming vorbereitet…",
+    "st.ready": "Startbereit.",
+    "st.denseReady": "Startbereit (lädt komplett in den RAM).",
+    "badge.notLoaded": "nicht geladen",
+    "dl.intro": "Modelldatei (GGUF) laden, dann einmalig für SSD-Streaming vorbereiten (schreibt eine .pgrn-Datei). Große Modelle laden in Teilen und werden in einem Durchgang vorbereitet.",
+    "sec.connectAgent": "Editor verbinden",
+    "agent.intro": "Slipstream spricht die OpenAI-API auf deinem Mac. Kilo Code und OpenCode werden mit einem Klick eingerichtet; für jeden anderen Editor die Config kopieren. Die erste Antwort nach einem Start kann dauern – gib deinem Editor ein Request-Timeout von 300 s oder mehr.",
+    "agent.patched": "{name}: eingerichtet in {path}. {app} neu starten.",
+    "agent.copiedToast": "{name}-Config kopiert",
+    "connect.notRunning": "Das Modell läuft noch nicht. Starte es (oben rechts); dein Editor erreicht es dann unter der Adresse unten.",
+    "connect.running": "Das Modell läuft. Dein Editor kann sich jetzt verbinden.",
+    "sec.indexingOpt": "Codebase-Indexierung",
+    "reco.title": "Für deinen Mac abgestimmt",
+    "reco.auto": "Wird beim Start automatisch angewendet, bis du selbst etwas änderst.",
+    "reco.manual": "Du hast Einstellungen von Hand geändert. „Beste anwenden“ kehrt zur Empfehlung zurück.",
+    "adv.engine": "Erweiterte Engine-Einstellungen", "adv.presets": "Voreinstellungen",
+    "runtime.check": "Systemprüfung",
+    "adv.nextTitle": "Experten-Prefetch & Turbo",
+    "adv.steer": "Turbo (experimentell)",
+    "hint.lookahead": "Liest die Experten, die der nächste Layer voraussichtlich braucht, bevor er sie anfragt. Gemessen verlustfrei, 29–33 % schnelleres Decoding bei 4–8 GiB Cache. Standardmäßig an.",
+    "tip.lookahead": "Engine-Einstellung PGRN_LOOKAHEAD. Anders als Predictive Prefetch, das gemeinsam feuernde Experten über die Zeit lernt, sagt Lookahead die Experten des nächsten Layers aus dem aktuellen voraus. Die Ausgabe ist mit und ohne identisch.",
+    "adv.steerWarn": "Etwa 28 % schneller bei kleinem Cache. Antworten können leicht vom unveränderten Modell abweichen (≈1,6 % höhere Perplexity in unserem Test).",
+    "tip.steer": "Lenkt den Router leicht zu Experten, die schon im RAM liegen (Engine-Einstellung PGRN_STEER = 0,01). Standard aus.",
+  },
+};
+Object.keys(JOURNEY_I18N).forEach((l) => Object.assign(I18N[l], JOURNEY_I18N[l]));
+
 let LANG = localStorage.getItem("slipstream.lang") ||
   (navigator.language || "en").slice(0, 2);
 if (!I18N[LANG]) LANG = "en";
@@ -1314,7 +1520,7 @@ async function refreshModel() {
     state.wasConverting = false;
     try {
       const cp = await invoke("convert_progress");
-      if (cp.phase === "error") toast(t("err.prefix") + cp.message, true);
+      if (cp.phase === "error") { state.prepError = true; toast(t("err.prefix") + cp.message, true); }
       else if (cp.phase === "done") toast(t("toast.convDone"));
       else if (cp.phase === "cancelled") toast(t("resume.title"));
     } catch {}
@@ -1382,14 +1588,94 @@ async function refreshModel() {
   }
 
   // power button reflects readiness when server is stopped
+  const ready = isDenseModel()
+    ? st.gguf_bytes > 0
+    : (st.pgrn_bytes > 0 && st.gguf_bytes > 0);
+  state.modelReady = ready && !st.downloading && !st.converting;
   if (!state.running) {
-    const ready = isDenseModel()
-      ? st.gguf_bytes > 0
-      : (st.pgrn_bytes > 0 && st.gguf_bytes > 0);
-    $("powerBtn").disabled = !ready;
-    $("powerBtn").textContent = ready ? t("btn.start") : t("btn.notReady");
+    // Not ready is not a dead end: the button says what to do and goes there.
+    const b = $("powerBtn");
+    b.disabled = false;
+    b.textContent = state.modelReady ? t("btn.start") : t("btn.notReady");
+    b.className = state.modelReady ? "btn btn-primary btn-power" : "btn btn-power";
+  }
+  maybeAutoPrepare(st);
+  renderPrepare(st);
+  markJourney();
+}
+
+// ---- one-button model preparation ------------------------------------------
+// Download → one-time SSD-streaming preparation (convert) → Start → editor.
+// It only clicks the original buttons, so their invoke() contracts are untouched.
+function goToModelSetup() {
+  showTab("models");
+  const b = $("prepareBtn");
+  if (b) b.focus();
+}
+function prepareState(st) {
+  const m = state.model;
+  if (m.soon) return "soon";
+  if (!st) return "unknown";
+  if (st.downloading || st.converting) return "busy";
+  if (state.running) return state.pillMode === "loading" ? "starting" : "running";
+  if (state.modelReady) return "ready";
+  // A download that stopped short (cancel, network) must not be "prepared".
+  if (st.gguf_bytes > 0 && state.remoteBytes > 0 && st.gguf_bytes < state.remoteBytes * 0.999) return "incomplete";
+  if (st.gguf_bytes > 0 && !isDenseModel()) return state.prepError ? "failed" : "convert";
+  if (st.pgrn_bytes > 0) return "needGguf";
+  return "download";
+}
+function renderPrepare(st) {
+  const b = $("prepareBtn");
+  if (!b) return;
+  const kind = prepareState(st);
+  const q = currentQuant();
+  const size = q ? q.gb : state.model.gb;
+  const label = {
+    soon: t("prep.soon"),
+    unknown: "…",
+    busy: t("prep.cancel"),
+    running: t("prep.connect"),
+    starting: t("prep.wait"),
+    ready: t("prep.start"),
+    incomplete: t("prep.resume"),
+    failed: t("prep.retry"),
+    convert: t("prep.prepare"),
+    needGguf: t("prep.downloadMissing"),
+    download: fillVars(t(isDenseModel() ? "prep.downloadDense" : "prep.download"), { size: String(size) }),
+  }[kind];
+  b.textContent = label;
+  b.dataset.kind = kind;
+  b.disabled = kind === "soon" || kind === "unknown" || kind === "starting";
+  b.className = "btn prepare-btn" + (kind === "busy" ? " btn-danger" : kind === "running" || kind === "starting" ? "" : " btn-primary");
+  // States the model-file status line cannot know about.
+  const status = { starting: "prep.starting", running: "prep.running", incomplete: "prep.incomplete", failed: "prep.failed" }[kind];
+  if (status && $("dlStatus")) $("dlStatus").textContent = t(status);
+  if ($("prepareBox")) $("prepareBox").dataset.kind = kind;
+}
+function maybeAutoPrepare(st) {
+  // A finished download chains straight into preparation — but only when the file
+  // is complete (matches the remote size), never after a cancel or a failure.
+  if (!state.autoPrepare || !st || st.downloading || st.converting) return;
+  if (isDenseModel() || st.pgrn_bytes > 0) { state.autoPrepare = false; return; }
+  const complete = state.remoteBytes > 0 && st.gguf_bytes >= state.remoteBytes * 0.999;
+  if (st.gguf_bytes > 0 && complete) {
+    state.autoPrepare = false;
+    $("convBtn").click();
   }
 }
+if ($("prepareBtn")) $("prepareBtn").onclick = () => {
+  const kind = $("prepareBtn").dataset.kind;
+  if (kind === "busy") { state.autoPrepare = false; $("dlCancel").click(); return; }
+  if (kind === "starting") return;
+  if (kind === "running") { showTab("connect"); return; }
+  if (kind === "ready") { startServer(); return; }
+  if (kind === "convert" || kind === "failed") { state.prepError = false; $("convBtn").click(); return; }
+  if (kind === "download" || kind === "needGguf" || kind === "incomplete") {
+    state.autoPrepare = kind === "download" && !isDenseModel();
+    $("dlBtn").click();
+  }
+};
 
 $("dlBtn").onclick = async () => {
   const url = $("pUrl").value.trim();
@@ -1475,6 +1761,7 @@ function renderNativeRuntimeStatus() {
   const ready = !!(runtime && runtime.ready && diskReady);
   badge.className = `badge ${ready ? "ready" : "missing"}`;
   badge.textContent = ready ? t("badge.ready") : t("badge.missing");
+  if ($("runtimeDetails") && runtime && !ready) $("runtimeDetails").open = true;
   let note = !runtime || !runtime.ready ? t("runtime.incomplete")
     : !diskReady ? t("runtime.diskUnsafe")
     : pgrnStorage && !pgrnStorage.placement_ok ? t("runtime.externalPgrn")
@@ -1788,6 +2075,48 @@ function wirePgrnMlxSettings() {
   loadPgrnMlxSettings();
 }
 
+// ---- expert prefetch + Turbo (Metal / PGRN) --------------------------------
+// Persisted like the other slipstream.pgrn.* settings; sent with Start as
+//   cfg.pgrn_lookahead  1 = on (default), 0 = off. main.rs maps > 0 to
+//                       PGRN_LOOKAHEAD=<value>; 1 means on with margin 0.
+//                       Measured lossless, +29–33 % decode at 4–8 GiB cache.
+//   cfg.pgrn_steer      Turbo: 0.01 when on, 0 = off (default) → PGRN_STEER.
+//                       Lossy: +28 % decode, ≈1.6 % higher perplexity (measured).
+// TODO(engine): if ServerConfig does not declare these fields yet, serde drops
+// them silently — add `#[serde(default)] pgrn_lookahead: u32` and
+// `#[serde(default)] pgrn_steer: f64` next to pgrn_online.
+// Only strength 0.01 is measured acceptable (+28 % decode, +1.6 % perplexity,
+// 88 % same top-1 token); 0.02 already costs +12.5 % perplexity. So: on/off.
+const STEER_ON = 0.01;
+function lookaheadPreference() {
+  const v = localStorage.getItem("slipstream.pgrn.lookahead");
+  return v === null ? true : v === "1";
+}
+function pgrnLookaheadFromUi() {
+  const on = $("pgrnLookahead") ? $("pgrnLookahead").checked : lookaheadPreference();
+  return on ? 1 : 0;
+}
+function pgrnSteerFromUi() {
+  const on = $("pgrnSteer") ? $("pgrnSteer").checked
+    : localStorage.getItem("slipstream.pgrn.steer") === "1";
+  return on ? STEER_ON : 0;
+}
+function syncNextEngineUi() { /* both options are plain toggles now */ }
+function persistNextEngineSettings() {
+  if ($("pgrnLookahead")) localStorage.setItem("slipstream.pgrn.lookahead", $("pgrnLookahead").checked ? "1" : "0");
+  if ($("pgrnSteer")) localStorage.setItem("slipstream.pgrn.steer", $("pgrnSteer").checked ? "1" : "0");
+}
+function loadNextEngineSettings() {
+  if ($("pgrnLookahead")) $("pgrnLookahead").checked = lookaheadPreference();
+  if ($("pgrnSteer")) $("pgrnSteer").checked = localStorage.getItem("slipstream.pgrn.steer") === "1";
+}
+function wireNextEngineSettings() {
+  ["pgrnLookahead", "pgrnSteer"].forEach((id) => {
+    if ($(id)) $(id).onchange = persistNextEngineSettings;
+  });
+  loadNextEngineSettings();
+}
+
 function applyBackendUi() {
   const prefMlx = state.backend === "mlx";
   const showMlxDir = prefMlx || isAutoBackend();
@@ -1802,12 +2131,14 @@ function applyBackendUi() {
     if (el) el.hidden = prefMlx;
   });
   if ($("mlxLeverNote")) $("mlxLeverNote").hidden = !prefMlx;
-  ["cache", "io", "compactSlots", "grammarDraft", "pMirror", "bufferedReads", "onlinePredict"]
+  ["cache", "io", "compactSlots", "grammarDraft", "pMirror", "bufferedReads", "onlinePredict",
+    "pgrnLookahead", "pgrnSteer"]
     .forEach((id) => {
       const el = $(id);
       if (!el) return;
       el.disabled = prefMlx;
     });
+  syncNextEngineUi();
   if (showMlxDir && state.model.mlx) {
     if ($("pMlx") && !$("pMlx").value.trim()) {
       $("pMlx").value = state.model.mlx.dir || defaultMlxDir();
@@ -1858,6 +2189,8 @@ async function startServer() {
     ? resolveAutoBackend(promptChars, hasExperts)
     : (state.backend === "mlx" ? "mlx" : "metal");
   if (!(await ensureNativeStartReady(resolved))) return;
+  // Untouched settings follow the recommendation computed for this Mac right now.
+  if (!state.userTuned) applyRecoValues(computeReco());
   const cfg = {
     server: $("pServer").value.trim(),
     model: ggufPath(),
@@ -1874,6 +2207,10 @@ async function startServer() {
     pgrn_mirror: ($("pMirror") && $("pMirror").value.trim()) || "",
     pgrn_buffered: !!($("bufferedReads") && $("bufferedReads").checked),
     pgrn_online: !!($("onlinePredict") && $("onlinePredict").checked),
+    // Expert prefetch (1 = on, default) and Turbo (0.01 when on, default 0).
+    // main.rs → PGRN_LOOKAHEAD / PGRN_STEER. See wireNextEngineSettings.
+    pgrn_lookahead: pgrnLookaheadFromUi(),
+    pgrn_steer: pgrnSteerFromUi(),
     pgrn_compact: $("compactSlots") ? $("compactSlots").checked : true,
     grammar_draft: $("grammarDraft") ? $("grammarDraft").checked : true,
     kv_quant: state.model.kv || "q8_0",
@@ -1924,6 +2261,8 @@ async function startServer() {
     const msg = await invoke("start_server", { cfg });
     state.resolvedBackend = isAutoBackend() ? resolved : null;
     state.runningPgrnProfile = goingMlx ? cfg.pgrn_profile : null;
+    // What the engine was started with — Settings shows this while it runs.
+    state.runningCfg = { cache: cfg.cache_gb, ctx: cfg.ctx, io: cfg.io_threads, auto: !state.userTuned };
     const profileNote = goingMlx && cfg.pgrn_profile === "contract"
       ? ` · ${t("toast.mlxContractProfile")}`
       : "";
@@ -1948,14 +2287,51 @@ async function stopServer() {
   toast(t("toast.serverStopped"));
   applyBackendUi();
 }
-$("powerBtn").onclick = () => (state.running ? stopServer() : startServer());
+$("powerBtn").onclick = () => {
+  if (state.running) return stopServer();
+  if (state.modelReady === false) return goToModelSetup();
+  return startServer();
+};
 
 function setPill(mode) {
   const p = $("statusPill"), b = $("powerBtn");
   state.pillMode = mode;
-  if (mode === "on") { p.className = "pill pill-on"; p.textContent = t("pill.running"); b.textContent = t("btn.stop"); b.className = "btn btn-danger"; b.disabled = false; }
-  else if (mode === "loading") { p.className = "pill pill-loading"; p.textContent = t("pill.starting"); b.textContent = t("btn.stop"); b.className = "btn btn-danger"; b.disabled = false; }
-  else { p.className = "pill pill-off"; p.textContent = t("pill.stopped"); b.className = "btn btn-primary"; }
+  if (mode === "on") { p.className = "pill pill-on"; p.textContent = t("pill.running"); b.textContent = t("btn.stop"); b.className = "btn btn-danger btn-power"; b.disabled = false; }
+  else if (mode === "loading") { p.className = "pill pill-loading"; p.textContent = t("pill.starting"); b.textContent = t("btn.stop"); b.className = "btn btn-danger btn-power"; b.disabled = false; }
+  else {
+    p.className = "pill pill-off"; p.textContent = t("pill.stopped");
+    b.className = state.modelReady === false ? "btn btn-power" : "btn btn-primary btn-power";
+    if (state.modelReady === false) b.textContent = t("btn.notReady");
+  }
+  try { updateChatP2pHint(); } catch {}
+  const cs = $("connectState");
+  if (cs) {
+    cs.textContent = t(mode === "on" ? "connect.running" : "connect.notRunning");
+    cs.dataset.state = mode;
+  }
+  try { if (state.mstatus) renderPrepare(state.mstatus); } catch {}
+  // The start hint is for the first run; once the engine is up it is noise.
+  const tip = $("startTip");
+  if (tip) tip.hidden = mode !== "off";
+  markJourney();
+}
+
+// First-run steps reflect where the user actually is: done steps get a check,
+// the next one is highlighted and marked as the current step.
+function markJourney() {
+  const ready = !!(state.running || state.modelReady);
+  const done = { journeyStep1: ready, journeyStep2: !!state.running,
+    journeyStep3: localStorage.getItem("slipstream.editorConnected") === "1" };
+  let nextSet = false;
+  ["journeyStep1", "journeyStep2", "journeyStep3"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.classList.toggle("is-done", done[id]);
+    const next = !done[id] && !nextSet;
+    if (next) nextSet = true;
+    el.classList.toggle("is-next", next);
+    if (next) el.setAttribute("aria-current", "step"); else el.removeAttribute("aria-current");
+  });
 }
 
 // ---- cache slider ----------------------------------------------------------
@@ -2021,6 +2397,16 @@ function updateReco() {
   if (!el) return;
   if (!r) { el.textContent = t("reco.computing"); return; }
   const s = state.sys;
+  // While the engine runs, free RAM is mostly the engine itself, so a fresh
+  // recommendation would be misleading. Show what is in use instead.
+  if (state.running && state.runningCfg) {
+    const u = state.runningCfg;
+    el.innerHTML = isDenseModel()
+      ? `${t("reco.inUse")}: ${t("lbl.context")} <b>${u.ctx / 1024}k</b>`
+      : `${t("reco.inUse")}: ${t("lbl.cache")} <b>${u.cache} GiB</b> &middot; ${t("lbl.context")} <b>${u.ctx / 1024}k</b>`;
+    syncAutoMarks();
+    return;
+  }
   if (isDenseModel()) {
     el.innerHTML =
       `${t("reco.for")} (<b>${s.total_gib.toFixed(0)} GiB</b> RAM, ${s.free_gib.toFixed(0)} ${t("reco.free")}) ${t("reco.with")} <b>${state.model.name.split(" ")[0]}</b>: ` +
@@ -2028,11 +2414,27 @@ function updateReco() {
   } else {
     el.innerHTML =
       `${t("reco.for")} (<b>${s.total_gib.toFixed(0)} GiB</b> RAM, ${s.free_gib.toFixed(0)} ${t("reco.free")}) ${t("reco.with")} <b>${state.model.name.split(" ")[0]}</b>: ` +
-      `Cache <b>${r.cache} GiB</b> &middot; ${t("lbl.context")} <b>${r.ctx / 1024}k</b> &middot; io <b>${r.io}</b> &middot; ` +
-      `${t("reco.pgrnFast")}` +
-      (state.model.draft ? ` &middot; <b>DFlash</b>` : (effectiveSpec() === "draft-mtp" ? ` &middot; <b>MTP</b>` : ""));
+      // Plain summary; I/O width and speculative-decoding details live under Advanced.
+      `${t("lbl.cache")} <b>${r.cache} GiB</b> &middot; ${t("lbl.context")} <b>${r.ctx / 1024}k</b>`;
   }
   state.reco = r;
+  // Until the user tunes by hand, the controls show what Start will use.
+  if (!state.userTuned && !state.running) applyRecoValues(r);
+  syncAutoMarks();
+}
+// The "auto" tag beside the cache value and the line under the recommendation
+// say whose values the controls hold: the recommendation, the user, or the
+// running engine.
+function syncAutoMarks() {
+  const running = !!(state.running && state.runningCfg);
+  const auto = running ? state.runningCfg.auto : !state.userTuned;
+  const tag = $("cacheAuto");
+  if (tag) tag.hidden = !auto;
+  const el = $("recoAuto");
+  if (el) {
+    el.dataset.i18n = running ? "reco.running" : (state.userTuned ? "reco.manual" : "reco.auto");
+    el.textContent = t(el.dataset.i18n);
+  }
 }
 // Memory panel: what actually has to fit in RAM. Every line is either measured
 // (resident share from the real file sizes, KV from the engine's own log) or a
@@ -2071,9 +2473,25 @@ function renderPartitionNote() {
     : t("partition.equal");
 }
 
+// Write the recommendation into the controls without a toast (auto-tune path).
+function applyRecoValues(r) {
+  if (!r) return;
+  $("cache").value = r.cache; $("cacheVal").textContent = r.cache; updateCacheRec();
+  $("ctx").value = String(r.ctx);
+  $("io").value = String(r.io);
+}
+function markUserTuned(on) {
+  state.userTuned = !!on;
+  syncAutoMarks();
+}
+["cache", "ctx", "io"].forEach((id) => {
+  const el = $(id);
+  if (el) el.addEventListener(id === "cache" ? "input" : "change", () => markUserTuned(true));
+});
 function applyReco() {
   const r = state.reco || computeReco();
   if (!r) { toast(t("toast.noSys"), true); return; }
+  markUserTuned(false);
   $("cache").value = r.cache; $("cacheVal").textContent = r.cache; updateCacheRec();
   $("ctx").value = String(r.ctx);
   $("io").value = String(r.io);
@@ -2083,6 +2501,7 @@ function applyReco() {
   renderObsStrip(state.live || {});
 }
 function applyPeak() {
+  markUserTuned(true);
   // Qualified Metal Peak: cache=14 · headroom=3 · io=4 (~18–19 tok/s warm when free allows).
   // Preferred quiet ≥22; admit ≥21.5 (0.5 tol) without confirm; confirm only below admit band.
   const free = state.sys && typeof state.sys.free_gib === "number" ? state.sys.free_gib : null;
@@ -2102,6 +2521,7 @@ function applyPeak() {
   renderObsStrip(state.live || {});
 }
 function applyGoodTokens() {
+  markUserTuned(true);
   // Shared coding path: temperature 0 + thinking off (Metal + oMLX).
   if ($("thinking")) $("thinking").checked = false;
   if ($("chatThink")) $("chatThink").checked = false;
@@ -2244,34 +2664,54 @@ window.addEventListener("resize", sizeChat);
 
 function push(buf, v) { buf.push(v); if (buf.length > 60) buf.shift(); }
 
-function drawSpark(id, buf, color, max) {
+// Chart colours come from the CSS tokens so light/dark (system appearance) both
+// work; cached and refreshed when the appearance flips.
+const THEME = { vars: {} };
+function themeVar(name) {
+  if (!(name in THEME.vars)) THEME.vars[name] = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return THEME.vars[name];
+}
+const REDUCED_MOTION = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
+if (window.matchMedia) {
+  const scheme = window.matchMedia("(prefers-color-scheme: dark)");
+  const flush = () => { THEME.vars = {}; try { drawAll(); } catch {} };
+  if (scheme.addEventListener) scheme.addEventListener("change", flush);
+}
+
+// A 1.5px line with a flat 14 % tint underneath and a dot on the newest reading.
+// `min`/`max` pin the scale (hit rate is 0–100); otherwise it fits the data.
+function drawSpark(id, buf, color, max, min) {
   const c = $(id); if (!c) return;
   const dpr = window.devicePixelRatio || 1;
   const w = c.clientWidth, h = c.clientHeight;
+  if (!w || !h) return;
   c.width = w * dpr; c.height = h * dpr;
   const ctx = c.getContext("2d"); ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
   if (buf.length < 2) return;
   const top = max || Math.max(...buf, 1);
+  const bottom = min || 0;
+  const span = Math.max(top - bottom, 1e-6);
   const x = (i) => (i / (buf.length - 1)) * w;
-  const y = (v) => h - (v / top) * (h - 6) - 3;
+  const y = (v) => h - ((Math.min(Math.max(v, bottom), top) - bottom) / span) * (h - 6) - 3;
   ctx.beginPath(); ctx.moveTo(0, h);
   buf.forEach((v, i) => ctx.lineTo(x(i), y(v)));
   ctx.lineTo(w, h); ctx.closePath();
-  const g = ctx.createLinearGradient(0, 0, 0, h);
-  g.addColorStop(0, color + "44"); g.addColorStop(1, color + "05");
-  ctx.fillStyle = g; ctx.fill();
+  ctx.globalAlpha = 0.14; ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1;
   ctx.beginPath();
   buf.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
-  ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.stroke();
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.lineJoin = "round"; ctx.stroke();
   ctx.beginPath(); ctx.arc(x(buf.length - 1), y(buf[buf.length - 1]), 2.5, 0, 7); ctx.fillStyle = color; ctx.fill();
 }
-// Both sparklines sit in the live view's streaming section. The token-rate trace
-// that used to be here is gone: the strip shows the momentary rate and the serving
-// section the average, so a third drawing of it was the duplication we removed.
+// The streaming section keeps its two larger traces; the cockpit draws the last
+// minute of each headline figure beside the number it belongs to.
 function drawAll() {
-  drawSpark("ssdChart", state.ssd, "#ff9d2f");
-  drawSpark("hitChart", state.hit, "#35d07f", 100);
+  drawSpark("ssdChart", state.ssd, themeVar("--chart-ssd"));
+  drawSpark("hitChart", state.hit, themeVar("--chart-hit"), 100);
+  drawSpark("ckTpsSpark", state.tps, themeVar("--chart-tps"));
+  drawSpark("ckHitSpark", state.hit, themeVar("--chart-hit"), 100);
+  drawSpark("ckSsdSpark", state.ssd, themeVar("--chart-ssd"));
+  drawSpark("ckRamSpark", state.free, themeVar("--chart-ram"), state.sys && state.sys.total_gib ? state.sys.total_gib : null);
 }
 
 // ---- polling loop ----------------------------------------------------------
@@ -2286,6 +2726,7 @@ function initArena() {
 }
 function drawArena() {
   const cv = $("expertGrid");
+  const still = REDUCED_MOTION.matches;
   if (cv && cv.clientWidth) {
     const ctx = cv.getContext("2d");
     const w = cv.clientWidth, h = cv.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -2295,20 +2736,28 @@ function drawArena() {
     const { cols, rows, cells } = ARENA, cw = w / cols, ch = h / rows, pad = 2;
     const residentFrac = ARENA.hit / 100;
     const streamProb = ARENA.active ? Math.min(0.05 + ARENA.ssd / 5000, 0.22) : 0.003;
+    const streamRgb = themeVar("--cell-stream"), hot = themeVar("--cell-hot"), cold = themeVar("--cell-cold");
     for (let i = 0; i < cells.length; i++) {
       const c = cells[i];
       const x = (i % cols) * cw + pad, y = ((i / cols) | 0) * ch + pad, tw = cw - 2 * pad, th = ch - 2 * pad;
-      if (Math.random() < streamProb) c.flick = 1;
-      c.flick *= 0.86;
-      if (c.flick > 0.04) ctx.fillStyle = `rgba(255,168,58,${0.3 + 0.62 * c.flick})`;   // streaming from SSD
-      else if (c.rank < residentFrac) ctx.fillStyle = "rgba(60,200,120,0.5)";            // resident hit
-      else ctx.fillStyle = "rgba(120,132,155,0.10)";                                     // cold slot
+      if (still) {
+        // Reduced motion: no flicker. The same share of slots is shown streaming,
+        // as a steady band just above the resident ones.
+        c.flick = ARENA.active && c.rank >= residentFrac && c.rank < residentFrac + streamProb ? 1 : 0;
+      } else {
+        if (Math.random() < streamProb) c.flick = 1;
+        c.flick *= 0.86;
+      }
+      if (c.flick > 0.04) ctx.fillStyle = `rgba(${streamRgb},${0.3 + 0.62 * c.flick})`;   // streaming from SSD
+      else if (c.rank < residentFrac) ctx.fillStyle = hot;                                 // resident hit
+      else ctx.fillStyle = cold;                                                           // cold slot
       ctx.beginPath();
       if (ctx.roundRect) ctx.roundRect(x, y, tw, th, 2); else ctx.rect(x, y, tw, th);
       ctx.fill();
     }
   }
-  requestAnimationFrame(drawArena);
+  if (still) setTimeout(() => requestAnimationFrame(drawArena), 1000);
+  else requestAnimationFrame(drawArena);
 }
 
 async function poll() {
@@ -2325,6 +2774,7 @@ async function poll() {
       const log = await invoke("read_log", { maxLines: 400 });
       const p = parseLog(log);
       const act = parseActivity(log);
+      state.activity = act;
       updateActivity(act);
       ARENA.active = act.phase === "decode" || act.phase === "prefill";
       // Load-time line: keep it, the 400-line tail window scrolls past it later.
@@ -2345,6 +2795,9 @@ async function poll() {
     setPill("off");
     state.lastMisses = null;
     state.kvMiB = null;
+    state.activity = null;
+    state.ssdPeak = 0;
+    if (state.runningCfg) { state.runningCfg = null; try { updateReco(); } catch {} }
     ARENA.active = false;
     if (state.resolvedBackend) {
       state.resolvedBackend = null;
@@ -2443,14 +2896,20 @@ async function doAgent(a) {
         cfg: { home: state.def ? state.def.home : "", base_url: BASE_URL, model: agentModelId(),
                api_key: "sk-local", ctx: +$("ctx").value, max_out: 4096, target: a.target },
       });
-      $("agentNote").innerHTML = `<b>${a.name}</b>: gepatcht -> <code>${path}</code> &middot; ${a.restart} neu starten.`;
-      toast(`In ${a.name} gepatcht - ${a.restart} neu starten`);
+      const note = fillVars(t("agent.patched"), { name: a.name, path: "\u0000", app: a.restart });
+      $("agentNote").textContent = "";
+      const [before, after] = note.split("\u0000");
+      const code = document.createElement("code"); code.textContent = path;
+      $("agentNote").append(before, code, after);
+      toast(fillVars(t("agent.patched"), { name: a.name, path, app: a.restart }));
+      localStorage.setItem("slipstream.editorConnected", "1"); markJourney();
     } catch (e) { toast(String(e), true); }
   } else {
     try {
       await navigator.clipboard.writeText(a.snippet());
       $("agentNote").innerHTML = `<b>${a.name}</b>: ${t("toast.copied")}. ${t(a.how)}`;
-      toast(`${a.name}-Config kopiert`);
+      toast(fillVars(t("agent.copiedToast"), { name: a.name }));
+      localStorage.setItem("slipstream.editorConnected", "1"); markJourney();
     } catch { toast(t("toast.copyFail"), true); }
   }
 }
@@ -2763,8 +3222,135 @@ function absorbLive(live) {
     updateReco();
     renderMemPlan();
   }
+  // Cockpit history: the momentary decode rate (only while running, so a stopped
+  // engine does not draw a line of zeros) and RAM headroom.
+  if (state.running) {
+    const pick = pickObsStrip(live, true);
+    push(state.tps, pick.tps || 0);
+    state.ssdPeak = Math.max(state.ssdPeak || 0, ssd);
+  }
+  if (memory.total_bytes) push(state.free, memory.free_bytes / 1073741824);
+
   // Topbar strip must update even when the Live panel is closed.
   renderObsStrip(live);
+  // The verdict line rides in the activity strip on every tab, so it is computed
+  // here; the cockpit itself only draws while the Live view is open.
+  updateCockpitVerdict(live);
+}
+
+// ---- engine cockpit --------------------------------------------------------
+// Inputs are the live_stats tick plus the log phase. Pure: no DOM, so the thresholds
+// can be read (and tested) in one place. Returns { kind, key, vars } for t().
+const CK_MISS_SSD_PCT = 15;   // ≥ this share of expert lookups missing → SSD-bound
+const CK_FREE_PCT_RED = 12;   // same thresholds as the memory lamp
+const CK_SWAP_MB_RED = 800;
+function cockpitVerdict(o) {
+  if (!o.running) return { kind: "stopped", key: "why.stopped", vars: {} };
+  if (o.loading) return { kind: "loading", key: "why.loading", vars: {} };
+  const freePct = o.totalGib ? (o.freeGib / o.totalGib) * 100 : 100;
+  if ((o.swapMb || 0) > CK_SWAP_MB_RED || freePct < CK_FREE_PCT_RED) {
+    return { kind: "memory", key: "why.memory", vars: { free: dec(o.freeGib || 0, 1),
+      swap: o.swapMb > 0 ? t("why.swapPart").replace("{swap}", dec(o.swapMb / 1024, 1)) : "" } };
+  }
+  if (o.phase === "prefill") {
+    return { kind: "prefill", key: "why.prefill",
+      vars: { rate: o.ppRate ? t("why.prefillRate").replace("{rate}", dec(o.ppRate, 0)) : "" } };
+  }
+  if (o.phase !== "decode") return { kind: "idle", key: "why.idle", vars: {} };
+  if (o.hit == null) {
+    return { kind: "decode", key: "why.noExperts", vars: { tps: o.tps ? dec(o.tps, 1) : "–" } };
+  }
+  const miss = Math.max(0, 100 - o.hit);
+  if (miss >= CK_MISS_SSD_PCT && o.ssd > 1) {
+    const peak = o.ssdPeak > 0 ? Math.min(100, Math.round((o.ssd / o.ssdPeak) * 100)) : 100;
+    return { kind: "ssd", key: "why.ssd", vars: { miss: dec(miss, 0), ssd: dec(o.ssd, 0), peak: String(peak) } };
+  }
+  return { kind: "compute", key: "why.compute", vars: { hit: dec(o.hit, 0),
+    gpu: o.gpu != null ? t("why.gpu").replace("{gpu}", String(Math.round(o.gpu * 100))) : "" } };
+}
+function fillVars(text, vars) {
+  return Object.keys(vars).reduce((out, k) => out.split(`{${k}}`).join(vars[k]), text);
+}
+function cockpitInputs(live) {
+  const m = live.system.memory;
+  const act = state.activity;
+  return {
+    running: state.running,
+    loading: state.pillMode === "loading",
+    phase: act ? act.phase : "idle",
+    ppRate: act && act.pp ? act.pp.rate : null,
+    tps: pickObsStrip(live, state.running).tps,
+    hit: live.experts && live.experts.hit_rate != null ? live.experts.hit_rate : null,
+    ssd: state.ssdNow || 0,
+    ssdPeak: state.ssdPeak || 0,
+    freeGib: m.free_bytes / 1073741824,
+    totalGib: m.total_bytes / 1073741824,
+    swapMb: m.swap_used_bytes / 1048576,
+    gpu: live.system.gpu_usage,
+  };
+}
+function updateCockpitVerdict(live) {
+  const v = cockpitVerdict(cockpitInputs(live));
+  const html = fillVars(t(v.key), v.vars);
+  state.ckVerdict = { ...v, html };
+  const why = $("actWhy");
+  if (why) why.innerHTML = state.running && v.kind !== "idle" ? html : "";
+  // Screen readers hear the limiting factor only when it changes and has held for
+  // three ticks — not a new sentence every second.
+  if (v.kind === state.ckCandidate) state.ckHold++;
+  else { state.ckCandidate = v.kind; state.ckHold = 1; }
+  if (state.ckHold >= 3 && v.kind !== state.ckKind) {
+    const first = state.ckKind == null;
+    state.ckKind = v.kind;
+    const ann = $("cockpitAnnounce");
+    if (ann && !first) ann.textContent = html.replace(/<[^>]+>/g, "");
+  }
+}
+function renderCockpit(live) {
+  if (!$("cockpit")) return;
+  const v = state.ckVerdict || cockpitVerdict(cockpitInputs(live));
+  const whyBox = $("cockpitWhy");
+  whyBox.dataset.kind = v.kind;
+  $("cockpitWhyText").innerHTML = v.html || fillVars(t(v.key), v.vars);
+  $("cockpitModel").textContent = state.running ? (state.model?.name || "–") : t("cockpit.noModel");
+
+  const setVal = (id, text) => {
+    $(id).textContent = text;
+    $(id + "Wrap").classList.toggle("is-empty", text === "–");
+  };
+  // Decode speed — the momentary rate, with the session averages as its note.
+  const pick = pickObsStrip(live, state.running);
+  setVal("ckTpsVal", pick.tps ? dec(pick.tps, 1) : "–");
+  const s = live.session;
+  $("ckTpsNote").textContent = state.running && s && s.avg_decode_tps > 0
+    ? fillVars(t("cockpit.tpsNote"), { avg: dec(s.avg_decode_tps, 1), pp: dec(s.avg_prefill_tps, 0) })
+    : (state.running ? t("cockpit.tpsNoteNone") : "");
+
+  // Expert cache + SSD only exist for a streaming (PGRN) run; otherwise the slots go.
+  const cache = state.running ? live.experts : null;
+  $("ckHit").hidden = !cache;
+  $("ckSsd").hidden = !cache;
+  if (cache) {
+    setVal("ckHitVal", dec(cache.hit_rate, 1));
+    $("ckHitNote").textContent = fillVars(t("cockpit.hitNote"), { miss: dec(Math.max(0, 100 - cache.hit_rate), 1) });
+    setVal("ckSsdVal", dec(state.ssdNow || 0, 0));
+    $("ckSsdNote").textContent = fillVars(t("cockpit.ssdNote"), { peak: dec(state.ssdPeak || 0, 0) });
+  }
+  const grid = $("cockpit").querySelector(".cockpit-grid");
+  if (grid) grid.classList.toggle("no-stream", !cache);
+
+  // RAM headroom — host memory, always available.
+  const m = live.system.memory;
+  if (m.total_bytes) {
+    setVal("ckRamVal", dec(m.free_bytes / 1073741824, 1));
+    $("ckRamNote").textContent = fillVars(t("cockpit.ramNote"), {
+      total: String(Math.round(m.total_bytes / 1073741824)),
+      swap: m.swap_used_bytes > 0 ? giB(m.swap_used_bytes) : t("cockpit.noSwap"),
+    });
+  } else {
+    setVal("ckRamVal", "–");
+    $("ckRamNote").textContent = "";
+  }
 }
 
 /** Fields for the always-visible topbar strip. Pure — mirrored in scripts/test_obs_strip.mjs. */
@@ -2813,6 +3399,7 @@ function formatObsCfg() {
   if (c == null || io == null) return "–";
   return `${c}/${io}/3`;
 }
+if ($("obsStrip")) $("obsStrip").addEventListener("click", () => showTab("status"));
 function renderObsStrip(live) {
   const pick = pickObsStrip(live, state.running);
   const paint = (id, text) => {
@@ -2857,6 +3444,7 @@ function renderLive(live) {
   }
   $("stNoServer").hidden = live.serving_available;
   renderObsStrip(live);
+  renderCockpit(live);
   renderScope();
 
   // 2 — streaming. Both figures come from one parse of the engine log: the rate
@@ -3919,51 +4507,19 @@ function chatEmptyHtml() {
     + '</div>';
 }
 
-async function journeyChooseFolder() {
-  showTab("models");
-  try { await preferDefaultModelPaths(); } catch {}
-  const prefer = state.preferMetalDir || preferredMetalModelDir();
-  if ($("pModelsRoot") && prefer && !$("pModelsRoot").value.trim()) $("pModelsRoot").value = prefer;
-  if ($("pModelsRoot")) {
-    await pickInto("pModelsRoot", { directory: true });
-    return;
-  }
-  // Fallback for older DOM: Metal → GGUF folder, MLX → mlx dir.
-  const useMlx = effectiveBackend() === "mlx";
-  if (useMlx) {
-    const mlxPrefer = state.preferMlxDir || preferredMlxModelDir();
-    if ($("pMlx") && mlxPrefer && !$("pMlx").value.trim()) $("pMlx").value = mlxPrefer;
-    if ($("pMlx")) await pickInto("pMlx", { directory: true });
-    else showTab("settings");
-    return;
-  }
-  if ($("pDir")) {
-    try { applyModelPaths(); } catch {}
-    await pickInto("pDir", { directory: true });
-  }
-}
 function journeyStartServer() {
   if (state.running) return;
-  const btn = $("powerBtn");
-  if (btn && !btn.disabled) { btn.click(); return; }
+  if (state.modelReady) { startServer(); return; }
   toast(t("journey.needModel"), true);
-  showTab("models");
-}
-function journeySendPrompt() {
-  showTab("chat");
-  const input = $("chatInput");
-  if (!input) return;
-  if (!input.value.trim()) input.value = t("journey.promptSample");
-  input.focus();
-  input.dispatchEvent(new Event("input"));
+  goToModelSetup();
 }
 function wireJourney() {
   const s1 = $("journeyStep1");
-  if (s1) s1.onclick = () => { journeyChooseFolder(); };
+  if (s1) s1.onclick = () => { goToModelSetup(); };
   const s2 = $("journeyStep2");
   if (s2) s2.onclick = () => { journeyStartServer(); };
   const s3 = $("journeyStep3");
-  if (s3) s3.onclick = () => { journeySendPrompt(); };
+  if (s3) s3.onclick = () => { showTab("connect"); };
 }
 function wireJourneyCta() { wireJourney(); }
 function renderChatEmpty() {
@@ -3972,6 +4528,7 @@ function renderChatEmpty() {
   wrap.innerHTML = chatEmptyHtml();
   applyLang(LANG);
   wireJourney();
+  markJourney();
 }
 
 function initChat() {
@@ -4184,6 +4741,8 @@ function updateChatP2pHint() {
   } else {
     note.textContent = t("chat.serverHint");
   }
+  // "The server must be running" is only true advice while it is not.
+  note.hidden = !!state.running;
 }
 
 function initP2p() {
@@ -4456,6 +5015,7 @@ async function boot() {
     $("pMlx").addEventListener("blur", persistMlx);
   }
   wirePgrnMlxSettings();
+  wireNextEngineSettings();
   if ($("mlxRuntimeBtn")) {
     $("mlxRuntimeBtn").onclick = async () => {
       try {
