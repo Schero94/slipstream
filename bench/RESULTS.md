@@ -3522,3 +3522,6 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 
 - Not verified on the new pin: Laguna (upstream scaling + our DFlash drafter), adaptive draft,
   grammar-forced drafts, routing logger, ANE draft, SPEC_PIN, --parallel > 1.
+- Turbo v2 quality re-check on the new pin (new-pin exact-routing base): decode (ub 1) KLD
+  0.0199 / same top-1 92.5 % / PPL ratio 0.998 ± 0.007; prefill (ub 512) KLD 0.000 / 100 %.
+  Matches the old pin (0.020 / 92.9 %) — the differing Turbo output hash is a near-tie flip.
