@@ -1,3 +1,13 @@
 20261124-223957	label=la0	cache=8	decode_tps=15.57	prefill_tps=18.79	hit=NA	la_recall=NA	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
 20261124-224138	label=la2	cache=8	decode_tps=14.44	prefill_tps=19.44	hit=NA	la_recall=NA	swap_delta_mb=-8.00	out=e6c6a36552db	env=PGRN_LOOKAHEAD=2
 20261124-224310	label=la4	cache=8	decode_tps=13.49	prefill_tps=15.19	hit=NA	la_recall=NA	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=4
+20261124-225925	label=la0	cache=4	decode_tps=9.73	prefill_tps=18.86	hit=68.86	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261124-230106	label=st0.01	cache=4	decode_tps=12.64	prefill_tps=19.33	hit=73.51	la_recall=77.47	swap_delta_mb=-8.00	out=92d026f2b94f	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.01
+20261124-230239	label=st0.02	cache=4	decode_tps=13.03	prefill_tps=19.71	hit=73.53	la_recall=74.13	swap_delta_mb=0	out=8ce1f16e6ac4	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261124-230409	label=st0.05	cache=4	decode_tps=14.04	prefill_tps=19.63	hit=75.55	la_recall=70.99	swap_delta_mb=0	out=0254a30fde9d	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.05
+20261124-230538	label=st0.02la	cache=4	decode_tps=13.61	prefill_tps=19.47	hit=74.35	la_recall=86.16	swap_delta_mb=0	out=67f74861d500	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02 PGRN_STEER_LA=1
+20261124-230707	label=la0	cache=4	decode_tps=10.42	prefill_tps=20.03	hit=68.86	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261124-230840	label=st0.01	cache=4	decode_tps=13.03	prefill_tps=16.71	hit=73.51	la_recall=77.47	swap_delta_mb=0	out=92d026f2b94f	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.01
+20261124-231011	label=st0.02	cache=4	decode_tps=13.69	prefill_tps=19.49	hit=73.53	la_recall=74.13	swap_delta_mb=-8.00	out=8ce1f16e6ac4	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261124-231140	label=st0.05	cache=4	decode_tps=14.55	prefill_tps=19.48	hit=75.55	la_recall=70.99	swap_delta_mb=0	out=0254a30fde9d	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.05
+20261124-231309	label=st0.02la	cache=4	decode_tps=13.85	prefill_tps=19.67	hit=74.35	la_recall=86.16	swap_delta_mb=0	out=67f74861d500	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02 PGRN_STEER_LA=1

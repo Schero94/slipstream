@@ -270,8 +270,10 @@ struct ServerConfig {
     pgrn_buffered: bool, // advanced: buffered reads (skip F_NOCACHE) for non-NVMe drives
     #[serde(default)]
     pgrn_online: bool,   // advanced: online co-activation predictor -> speculative prefetch
-    /// Lookahead gating (lossless): extra experts beyond top-k predicted for the next layer
-    /// from this layer's hidden state and warmed during compute. 0 = off. -> PGRN_LOOKAHEAD
+    /// Lookahead gating (lossless, measured +29-33% decode at 4-8 GiB cache): the next
+    /// layer's experts are predicted from this layer's hidden state and warmed during compute.
+    /// 0 = off, n >= 1 = on with n-1 extra experts beyond top-k (1 = recommended).
+    /// -> PGRN_LOOKAHEAD=<n-1>
     #[serde(default)]
     pgrn_lookahead: u32,
     /// Cache-steered routing / Turbo (lossy, opt-in): selection bonus for resident experts.
@@ -387,7 +389,7 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
             cmd.env("PGRN_ONLINE_PREDICT", "1");
         }
         if cfg.pgrn_lookahead > 0 {
-            cmd.env("PGRN_LOOKAHEAD", cfg.pgrn_lookahead.min(16).to_string());
+            cmd.env("PGRN_LOOKAHEAD", (cfg.pgrn_lookahead - 1).min(16).to_string());
         }
         if cfg.pgrn_steer.is_finite() && cfg.pgrn_steer > 0.0 {
             cmd.env("PGRN_STEER", format!("{:.3}", cfg.pgrn_steer.min(0.5)));

@@ -39,6 +39,8 @@ Never edit files while a build is compiling them (it produces mixed binaries).
     **opt-in, off by default**, and come with a measured quality cost (KL divergence /
     top-1 agreement vs exact routing via `llama-perplexity --kl-divergence`) shown
     honestly in the UI.
+- Wrap every heavy job (model run, benchmark sweep, engine build) in `scripts/heavy.sh`
+  so parallel agents never build during a measurement.
 - "The Mac stays usable" is a hard invariant: never bypass RAM admission, never run
   two model processes at once, never benchmark while another heavy job runs.
 

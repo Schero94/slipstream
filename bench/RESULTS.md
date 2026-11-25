@@ -3331,3 +3331,30 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   speculative reads cost more than they save. Default m=0 (predict exactly top-k).
 - Verdict: **KEEP**, lossless, default-on candidate in the app. Hit-rate/recall were
   not logged in this sweep (llama-completion did not print PGRN stats; fixed after).
+
+## Cache-steered routing "Turbo" (PGRN_STEER) — KEEP at 0.01 as opt-in, reject >= 0.02 — 2026-11-24
+
+- Idea (Cache-Prior 2412.00099, CECAR 2611.20119, PSR 2610.34721): add a bonus to the
+  router's *selection* probabilities of experts resident at ubatch start (snapshot, so
+  routing never depends on I/O timing); mixing weights stay the unbiased softmax.
+  Implemented via build_moe_ffn's `exp_probs_b` with a per-layer [n_expert] bias tensor.
+- Same host/model/files as the lookahead entry; cache 4 GiB; baseline = lookahead m=0
+  (the new default). Speed: run_arm.sh, interleaved, 2 reps. Quality: llama-perplexity
+  KL vs exact routing, 12 x 512-token chunks of bench/fetchwall/kld_corpus.txt.
+
+  | arm | decode tok/s (2 reps) | Δ | hit | PPL ratio | mean KLD | same top-1 |
+  |---|---|---|---|---|---|---|
+  | lookahead only (exact) | 10.07 (9.73/10.42) | — | 68.9 % | 1.000 | 0 | 100 % |
+  | steer 0.01 | 12.84 (12.64/13.03) | **+28 %** | 73.5 % | **1.016 ± 0.008** | 0.064 | 88.2 % |
+  | steer 0.02 | 13.36 (13.03/13.69) | +33 % | 73.5 % | 1.125 ± 0.015 | 0.199 | 80.3 % |
+  | steer 0.02 + PSR mark | 13.73 (13.61/13.85) | +36 % | 74.4 % | n/m* | n/m* | n/m* |
+  | steer 0.05 | 14.29 (14.04/14.55) | +42 % | 75.6 % | 1.649 ± 0.041 | 0.641 | 67.0 % |
+
+  *the KL run is prefill (ubatch 512) where lookahead is inactive, so the PSR variant's
+  decode-time quality is not measured by it — not admitted until a decode-quality gate exists.
+- Lookahead recall at 4 GiB, exact routing: 82.9 % of routed experts predicted one layer
+  ahead (first measurement of it). Swap growth 0 MB in all arms.
+- Caveat: quality measured with prefill cache dynamics, speed with decode; outputs differ
+  from exact routing by design (hashes differ).
+- Verdict: **0.01 = "Turbo"**, opt-in, off by default, UI states "+~28 % speed, ~1.6 %
+  higher perplexity". **≥ 0.02 rejected** (≥ 12 % perplexity). PSR mark: pending.
