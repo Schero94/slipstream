@@ -11,3 +11,9 @@
 20261124-231011	label=st0.02	cache=4	decode_tps=13.69	prefill_tps=19.49	hit=73.53	la_recall=74.13	swap_delta_mb=-8.00	out=8ce1f16e6ac4	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
 20261124-231140	label=st0.05	cache=4	decode_tps=14.55	prefill_tps=19.48	hit=75.55	la_recall=70.99	swap_delta_mb=0	out=0254a30fde9d	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.05
 20261124-231309	label=st0.02la	cache=4	decode_tps=13.85	prefill_tps=19.67	hit=74.35	la_recall=86.16	swap_delta_mb=0	out=67f74861d500	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02 PGRN_STEER_LA=1
+20261125-014136	label=base	cache=10	decode_tps=14.74	prefill_tps=19.12	hit=86.41	la_recall=NA	swap_delta_mb=0	out=e6c6a36552db	env=
+20261125-014312	label=la0	cache=10	decode_tps=17.76	prefill_tps=19.51	hit=84.88	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-014442	label=st0.01	cache=10	decode_tps=19.66	prefill_tps=19.34	hit=86.73	la_recall=80.99	swap_delta_mb=0	out=d76bdaaeb466	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.01
+20261125-014612	label=base	cache=10	decode_tps=14.60	prefill_tps=19.85	hit=86.41	la_recall=NA	swap_delta_mb=0	out=e6c6a36552db	env=
+20261125-014742	label=la0	cache=10	decode_tps=17.54	prefill_tps=19.34	hit=84.88	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-014912	label=st0.01	cache=10	decode_tps=19.80	prefill_tps=19.53	hit=86.73	la_recall=80.99	swap_delta_mb=0	out=d76bdaaeb466	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.01

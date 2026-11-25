@@ -3358,3 +3358,17 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   from exact routing by design (hashes differ).
 - Verdict: **0.01 = "Turbo"**, opt-in, off by default, UI states "+~28 % speed, ~1.6 %
   higher perplexity". **≥ 0.02 rejected** (≥ 12 % perplexity). PSR mark: pending.
+
+## Band check at 10 GiB (the 36 GB Mac's interactive cache) — 2026-11-25
+
+- Same protocol (run_arm.sh, interleaved base / lookahead m=0 / lookahead + steer 0.01, 2 reps).
+
+  | arm | decode tok/s (2 reps) | vs base | hit |
+  |---|---|---|---|
+  | base | 14.67 (14.74/14.60) | — | 86.4 % |
+  | lookahead m=0 | 17.65 (17.76/17.54) | **+20 %** | 84.9 % |
+  | lookahead + Turbo 0.01 | 19.73 (19.66/19.80) | **+34 %** (+12 % over lookahead) | 86.7 % |
+
+- Lookahead output hash `e6c6a36552db` = base (lossless), swap growth 0 MB everywhere.
+  Lookahead recall 82.9 %. The lookahead gain shrinks with cache size (+29 % @4, +33 % @8,
+  +20 % @10) but stays clearly positive; Turbo adds less at a large cache, as expected.
