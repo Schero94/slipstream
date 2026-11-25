@@ -21,10 +21,10 @@ if [ "$LABEL" = base ]; then
   grep -E "Final estimate|PPL" "$LOG" | tail -2
 else
   env "$@" "$BIN" "${COMMON[@]}" --kl-divergence-base "$BASE" --kl-divergence > "$LOG" 2>&1
-  MKL=$(grep -E "^Mean +KLD" "$LOG" | awk '{print $3, $4, $5}')
-  TOP=$(grep -E "^Same top p" "$LOG" | awk '{print $4, $5, $6}')
-  PPLR=$(grep -E "^Mean +PPL\(Q\)/PPL\(base\)" "$LOG" | awk '{print $3, $4, $5}')
-  HIT=$(grep -E "PGRN cache = " "$LOG" | sed -E 's/.*\(([0-9.]+)%\).*/\1/' | tail -1)
+  MKL=$(grep -E "^Mean +KLD" "$LOG" | awk "{print \$3, \$4, \$5}" || true)
+  TOP=$(grep -E "^Same top p" "$LOG" | awk '{print $4, $5, $6}' || true)
+  PPLR=$(grep -E "^Mean +PPL\(Q\)/PPL\(base\)" "$LOG" | awk '{print $4, $5, $6}' || true)
+  HIT=$(grep -E "PGRN cache = " "$LOG" | sed -E 's/.*\(([0-9.]+)%\).*/\1/' | tail -1 || true)
   printf '%s\tkld ub=%s\tlabel=%s\tcache=%s\tmean_kld=%s\tsame_top=%s\tppl_ratio=%s\thit=%s\tenv=%s\n' \
     "$(date +%Y%m%d-%H%M%S)" "$UB" "$LABEL" "$CACHE" "$MKL" "$TOP" "$PPLR" "${HIT:-NA}" "$*" | tee -a "$OUT/summary.tsv"
 fi

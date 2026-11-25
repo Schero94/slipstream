@@ -1131,8 +1131,8 @@ const JOURNEY_I18N = {
     "adv.steer": "Turbo (experimental)",
     "hint.lookahead": "Reads the experts the next layer is predicted to need before it asks for them. Measured lossless, 29–33 % faster decoding at 4–8 GiB cache. On by default.",
     "tip.lookahead": "Engine setting PGRN_LOOKAHEAD. Unlike predictive prefetch, which learns co-firing experts over time, lookahead predicts the next layer’s experts from the current one. Output is identical with it on or off.",
-    "adv.steerWarn": "About 28 % faster on small caches. Answers can differ slightly from the unmodified model (≈1.6 % higher perplexity in our test).",
-    "tip.steer": "Nudges the router toward experts already in RAM (engine setting PGRN_STEER = 0.01). Off by default.",
+    "adv.steerWarn": "About 38 % faster with a small cache, about 12 % with a large one. Answers can differ slightly from the unmodified model (same next token 93 % of the time; perplexity unchanged within noise in our test). Your prompt is always read exactly.",
+    "tip.steer": "While generating, nudges the router toward experts that are already in RAM or being prefetched (engine settings PGRN_STEER = 0.02 with the prefetch-steered mark). Prompt reading stays exact. Off by default.",
   },
   de: {
     "nav.models": "Modell", "nav.connect": "Editor verbinden", "nav.downloads": "Bibliothek",
@@ -1193,8 +1193,8 @@ const JOURNEY_I18N = {
     "adv.steer": "Turbo (experimentell)",
     "hint.lookahead": "Liest die Experten, die der nächste Layer voraussichtlich braucht, bevor er sie anfragt. Gemessen verlustfrei, 29–33 % schnelleres Decoding bei 4–8 GiB Cache. Standardmäßig an.",
     "tip.lookahead": "Engine-Einstellung PGRN_LOOKAHEAD. Anders als Predictive Prefetch, das gemeinsam feuernde Experten über die Zeit lernt, sagt Lookahead die Experten des nächsten Layers aus dem aktuellen voraus. Die Ausgabe ist mit und ohne identisch.",
-    "adv.steerWarn": "Etwa 28 % schneller bei kleinem Cache. Antworten können leicht vom unveränderten Modell abweichen (≈1,6 % höhere Perplexity in unserem Test).",
-    "tip.steer": "Lenkt den Router leicht zu Experten, die schon im RAM liegen (Engine-Einstellung PGRN_STEER = 0,01). Standard aus.",
+    "adv.steerWarn": "Etwa 38 % schneller bei kleinem Cache, etwa 12 % bei großem. Antworten können leicht vom unveränderten Modell abweichen (in 93 % der Fälle dasselbe nächste Token; Perplexity in unserem Test im Rauschen unverändert). Dein Prompt wird immer exakt gelesen.",
+    "tip.steer": "Lenkt den Router beim Generieren leicht zu Experten, die schon im RAM liegen oder gerade vorgeladen werden (Engine-Einstellung PGRN_STEER = 0,02 mit Prefetch-Markierung). Der Prompt wird weiter exakt gelesen. Standard aus.",
   },
 };
 Object.keys(JOURNEY_I18N).forEach((l) => Object.assign(I18N[l], JOURNEY_I18N[l]));
@@ -2080,14 +2080,14 @@ function wirePgrnMlxSettings() {
 //   cfg.pgrn_lookahead  1 = on (default), 0 = off. main.rs maps > 0 to
 //                       PGRN_LOOKAHEAD=<value>; 1 means on with margin 0.
 //                       Measured lossless, +29–33 % decode at 4–8 GiB cache.
-//   cfg.pgrn_steer      Turbo: 0.01 when on, 0 = off (default) → PGRN_STEER.
-//                       Lossy: +28 % decode, ≈1.6 % higher perplexity (measured).
+//   cfg.pgrn_steer      Turbo: 0.02 when on, 0 = off (default) → PGRN_STEER (+ PSR mark).
+//                       Lossy, decode-only: +38 % @4 GiB / +12 % @10 GiB, KLD 0.020 (measured).
 // TODO(engine): if ServerConfig does not declare these fields yet, serde drops
 // them silently — add `#[serde(default)] pgrn_lookahead: u32` and
 // `#[serde(default)] pgrn_steer: f64` next to pgrn_online.
-// Only strength 0.01 is measured acceptable (+28 % decode, +1.6 % perplexity,
-// 88 % same top-1 token); 0.02 already costs +12.5 % perplexity. So: on/off.
-const STEER_ON = 0.01;
+// Turbo v2 = 0.02 + PSR mark, decode-only (bench/RESULTS.md 2026-11-25): +38 % @4 GiB,
+// +12 % @10 GiB over lookahead; decode KLD 0.020, 93 % same top-1. So: on/off.
+const STEER_ON = 0.02;
 function lookaheadPreference() {
   const v = localStorage.getItem("slipstream.pgrn.lookahead");
   return v === null ? true : v === "1";
@@ -2207,7 +2207,7 @@ async function startServer() {
     pgrn_mirror: ($("pMirror") && $("pMirror").value.trim()) || "",
     pgrn_buffered: !!($("bufferedReads") && $("bufferedReads").checked),
     pgrn_online: !!($("onlinePredict") && $("onlinePredict").checked),
-    // Expert prefetch (1 = on, default) and Turbo (0.01 when on, default 0).
+    // Expert prefetch (1 = on, default) and Turbo (0.02 when on, default 0).
     // main.rs → PGRN_LOOKAHEAD / PGRN_STEER. See wireNextEngineSettings.
     pgrn_lookahead: pgrnLookaheadFromUi(),
     pgrn_steer: pgrnSteerFromUi(),

@@ -3372,3 +3372,42 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 - Lookahead output hash `e6c6a36552db` = base (lossless), swap growth 0 MB everywhere.
   Lookahead recall 82.9 %. The lookahead gain shrinks with cache size (+29 % @4, +33 % @8,
   +20 % @10) but stays clearly positive; Turbo adds less at a large cache, as expected.
+
+## Decode-regime quality gate (ubatch 1) — PSR mark halves Turbo's quality cost — 2026-11-25
+
+- llama-perplexity with `-ub 1` (token-by-token, so lookahead + PSR are active and the
+  cache behaves as in decode), 4 x 512 tokens of kld_corpus.txt, cache 4 GiB, KL vs
+  exact routing computed in the same regime.
+
+  | variant | PPL ratio | mean KLD | same top-1 |
+  |---|---|---|---|
+  | lookahead m=0 (control, = base config) | 1.0005 ± 0.0005 | 0.000 | 100.0 % |
+  | steer 0.01 | 1.0124 ± 0.0098 | 0.035 | 91.2 % |
+  | steer 0.01 + PSR mark | 0.9971 ± 0.0068 | 0.016 | 93.3 % |
+  | steer 0.02 + PSR mark | 1.0011 ± 0.0070 | 0.020 | 92.9 % |
+
+- Reading: giving the lookahead-predicted (in-flight) experts the bonus steers routing
+  toward experts the router most likely picks anyway, so distortion halves (KLD 0.035 →
+  0.016) while speed rises (4 GiB: 13.73 vs 12.84 tok/s for 0.02+PSR vs 0.01). Speed
+  sweep of the PSR variants at 4 and 10 GiB queued (sweep_psr.sh) before re-choosing Turbo.
+
+## Turbo v2 = steer 0.02 + PSR mark, decode-only — KEEP (replaces 0.01) — 2026-11-25
+
+- Speed (run_arm.sh, interleaved, 2 reps; baseline = lookahead m=0):
+
+  | arm | 4 GiB | 10 GiB |
+  |---|---|---|
+  | lookahead m=0 | 10.16 | 17.94 |
+  | steer 0.01 | 13.36 (+31 %) | 19.57 (+9 %) |
+  | steer 0.01 + PSR | 13.45 (+32 %) | 19.59 (+9 %) |
+  | **steer 0.02 + PSR** | **14.01 (+38 %)** | **20.08 (+12 %)** |
+  | steer 0.03 + PSR | 14.23 (+40 %) | 20.34 (+13 %) |
+
+- Decode quality (ub 1, 4 GiB): 0.02+PSR KLD 0.020 / top-1 92.9 % / PPL ratio 1.001 ± 0.007;
+  0.03+PSR KLD 0.022 / 93.8 % / 0.997 ± 0.008 — both better than plain 0.01 (KLD 0.035).
+- Gap found: in prefill PSR is inactive and plain 0.02 costs +12.5 % PPL (prefill gate
+  above), which would degrade the KV of every answer. Fix: steering is now applied only
+  when n_tokens <= 8 (decode / speculative verify); prompts are routed exactly. PSR mark
+  is default-on whenever steering is on (PGRN_STEER_LA=0 opts out).
+- Verdict: Turbo = 0.02 + PSR, decode-only, opt-in. 0.03 rejected as not worth the extra
+  distortion (+1.5 % speed). Re-verification of the decode-only build queued (turbo_v2_verify).
