@@ -1030,7 +1030,6 @@ const COCKPIT_I18N = {
     "tip.lookahead": "Engine setting PGRN_LOOKAHEAD = layers ahead (default 2). Unlike predictive prefetch, which learns co-firing experts over time, lookahead predicts the next layer’s experts from the current one. Off by default.",
     "adv.steer": "Cache-steered routing (Turbo)",
     "adv.lossy": "changes output",
-    "adv.steerStrength": "Strength",
     "adv.steerWarn": "Trades a little quality for speed: when experts score almost the same, the router prefers one already in RAM. Answers can differ from the unmodified model. Start low (0.02–0.05) and compare on your own prompts.",
     "tip.steer": "Engine setting PGRN_STEER = strength from 0 to 0.10. 0 means unmodified routing. Off by default.",
   },
@@ -1064,7 +1063,6 @@ const COCKPIT_I18N = {
     "tip.lookahead": "Engine-Einstellung PGRN_LOOKAHEAD = Layer voraus (Standard 2). Anders als Predictive Prefetch, das gemeinsam feuernde Experten über die Zeit lernt, sagt Lookahead die Experten des nächsten Layers aus dem aktuellen voraus. Standard aus.",
     "adv.steer": "Cache-gesteuertes Routing (Turbo)",
     "adv.lossy": "ändert Ausgabe",
-    "adv.steerStrength": "Stärke",
     "adv.steerWarn": "Tauscht etwas Qualität gegen Tempo: Wenn Experten fast gleich bewertet sind, bevorzugt der Router einen, der schon im RAM liegt. Antworten können vom unveränderten Modell abweichen. Niedrig anfangen (0,02–0,05) und an eigenen Prompts vergleichen.",
     "tip.steer": "Engine-Einstellung PGRN_STEER = Stärke von 0 bis 0,10. 0 bedeutet unverändertes Routing. Standard aus.",
   },
@@ -1083,7 +1081,23 @@ const JOURNEY_I18N = {
     "btn.notReady": "Set up model…",
     "sec.selectModel": "Model",
     "path.summary": "Where models are stored",
-    "prep.manual": "Manual steps", "toast.convDone": "Model prepared — ready to start",
+    "prep.manual": "Manual steps (advanced)", "toast.convDone": "Model prepared — ready to start",
+    "prep.manualHint": "The button above does both steps for you. Use these only to redo one step for the selected model:",
+    "prep.starting": "Starting… the model is loading into memory (about a minute).",
+    "prep.running": "Running — your editor can connect.",
+    "prep.incomplete": "Download incomplete.",
+    "prep.resume": "Resume download",
+    "prep.failed": "Preparation failed. Try again, or see Logs.",
+    "prep.retry": "Try again",
+    "prep.wait": "Starting…",
+    "lbl.auto": "auto",
+    "reco.inUse": "In use now",
+    "reco.running": "These are the settings the running model was started with. Changes apply at the next Start.",
+    "grp.speed": "Memory & speed", "grp.turbo": "Turbo", "grp.backend": "Backend", "grp.chat": "Chat behaviour", "grp.storage": "Storage overrides",
+    "hint.presets": "Metal Peak: the largest cache, for the fastest decoding when 22 GiB or more RAM are free. Good tokens: the measured balanced setup for everyday coding.",
+    "tip.applyPeak": "Cache 14 GiB · I/O 4 · needs ≥ 22 GiB free RAM",
+    "tip.goodTokens": "Balanced, measured setup for everyday coding",
+    "adv.mirror": "Second SSD mirror (dual SSD)", "adv.buffered": "Buffered reads (for non-NVMe drives)", "adv.predict": "Predictive prefetch (experimental)",
     "prep.download": "Download & prepare · ~{size} GiB",
     "prep.downloadDense": "Download · ~{size} GiB",
     "prep.prepare": "Prepare for SSD streaming",
@@ -1117,8 +1131,8 @@ const JOURNEY_I18N = {
     "adv.steer": "Turbo (experimental)",
     "hint.lookahead": "Reads the experts the next layer is predicted to need before it asks for them. Measured lossless, 29–33 % faster decoding at 4–8 GiB cache. On by default.",
     "tip.lookahead": "Engine setting PGRN_LOOKAHEAD. Unlike predictive prefetch, which learns co-firing experts over time, lookahead predicts the next layer’s experts from the current one. Output is identical with it on or off.",
-    "adv.steerWarn": "Trades some quality for speed: when experts score almost the same, the router prefers one already in RAM, so answers can differ from the unmodified model. Its quality cost has not been measured yet. Start low (0.02–0.05) and compare on your own prompts.",
-    "tip.steer": "Engine setting PGRN_STEER = strength from 0 to 0.10. Off by default.",
+    "adv.steerWarn": "About 28 % faster on small caches. Answers can differ slightly from the unmodified model (≈1.6 % higher perplexity in our test).",
+    "tip.steer": "Nudges the router toward experts already in RAM (engine setting PGRN_STEER = 0.01). Off by default.",
   },
   de: {
     "nav.models": "Modell", "nav.connect": "Editor verbinden", "nav.downloads": "Bibliothek",
@@ -1129,7 +1143,23 @@ const JOURNEY_I18N = {
     "btn.notReady": "Modell einrichten…",
     "sec.selectModel": "Modell",
     "path.summary": "Speicherort der Modelle",
-    "prep.manual": "Manuelle Schritte", "toast.convDone": "Modell vorbereitet — startbereit",
+    "prep.manual": "Manuelle Schritte (fortgeschritten)", "toast.convDone": "Modell vorbereitet — startbereit",
+    "prep.manualHint": "Der Button oben erledigt beide Schritte. Diese hier nur nutzen, um einen Schritt für das gewählte Modell zu wiederholen:",
+    "prep.starting": "Startet… das Modell wird in den Speicher geladen (etwa eine Minute).",
+    "prep.running": "Läuft — dein Editor kann sich verbinden.",
+    "prep.incomplete": "Download unvollständig.",
+    "prep.resume": "Download fortsetzen",
+    "prep.failed": "Vorbereitung fehlgeschlagen. Nochmal versuchen oder Logs ansehen.",
+    "prep.retry": "Nochmal versuchen",
+    "prep.wait": "Startet…",
+    "lbl.auto": "auto",
+    "reco.inUse": "Gerade in Verwendung",
+    "reco.running": "Mit diesen Einstellungen wurde das laufende Modell gestartet. Änderungen gelten beim nächsten Start.",
+    "grp.speed": "Speicher & Tempo", "grp.turbo": "Turbo", "grp.backend": "Backend", "grp.chat": "Chat-Verhalten", "grp.storage": "Speicherort-Overrides",
+    "hint.presets": "Metal Peak: größter Cache, für schnellstes Decoding, wenn 22 GiB oder mehr RAM frei sind. Gute Tokens: das gemessene, ausgewogene Setup fürs tägliche Coden.",
+    "tip.applyPeak": "Cache 14 GiB · I/O 4 · braucht ≥ 22 GiB freien RAM",
+    "tip.goodTokens": "Ausgewogenes, gemessenes Setup fürs tägliche Coden",
+    "adv.mirror": "Zweite SSD als Mirror (Dual-SSD)", "adv.buffered": "Gepufferte Reads (für Nicht-NVMe-Laufwerke)", "adv.predict": "Predictive Prefetch (experimentell)",
     "prep.download": "Laden & vorbereiten · ~{size} GiB",
     "prep.downloadDense": "Laden · ~{size} GiB",
     "prep.prepare": "Für SSD-Streaming vorbereiten",
@@ -1163,8 +1193,8 @@ const JOURNEY_I18N = {
     "adv.steer": "Turbo (experimentell)",
     "hint.lookahead": "Liest die Experten, die der nächste Layer voraussichtlich braucht, bevor er sie anfragt. Gemessen verlustfrei, 29–33 % schnelleres Decoding bei 4–8 GiB Cache. Standardmäßig an.",
     "tip.lookahead": "Engine-Einstellung PGRN_LOOKAHEAD. Anders als Predictive Prefetch, das gemeinsam feuernde Experten über die Zeit lernt, sagt Lookahead die Experten des nächsten Layers aus dem aktuellen voraus. Die Ausgabe ist mit und ohne identisch.",
-    "adv.steerWarn": "Tauscht etwas Qualität gegen Tempo: Wenn Experten fast gleich bewertet sind, bevorzugt der Router einen, der schon im RAM liegt – Antworten können vom unveränderten Modell abweichen. Der Qualitätsverlust ist noch nicht gemessen. Niedrig anfangen (0,02–0,05) und an eigenen Prompts vergleichen.",
-    "tip.steer": "Engine-Einstellung PGRN_STEER = Stärke von 0 bis 0,10. Standard aus.",
+    "adv.steerWarn": "Etwa 28 % schneller bei kleinem Cache. Antworten können leicht vom unveränderten Modell abweichen (≈1,6 % höhere Perplexity in unserem Test).",
+    "tip.steer": "Lenkt den Router leicht zu Experten, die schon im RAM liegen (Engine-Einstellung PGRN_STEER = 0,01). Standard aus.",
   },
 };
 Object.keys(JOURNEY_I18N).forEach((l) => Object.assign(I18N[l], JOURNEY_I18N[l]));
@@ -1490,7 +1520,7 @@ async function refreshModel() {
     state.wasConverting = false;
     try {
       const cp = await invoke("convert_progress");
-      if (cp.phase === "error") toast(t("err.prefix") + cp.message, true);
+      if (cp.phase === "error") { state.prepError = true; toast(t("err.prefix") + cp.message, true); }
       else if (cp.phase === "done") toast(t("toast.convDone"));
       else if (cp.phase === "cancelled") toast(t("resume.title"));
     } catch {}
@@ -1587,9 +1617,11 @@ function prepareState(st) {
   if (m.soon) return "soon";
   if (!st) return "unknown";
   if (st.downloading || st.converting) return "busy";
-  if (state.running) return "running";
+  if (state.running) return state.pillMode === "loading" ? "starting" : "running";
   if (state.modelReady) return "ready";
-  if (st.gguf_bytes > 0 && !isDenseModel()) return st.pgrn_bytes > 0 ? "ready" : "convert";
+  // A download that stopped short (cancel, network) must not be "prepared".
+  if (st.gguf_bytes > 0 && state.remoteBytes > 0 && st.gguf_bytes < state.remoteBytes * 0.999) return "incomplete";
+  if (st.gguf_bytes > 0 && !isDenseModel()) return state.prepError ? "failed" : "convert";
   if (st.pgrn_bytes > 0) return "needGguf";
   return "download";
 }
@@ -1604,15 +1636,22 @@ function renderPrepare(st) {
     unknown: "…",
     busy: t("prep.cancel"),
     running: t("prep.connect"),
+    starting: t("prep.wait"),
     ready: t("prep.start"),
+    incomplete: t("prep.resume"),
+    failed: t("prep.retry"),
     convert: t("prep.prepare"),
     needGguf: t("prep.downloadMissing"),
     download: fillVars(t(isDenseModel() ? "prep.downloadDense" : "prep.download"), { size: String(size) }),
   }[kind];
   b.textContent = label;
   b.dataset.kind = kind;
-  b.disabled = kind === "soon" || kind === "unknown";
-  b.className = "btn prepare-btn" + (kind === "busy" ? " btn-danger" : kind === "running" ? "" : " btn-primary");
+  b.disabled = kind === "soon" || kind === "unknown" || kind === "starting";
+  b.className = "btn prepare-btn" + (kind === "busy" ? " btn-danger" : kind === "running" || kind === "starting" ? "" : " btn-primary");
+  // States the model-file status line cannot know about.
+  const status = { starting: "prep.starting", running: "prep.running", incomplete: "prep.incomplete", failed: "prep.failed" }[kind];
+  if (status && $("dlStatus")) $("dlStatus").textContent = t(status);
+  if ($("prepareBox")) $("prepareBox").dataset.kind = kind;
 }
 function maybeAutoPrepare(st) {
   // A finished download chains straight into preparation — but only when the file
@@ -1628,10 +1667,11 @@ function maybeAutoPrepare(st) {
 if ($("prepareBtn")) $("prepareBtn").onclick = () => {
   const kind = $("prepareBtn").dataset.kind;
   if (kind === "busy") { state.autoPrepare = false; $("dlCancel").click(); return; }
+  if (kind === "starting") return;
   if (kind === "running") { showTab("connect"); return; }
   if (kind === "ready") { startServer(); return; }
-  if (kind === "convert") { $("convBtn").click(); return; }
-  if (kind === "download" || kind === "needGguf") {
+  if (kind === "convert" || kind === "failed") { state.prepError = false; $("convBtn").click(); return; }
+  if (kind === "download" || kind === "needGguf" || kind === "incomplete") {
     state.autoPrepare = kind === "download" && !isDenseModel();
     $("dlBtn").click();
   }
@@ -2040,18 +2080,14 @@ function wirePgrnMlxSettings() {
 //   cfg.pgrn_lookahead  1 = on (default), 0 = off. main.rs maps > 0 to
 //                       PGRN_LOOKAHEAD=<value>; 1 means on with margin 0.
 //                       Measured lossless, +29–33 % decode at 4–8 GiB cache.
-//   cfg.pgrn_steer      Turbo strength 0–0.10, 0 = off (default) → PGRN_STEER.
-//                       Lossy; quality cost not measured yet.
+//   cfg.pgrn_steer      Turbo: 0.01 when on, 0 = off (default) → PGRN_STEER.
+//                       Lossy: +28 % decode, ≈1.6 % higher perplexity (measured).
 // TODO(engine): if ServerConfig does not declare these fields yet, serde drops
 // them silently — add `#[serde(default)] pgrn_lookahead: u32` and
 // `#[serde(default)] pgrn_steer: f64` next to pgrn_online.
-const STEER_MAX = 0.10;
-const STEER_DEFAULT = 0.05;
-function clampSteer(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return STEER_DEFAULT;
-  return Math.min(STEER_MAX, Math.max(0, Math.round(n * 100) / 100));
-}
+// Only strength 0.01 is measured acceptable (+28 % decode, +1.6 % perplexity,
+// 88 % same top-1 token); 0.02 already costs +12.5 % perplexity. So: on/off.
+const STEER_ON = 0.01;
 function lookaheadPreference() {
   const v = localStorage.getItem("slipstream.pgrn.lookahead");
   return v === null ? true : v === "1";
@@ -2063,41 +2099,21 @@ function pgrnLookaheadFromUi() {
 function pgrnSteerFromUi() {
   const on = $("pgrnSteer") ? $("pgrnSteer").checked
     : localStorage.getItem("slipstream.pgrn.steer") === "1";
-  if (!on) return 0;
-  return clampSteer(($("pgrnSteerStrength") && $("pgrnSteerStrength").value)
-    || localStorage.getItem("slipstream.pgrn.steerStrength") || STEER_DEFAULT);
+  return on ? STEER_ON : 0;
 }
-function syncNextEngineUi() {
-  const metalOff = state.backend === "mlx";
-  const st = $("pgrnSteer");
-  const stOn = !!(st && st.checked) && !metalOff;
-  if ($("pgrnSteerStrength")) $("pgrnSteerStrength").disabled = !stOn;
-  if ($("pgrnSteerStrengthWrap")) $("pgrnSteerStrengthWrap").setAttribute("aria-disabled", String(!stOn));
-  if ($("pgrnSteerVal") && $("pgrnSteerStrength")) $("pgrnSteerVal").textContent = dec(clampSteer($("pgrnSteerStrength").value), 2);
-}
+function syncNextEngineUi() { /* both options are plain toggles now */ }
 function persistNextEngineSettings() {
   if ($("pgrnLookahead")) localStorage.setItem("slipstream.pgrn.lookahead", $("pgrnLookahead").checked ? "1" : "0");
   if ($("pgrnSteer")) localStorage.setItem("slipstream.pgrn.steer", $("pgrnSteer").checked ? "1" : "0");
-  if ($("pgrnSteerStrength")) localStorage.setItem("slipstream.pgrn.steerStrength", String(clampSteer($("pgrnSteerStrength").value)));
-  syncNextEngineUi();
 }
 function loadNextEngineSettings() {
   if ($("pgrnLookahead")) $("pgrnLookahead").checked = lookaheadPreference();
   if ($("pgrnSteer")) $("pgrnSteer").checked = localStorage.getItem("slipstream.pgrn.steer") === "1";
-  if ($("pgrnSteerStrength")) {
-    const v = localStorage.getItem("slipstream.pgrn.steerStrength");
-    $("pgrnSteerStrength").value = String(v == null ? STEER_DEFAULT : clampSteer(v));
-  }
-  syncNextEngineUi();
 }
 function wireNextEngineSettings() {
   ["pgrnLookahead", "pgrnSteer"].forEach((id) => {
     if ($(id)) $(id).onchange = persistNextEngineSettings;
   });
-  if ($("pgrnSteerStrength")) {
-    $("pgrnSteerStrength").addEventListener("input", syncNextEngineUi);
-    $("pgrnSteerStrength").addEventListener("change", persistNextEngineSettings);
-  }
   loadNextEngineSettings();
 }
 
@@ -2191,7 +2207,7 @@ async function startServer() {
     pgrn_mirror: ($("pMirror") && $("pMirror").value.trim()) || "",
     pgrn_buffered: !!($("bufferedReads") && $("bufferedReads").checked),
     pgrn_online: !!($("onlinePredict") && $("onlinePredict").checked),
-    // Expert prefetch (1 = on, default) and Turbo (0–0.10, default 0).
+    // Expert prefetch (1 = on, default) and Turbo (0.01 when on, default 0).
     // main.rs → PGRN_LOOKAHEAD / PGRN_STEER. See wireNextEngineSettings.
     pgrn_lookahead: pgrnLookaheadFromUi(),
     pgrn_steer: pgrnSteerFromUi(),
@@ -2245,6 +2261,8 @@ async function startServer() {
     const msg = await invoke("start_server", { cfg });
     state.resolvedBackend = isAutoBackend() ? resolved : null;
     state.runningPgrnProfile = goingMlx ? cfg.pgrn_profile : null;
+    // What the engine was started with — Settings shows this while it runs.
+    state.runningCfg = { cache: cfg.cache_gb, ctx: cfg.ctx, io: cfg.io_threads, auto: !state.userTuned };
     const profileNote = goingMlx && cfg.pgrn_profile === "contract"
       ? ` · ${t("toast.mlxContractProfile")}`
       : "";
@@ -2379,6 +2397,16 @@ function updateReco() {
   if (!el) return;
   if (!r) { el.textContent = t("reco.computing"); return; }
   const s = state.sys;
+  // While the engine runs, free RAM is mostly the engine itself, so a fresh
+  // recommendation would be misleading. Show what is in use instead.
+  if (state.running && state.runningCfg) {
+    const u = state.runningCfg;
+    el.innerHTML = isDenseModel()
+      ? `${t("reco.inUse")}: ${t("lbl.context")} <b>${u.ctx / 1024}k</b>`
+      : `${t("reco.inUse")}: ${t("lbl.cache")} <b>${u.cache} GiB</b> &middot; ${t("lbl.context")} <b>${u.ctx / 1024}k</b>`;
+    syncAutoMarks();
+    return;
+  }
   if (isDenseModel()) {
     el.innerHTML =
       `${t("reco.for")} (<b>${s.total_gib.toFixed(0)} GiB</b> RAM, ${s.free_gib.toFixed(0)} ${t("reco.free")}) ${t("reco.with")} <b>${state.model.name.split(" ")[0]}</b>: ` +
@@ -2392,6 +2420,21 @@ function updateReco() {
   state.reco = r;
   // Until the user tunes by hand, the controls show what Start will use.
   if (!state.userTuned && !state.running) applyRecoValues(r);
+  syncAutoMarks();
+}
+// The "auto" tag beside the cache value and the line under the recommendation
+// say whose values the controls hold: the recommendation, the user, or the
+// running engine.
+function syncAutoMarks() {
+  const running = !!(state.running && state.runningCfg);
+  const auto = running ? state.runningCfg.auto : !state.userTuned;
+  const tag = $("cacheAuto");
+  if (tag) tag.hidden = !auto;
+  const el = $("recoAuto");
+  if (el) {
+    el.dataset.i18n = running ? "reco.running" : (state.userTuned ? "reco.manual" : "reco.auto");
+    el.textContent = t(el.dataset.i18n);
+  }
 }
 // Memory panel: what actually has to fit in RAM. Every line is either measured
 // (resident share from the real file sizes, KV from the engine's own log) or a
@@ -2439,11 +2482,7 @@ function applyRecoValues(r) {
 }
 function markUserTuned(on) {
   state.userTuned = !!on;
-  const el = $("recoAuto");
-  if (el) {
-    el.dataset.i18n = on ? "reco.manual" : "reco.auto";
-    el.textContent = t(el.dataset.i18n);
-  }
+  syncAutoMarks();
 }
 ["cache", "ctx", "io"].forEach((id) => {
   const el = $(id);
@@ -2758,6 +2797,7 @@ async function poll() {
     state.kvMiB = null;
     state.activity = null;
     state.ssdPeak = 0;
+    if (state.runningCfg) { state.runningCfg = null; try { updateReco(); } catch {} }
     ARENA.active = false;
     if (state.resolvedBackend) {
       state.resolvedBackend = null;

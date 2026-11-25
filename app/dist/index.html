@@ -203,7 +203,9 @@
             <input type="text" id="pServer" spellcheck="false" />
           </details>
           <details class="paths manual-steps">
-            <summary><span data-i18n="prep.manual">Manual steps</span> <span id="dlModelName" class="badge">–</span></summary>
+            <summary data-i18n="prep.manual">Manual steps (advanced)</summary>
+            <p class="hint" data-i18n="prep.manualHint">The button above does both steps for you. Use these only to redo one step for the selected model:</p>
+            <p class="manual-model"><span id="dlModelName" class="badge">–</span></p>
             <p class="hint" data-i18n="dl.intro">GGUF laden, dann in das gestreamte PGRN-Format konvertieren.</p>
             <div class="dl-btns stack-gap">
               <button id="dlBtn" class="btn btn-primary" data-i18n="btn.download">Herunterladen</button>
@@ -678,197 +680,196 @@
           </div>
           <!-- Everything below is tuning. The recommendation above is applied at
                Start until the user changes one of these themselves. -->
+          <!-- Everything below is tuning, in flat groups (no disclosure inside this one).
+               The recommendation above is applied at Start until the user changes
+               cache, context or I/O here. -->
           <details class="settings-advanced" id="settingsAdvanced">
             <summary data-i18n="adv.engine">Advanced engine settings</summary>
-          <div class="ctrl">
-            <div class="ctrl-head"><label for="backendSel"><span data-i18n="lbl.backend">Backend</span> <span class="info" data-i18n-tip="tip.backend">ⓘ</span></label></div>
-            <select id="backendSel">
-              <option value="auto" data-i18n="backend.auto">Auto (hybrid)</option>
-              <option value="metal" data-i18n="backend.metal">llama.cpp · Metal + PGRN (SSD-Streaming)</option>
-              <option value="mlx" data-i18n="backend.mlx">MLX + SSD PGRN (wenn Sidecar gebündelt)</option>
-            </select>
-            <div class="hint-stack">
-              <p class="hint" id="productSsdLine" data-i18n="hint.ssdStream">Modelle größer als RAM streamen von der SSD.</p>
-              <p class="hint" id="backendNote" data-i18n="hint.backend">Auto: kurz/warm → MLX wenn experts.pgrn, langer Prefill → Metal. Explizite Wahl bleibt sticky.</p>
-              <p class="hint" data-i18n="hint.codingPreset">Coding-Preset: Thinking aus, greedy (temp 0).</p>
-            </div>
-            <p class="hint" id="mlxCapNote" hidden></p>
-            <button type="button" id="mlxRuntimeBtn" class="btn stack-gap" hidden data-i18n="btn.mlxRuntime">MLX-Runtime installieren</button>
-          </div>
-          <!-- Secondary paths collapsed: primary Models folder lives on Models tab. -->
-          <details class="paths" id="pathOverridesAdvanced">
-            <summary data-i18n="adv.paths">Advanced: optional overflow / path overrides</summary>
-            <p class="hint" data-i18n="hint.pathOverrides">Only if GGUF or MLX live outside the Models folder (second SSD / custom layout).</p>
-            <div class="ctrl" id="mlxDirWrap" hidden>
-              <div class="ctrl-head"><label for="pMlx"><span data-i18n="lbl.mlxDir">MLX directory (override)</span></label></div>
-              <input type="text" id="pMlx" spellcheck="false" placeholder="~/Modelle/mlx" />
-              <p class="hint" data-i18n="hint.mlxDir">Optional override. Default is &lt;Models folder&gt;/mlx. Leave alone unless MLX trees live elsewhere.</p>
-            </div>
-            <div class="ctrl stack-gap" id="extBaseWrap">
-              <div class="ctrl-head"><label for="extBase"><span data-i18n="lbl.extBase">GGUF on second SSD (optional overflow)</span> <span class="info" data-i18n-tip="tip.extBase">ⓘ</span></label></div>
-              <input type="text" id="extBase" spellcheck="false" placeholder="/Volumes/…/Modelle" />
-              <p class="hint" data-i18n="hint.extBase">Optional overflow. Empty = GGUF next to PGRN in the Models folder.</p>
-            </div>
-          </details>
-          <div class="ctrl" id="chatToolsSettingsWrap" hidden>
-            <div class="ctrl-head">
-              <label class="chk">
-                <input type="checkbox" id="settingsChatTools" />
-                <span data-i18n="lbl.chatTools">Enable tools</span>
-                <span class="info" data-i18n-tip="tip.chatTools">ⓘ</span>
-              </label>
-            </div>
-            <p class="hint" data-i18n="hint.chatTools">When on, Chat sends standard OpenAI tools to the active local engine (time + calculator). The Chat toolbar stays in sync.</p>
-          </div>
-          <div class="ctrl" id="mlxLeverNote" hidden>
-            <p class="hint" data-i18n="hint.mlxLevers">Tools / JSON / Schema use the same Chat contract on both engines. Compact + Grammar drafts are Metal-only; choose Metal or Auto for those.</p>
-          </div>
-          <!-- MLX-only SLIPSTREAM_PGRN_* levers — Advanced disclosure; smart defaults stay. -->
-          <div class="ctrl" id="mlxPgrnSettingsWrap" hidden>
-            <p class="hint" data-i18n="hint.mlxPgrnDefaults">MLX-Defaults: touch · cold_io=0 · balanced · keep-hot. Selten nötig zu ändern.</p>
-            <details class="paths" id="mlxPgrnAdvanced">
-              <summary data-i18n="adv.mlxPgrn">Advanced: Profil / Residency / L3 / MCP</summary>
-              <div class="ctrl-head stack-gap">
-                <label for="pgrnProfile">
-                  <span data-i18n="sec.mlxPgrn">Slipstream Settings (MLX)</span>
-                  <span class="info" data-i18n-tip="tip.mlxPgrn">ⓘ</span>
-                </label>
-              </div>
-              <div class="hint-stack">
-                <p class="hint" data-i18n="hint.mlxPgrn">Passed as SLIPSTREAM_PGRN_* on MLX start. Default: touch + keep-hot + io16 (no cold boost). mlock opt-in. Prefetch stays off unless set outside the app.</p>
-                <p class="hint" data-i18n="hint.mlxMemGuard">Memory guard: default is --memory-guard-gb = total RAM − 3 GiB headroom. Long coding/full-PGRN can hit the Metal wired cap (~28 GiB) and fail with prefill_memory_exceeded — close apps, shrink context, enable “Memory guard off” below, or raise iogpu.wired_limit_mb (sudo). Cold-io stays 0 (profile io16). Start refuses if free+inactive &lt; 4 GiB; warns below 8 GiB.</p>
-              </div>
-              <div class="ctrl-head stack-gap">
-                <label class="chk">
-                  <input type="checkbox" id="memoryGuardOff" />
-                  <span data-i18n="lbl.memoryGuardOff">Memory guard off</span>
-                  <span class="info" data-i18n-tip="tip.memoryGuardOff">ⓘ</span>
-                </label>
-              </div>
-              <div class="ctrl-grid stack-gap">
-                <div class="ctrl">
-                  <div class="ctrl-head"><label for="pgrnProfile"><span data-i18n="lbl.pgrnProfile">Profile</span></label></div>
-                  <select id="pgrnProfile">
-                    <option value="balanced" data-i18n="pgrn.profile.balanced">balanced (default)</option>
-                    <option value="quality" data-i18n="pgrn.profile.quality">quality</option>
-                    <option value="fast" data-i18n="pgrn.profile.fast">fast</option>
-                  </select>
-                  <p class="hint" id="pgrnProfileHint" data-i18n="hint.pgrnProfileBalanced">Caps: capacity 4096 · hot 2048 · io_width 16</p>
-                </div>
-                <div class="ctrl">
-                  <div class="ctrl-head"><label for="pgrnResidency"><span data-i18n="lbl.pgrnResidency">Residency</span> <span class="info" data-i18n-tip="tip.pgrnResidency">ⓘ</span></label></div>
-                  <select id="pgrnResidency">
-                    <option value="touch" data-i18n="pgrn.residency.touch" selected>touch (default)</option>
-                    <option value="mlock" data-i18n="pgrn.residency.mlock">mlock (opt-in)</option>
-                    <option value="off" data-i18n="pgrn.residency.off">off</option>
-                  </select>
-                </div>
-              </div>
-              <div class="ctrl-head stack-gap">
-                <label class="chk">
-                  <input type="checkbox" id="pgrnKeepHot" checked />
-                  <span data-i18n="lbl.pgrnKeepHot">Keep hot (MX protect)</span>
-                  <span class="info" data-i18n-tip="tip.pgrnKeepHot">ⓘ</span>
-                </label>
-              </div>
-              <div class="ctrl-head stack-gap">
-                <label class="chk">
-                  <input type="checkbox" id="pgrnWarmup" checked />
-                  <span data-i18n="lbl.pgrnWarmup">Warmup on load</span>
-                  <span class="info" data-i18n-tip="tip.pgrnWarmup">ⓘ</span>
-                </label>
-              </div>
-              <div class="ctrl stack-gap">
-                <div class="ctrl-head"><label for="pgrnPeerBase"><span data-i18n="lbl.pgrnPeerBase">L3 peer base (optional)</span> <span class="info" data-i18n-tip="tip.pgrnPeerBase">ⓘ</span></label></div>
-                <input type="text" id="pgrnPeerBase" spellcheck="false" data-i18n-ph="ph.pgrnPeerBase" placeholder="http://192.168.1.10:8765" />
-                <p class="hint" data-i18n="hint.pgrnPeerBase">Empty = L3 OFF. Non-empty sets SLIPSTREAM_PGRN_L3=peer + PEER_BASE on MLX start.</p>
-              </div>
-              <div class="ctrl stack-gap">
-                <div class="ctrl-head"><label for="mcpConfig"><span data-i18n="lbl.mcpConfig">MCP config (optional)</span> <span class="info" data-i18n-tip="tip.mcpConfig">ⓘ</span></label></div>
-                <input type="text" id="mcpConfig" spellcheck="false" data-i18n-ph="ph.mcpConfig" placeholder="/path/to/mcp.json" />
-                <p class="hint" data-i18n="hint.mcpConfig">Empty = MCP OFF. Non-empty sets OMLX_MCP_CONFIG + --mcp-config so oMLX merges server tools into chat/messages/responses.</p>
-              </div>
-            </details>
-          </div>
-          <!-- Named presets for people who tune by hand (ids used by tests). -->
-          <div class="ctrl preset-row">
-            <span class="hint" data-i18n="adv.presets">Presets</span>
-            <button id="applyPeak" type="button" class="btn btn-compact" data-i18n="btn.applyPeak">Metal Peak</button>
-            <button id="applyGoodTokens" type="button" class="btn btn-compact" data-i18n="btn.goodTokens">Good tokens</button>
-          </div>
-          <div class="ctrl" id="metalCacheCtrl">
-            <div class="ctrl-head">
-              <label for="cache"><span data-i18n="lbl.cache">Cache-Größe</span> <span class="info" data-i18n-tip="tip.cache">ⓘ</span></label>
-              <span class="val"><span id="cacheVal">10</span> GiB</span>
-            </div>
-            <input type="range" id="cache" min="2" max="24" step="1" value="10" />
-            <p class="hint"><span id="cacheRec"></span></p>
-          </div>
-          <div class="ctrl-grid">
-            <div class="ctrl">
-              <div class="ctrl-head"><label for="ctx"><span data-i18n="lbl.context">Kontext</span> <span class="info" data-i18n-tip="tip.ctx">ⓘ</span></label></div>
-              <select id="ctx">
-                <option value="16384">16k</option>
-                <option value="32768">32k</option>
-                <option value="40960" selected>40k</option>
-                <option value="65536">64k</option>
-              </select>
-            </div>
-            <div class="ctrl">
-              <div class="ctrl-head"><label class="chk"><input type="checkbox" id="specMtp" checked /> <span data-i18n="lbl.mtp">MTP-Speed</span> <span class="info" data-i18n-tip="tip.mtp">ⓘ</span></label></div>
-              <div class="ctrl-head stack-gap"><label class="chk"><input type="checkbox" id="thinking" /> <span data-i18n="lbl.thinking">Thinking</span> <span class="info" data-i18n-tip="tip.thinking">ⓘ</span></label></div>
-            </div>
-            <div class="ctrl" id="metalDraftCtrl">
-              <div class="ctrl-head"><label class="chk"><input type="checkbox" id="compactSlots" checked /> <span data-i18n="lbl.compact">Compact (schneller)</span> <span class="info" data-i18n-tip="tip.compact">ⓘ</span></label></div>
-              <div class="ctrl-head stack-gap"><label class="chk"><input type="checkbox" id="grammarDraft" checked /> <span data-i18n="lbl.grammar">Grammar-Drafts (JSON/Tools)</span> <span class="info" data-i18n-tip="tip.grammar">ⓘ</span></label></div>
-            </div>
-          </div>
-        <!-- These four used to sit in the Streaming panel, mixed in with its
-             readings. They steer the next server start; the live view only
-             watches, so they belong here. -->
-        <div class="adv-section" id="metalStreamingCard">
-          <h3 class="adv-h" data-i18n="sec.streaming">SSD-Streaming</h3>
-          <div class="ctrl-grid">
-            <div class="ctrl">
-              <div class="ctrl-head"><label for="io"><span data-i18n="lbl.io">I/O-Threads</span> <span class="info" data-i18n-tip="tip.io">ⓘ</span></label></div>
-              <select id="io">
-                <option value="1">1</option>
-                <option value="4" selected>4</option>
-                <option value="8">8</option>
-                <option value="16">16</option>
-              </select>
-            </div>
-          </div>
-          <details class="paths">
-            <summary data-i18n="adv.summary">Advanced: I/O-Hebel</summary>
-            <label class="adv-label"><span data-i18n="adv.mirror">Advanced: 2. SSD-Mirror (Dual-SSD)</span> <span class="info" data-i18n-tip="tip.mirror">ⓘ</span></label>
-            <input type="text" id="pMirror" spellcheck="false" data-i18n-ph="adv.mirrorPh" />
-            <div class="adv-warn" data-i18n="adv.mirrorWarn">⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.</div>
-            <label class="chk adv-chk"><input type="checkbox" id="bufferedReads" /> <span data-i18n="adv.buffered">Advanced: gepufferte Reads (Nicht-NVMe-Laufwerke)</span></label>
-            <label class="chk adv-chk"><input type="checkbox" id="onlinePredict" /> <span data-i18n="adv.predict">Advanced: Predictive Prefetch (experimentell)</span> <span class="info" data-i18n-tip="tip.predict">ⓘ</span></label>
 
-            <!-- Expert prefetch + Turbo. Persisted like the other slipstream.pgrn.*
-                 settings and sent with Start as cfg.pgrn_lookahead (1 = on, 0 = off;
-                 main.rs maps > 0 to PGRN_LOOKAHEAD=<value>, 1 = on with margin 0) and
-                 cfg.pgrn_steer (0–0.10, 0 = off → PGRN_STEER). -->
-            <fieldset class="adv-group" id="nextEngineOptions">
-              <legend data-i18n="adv.nextTitle">Expert prefetch &amp; Turbo</legend>
-              <div class="adv-opt">
-                <label class="chk adv-chk" for="pgrnLookahead"><input type="checkbox" id="pgrnLookahead" checked aria-describedby="pgrnLookaheadHint" /> <span data-i18n="adv.lookahead">Lookahead prefetch</span> <span class="tag tag-lossless" data-i18n="adv.lossless">lossless</span> <span class="info" data-i18n-tip="tip.lookahead">ⓘ</span></label>
-                <p class="hint" id="pgrnLookaheadHint" data-i18n="hint.lookahead">Reads the experts the next layer is predicted to need before it asks for them. Measured lossless, 29–33 % faster decoding at 4–8 GiB cache. On by default.</p>
+            <section class="adv-group-sec" aria-labelledby="grpSpeedH">
+              <h3 class="adv-h" id="grpSpeedH" data-i18n="grp.speed">Memory &amp; speed</h3>
+              <!-- Named presets for people who tune by hand (ids used by tests). -->
+              <div class="ctrl preset-row">
+                <span class="hint" data-i18n="adv.presets">Presets</span>
+                <button id="applyPeak" type="button" class="btn btn-compact" data-i18n="btn.applyPeak" data-i18n-tip="tip.applyPeak">Metal Peak</button>
+                <button id="applyGoodTokens" type="button" class="btn btn-compact" data-i18n="btn.goodTokens" data-i18n-tip="tip.goodTokens">Good tokens</button>
               </div>
-              <div class="adv-opt">
-                <label class="chk adv-chk" for="pgrnSteer"><input type="checkbox" id="pgrnSteer" aria-describedby="pgrnSteerWarn" /> <span data-i18n="adv.steer">Turbo (experimental)</span> <span class="tag tag-lossy" data-i18n="adv.lossy">changes output</span> <span class="info" data-i18n-tip="tip.steer">ⓘ</span></label>
-                <div class="adv-sub" id="pgrnSteerStrengthWrap" aria-disabled="true">
-                  <label for="pgrnSteerStrength" data-i18n="adv.steerStrength">Strength</label>
-                  <input type="range" id="pgrnSteerStrength" min="0" max="0.10" step="0.01" value="0.05" disabled aria-describedby="pgrnSteerWarn" />
-                  <output id="pgrnSteerVal" for="pgrnSteerStrength">0.05</output>
+              <p class="hint preset-help" data-i18n="hint.presets">Metal Peak: largest cache, for the fastest decoding when 22 GiB or more are free. Good tokens: the measured balanced recipe for everyday coding.</p>
+              <div class="ctrl" id="metalCacheCtrl">
+                <div class="ctrl-head">
+                  <label for="cache"><span data-i18n="lbl.cache">Cache-Größe</span> <span class="info" data-i18n-tip="tip.cache">ⓘ</span></label>
+                  <span class="val"><span class="tag" id="cacheAuto" data-i18n="lbl.auto">auto</span> <span id="cacheVal">10</span> GiB</span>
                 </div>
-                <p class="adv-warn" id="pgrnSteerWarn" data-i18n="adv.steerWarn">Trades some quality for speed.</p>
+                <input type="range" id="cache" min="2" max="24" step="1" value="10" />
+                <p class="hint"><span id="cacheRec"></span></p>
               </div>
-            </fieldset>
-          </details>
-        </div>
+              <div class="ctrl-grid">
+                <div class="ctrl">
+                  <div class="ctrl-head"><label for="ctx"><span data-i18n="lbl.context">Kontext</span> <span class="info" data-i18n-tip="tip.ctx">ⓘ</span></label></div>
+                  <select id="ctx">
+                    <option value="16384">16k</option>
+                    <option value="32768">32k</option>
+                    <option value="40960" selected>40k</option>
+                    <option value="65536">64k</option>
+                  </select>
+                </div>
+                <div class="ctrl">
+                  <div class="ctrl-head"><label for="io"><span data-i18n="lbl.io">I/O-Threads</span> <span class="info" data-i18n-tip="tip.io">ⓘ</span></label></div>
+                  <select id="io">
+                    <option value="1">1</option>
+                    <option value="4" selected>4</option>
+                    <option value="8">8</option>
+                    <option value="16">16</option>
+                  </select>
+                </div>
+              </div>
+              <div class="toggle-list">
+                <label class="chk"><input type="checkbox" id="specMtp" checked /> <span data-i18n="lbl.mtp">MTP-Speed</span> <span class="info" data-i18n-tip="tip.mtp">ⓘ</span></label>
+                <div id="metalDraftCtrl" class="toggle-list">
+                  <label class="chk"><input type="checkbox" id="compactSlots" checked /> <span data-i18n="lbl.compact">Compact (schneller)</span> <span class="info" data-i18n-tip="tip.compact">ⓘ</span></label>
+                  <label class="chk"><input type="checkbox" id="grammarDraft" checked /> <span data-i18n="lbl.grammar">Grammar-Drafts (JSON/Tools)</span> <span class="info" data-i18n-tip="tip.grammar">ⓘ</span></label>
+                </div>
+                <!-- Metal/PGRN prefetch (hidden for explicit MLX). Lookahead is sent as
+                     cfg.pgrn_lookahead (1 = on, 0 = off; main.rs maps > 0 to PGRN_LOOKAHEAD). -->
+                <div id="metalStreamingCard" class="toggle-list">
+                  <div class="adv-opt" id="nextEngineOptions">
+                    <label class="chk" for="pgrnLookahead"><input type="checkbox" id="pgrnLookahead" checked aria-describedby="pgrnLookaheadHint" /> <span data-i18n="adv.lookahead">Lookahead prefetch</span> <span class="tag tag-lossless" data-i18n="adv.lossless">lossless</span> <span class="info" data-i18n-tip="tip.lookahead">ⓘ</span></label>
+                    <p class="hint" id="pgrnLookaheadHint" data-i18n="hint.lookahead">Reads the experts the next layer is predicted to need before it asks for them.</p>
+                  </div>
+                  <label class="chk"><input type="checkbox" id="onlinePredict" /> <span data-i18n="adv.predict">Predictive Prefetch (experimentell)</span> <span class="info" data-i18n-tip="tip.predict">ⓘ</span></label>
+                </div>
+              </div>
+            </section>
+
+            <section class="adv-group-sec" aria-labelledby="grpTurboH">
+              <h3 class="adv-h" id="grpTurboH" data-i18n="grp.turbo">Turbo</h3>
+              <!-- cfg.pgrn_steer: 0.01 when on, 0 when off (main.rs → PGRN_STEER). Only
+                   0.01 measured acceptable: +28 % decode, +1.6 % perplexity. -->
+              <div class="adv-opt">
+                <label class="chk" for="pgrnSteer"><input type="checkbox" id="pgrnSteer" aria-describedby="pgrnSteerWarn" /> <span data-i18n="adv.steer">Turbo (experimental)</span> <span class="tag tag-lossy" data-i18n="adv.lossy">changes output</span> <span class="info" data-i18n-tip="tip.steer">ⓘ</span></label>
+                <p class="hint" id="pgrnSteerWarn" data-i18n="adv.steerWarn">About 28 % faster on small caches.</p>
+              </div>
+            </section>
+
+            <section class="adv-group-sec" aria-labelledby="grpBackendH">
+              <h3 class="adv-h" id="grpBackendH" data-i18n="grp.backend">Backend</h3>
+              <div class="ctrl">
+                <div class="ctrl-head"><label for="backendSel"><span data-i18n="lbl.backend">Backend</span> <span class="info" data-i18n-tip="tip.backend">ⓘ</span></label></div>
+                <select id="backendSel">
+                  <option value="auto" data-i18n="backend.auto">Auto (hybrid)</option>
+                  <option value="metal" data-i18n="backend.metal">llama.cpp · Metal + PGRN (SSD-Streaming)</option>
+                  <option value="mlx" data-i18n="backend.mlx">MLX + SSD PGRN (wenn Sidecar gebündelt)</option>
+                </select>
+                <div class="hint-stack">
+                  <p class="hint" id="productSsdLine" data-i18n="hint.ssdStream">Modelle größer als RAM streamen von der SSD.</p>
+                  <p class="hint" id="backendNote" data-i18n="hint.backend">Auto: kurz/warm → MLX wenn experts.pgrn, langer Prefill → Metal. Explizite Wahl bleibt sticky.</p>
+                </div>
+                <p class="hint" id="mlxCapNote" hidden></p>
+                <button type="button" id="mlxRuntimeBtn" class="btn stack-gap" hidden data-i18n="btn.mlxRuntime">MLX-Runtime installieren</button>
+              </div>
+              <div class="ctrl" id="mlxLeverNote" hidden>
+                <p class="hint" data-i18n="hint.mlxLevers">Tools / JSON / Schema use the same Chat contract on both engines. Compact + Grammar drafts are Metal-only; choose Metal or Auto for those.</p>
+              </div>
+              <!-- MLX-only SLIPSTREAM_PGRN_* levers (shown for MLX / Auto). -->
+              <div class="ctrl" id="mlxPgrnSettingsWrap" hidden>
+                <div id="mlxPgrnAdvanced">
+          <h4 class="adv-h4"><span data-i18n="sec.mlxPgrn">Slipstream Settings (MLX)</span> <span class="info" data-i18n-tip="tip.mlxPgrn">ⓘ</span></h4>
+          <div class="hint-stack">
+            <p class="hint" data-i18n="hint.mlxPgrn">Passed as SLIPSTREAM_PGRN_* on MLX start. Default: touch + keep-hot + io16 (no cold boost). mlock opt-in. Prefetch stays off unless set outside the app.</p>
+            <p class="hint" data-i18n="hint.mlxMemGuard">Memory guard: default is --memory-guard-gb = total RAM − 3 GiB headroom. Long coding/full-PGRN can hit the Metal wired cap (~28 GiB) and fail with prefill_memory_exceeded — close apps, shrink context, enable “Memory guard off” below, or raise iogpu.wired_limit_mb (sudo). Cold-io stays 0 (profile io16). Start refuses if free+inactive &lt; 4 GiB; warns below 8 GiB.</p>
+          </div>
+          <div class="ctrl-head stack-gap">
+            <label class="chk">
+              <input type="checkbox" id="memoryGuardOff" />
+              <span data-i18n="lbl.memoryGuardOff">Memory guard off</span>
+              <span class="info" data-i18n-tip="tip.memoryGuardOff">ⓘ</span>
+            </label>
+          </div>
+          <div class="ctrl-grid stack-gap">
+            <div class="ctrl">
+              <div class="ctrl-head"><label for="pgrnProfile"><span data-i18n="lbl.pgrnProfile">Profile</span></label></div>
+              <select id="pgrnProfile">
+                <option value="balanced" data-i18n="pgrn.profile.balanced">balanced (default)</option>
+                <option value="quality" data-i18n="pgrn.profile.quality">quality</option>
+                <option value="fast" data-i18n="pgrn.profile.fast">fast</option>
+              </select>
+              <p class="hint" id="pgrnProfileHint" data-i18n="hint.pgrnProfileBalanced">Caps: capacity 4096 · hot 2048 · io_width 16</p>
+            </div>
+            <div class="ctrl">
+              <div class="ctrl-head"><label for="pgrnResidency"><span data-i18n="lbl.pgrnResidency">Residency</span> <span class="info" data-i18n-tip="tip.pgrnResidency">ⓘ</span></label></div>
+              <select id="pgrnResidency">
+                <option value="touch" data-i18n="pgrn.residency.touch" selected>touch (default)</option>
+                <option value="mlock" data-i18n="pgrn.residency.mlock">mlock (opt-in)</option>
+                <option value="off" data-i18n="pgrn.residency.off">off</option>
+              </select>
+            </div>
+          </div>
+          <div class="ctrl-head stack-gap">
+            <label class="chk">
+              <input type="checkbox" id="pgrnKeepHot" checked />
+              <span data-i18n="lbl.pgrnKeepHot">Keep hot (MX protect)</span>
+              <span class="info" data-i18n-tip="tip.pgrnKeepHot">ⓘ</span>
+            </label>
+          </div>
+          <div class="ctrl-head stack-gap">
+            <label class="chk">
+              <input type="checkbox" id="pgrnWarmup" checked />
+              <span data-i18n="lbl.pgrnWarmup">Warmup on load</span>
+              <span class="info" data-i18n-tip="tip.pgrnWarmup">ⓘ</span>
+            </label>
+          </div>
+          <div class="ctrl stack-gap">
+            <div class="ctrl-head"><label for="pgrnPeerBase"><span data-i18n="lbl.pgrnPeerBase">L3 peer base (optional)</span> <span class="info" data-i18n-tip="tip.pgrnPeerBase">ⓘ</span></label></div>
+            <input type="text" id="pgrnPeerBase" spellcheck="false" data-i18n-ph="ph.pgrnPeerBase" placeholder="http://192.168.1.10:8765" />
+            <p class="hint" data-i18n="hint.pgrnPeerBase">Empty = L3 OFF. Non-empty sets SLIPSTREAM_PGRN_L3=peer + PEER_BASE on MLX start.</p>
+          </div>
+          <div class="ctrl stack-gap">
+            <div class="ctrl-head"><label for="mcpConfig"><span data-i18n="lbl.mcpConfig">MCP config (optional)</span> <span class="info" data-i18n-tip="tip.mcpConfig">ⓘ</span></label></div>
+            <input type="text" id="mcpConfig" spellcheck="false" data-i18n-ph="ph.mcpConfig" placeholder="/path/to/mcp.json" />
+            <p class="hint" data-i18n="hint.mcpConfig">Empty = MCP OFF. Non-empty sets OMLX_MCP_CONFIG + --mcp-config so oMLX merges server tools into chat/messages/responses.</p>
+          </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="adv-group-sec" aria-labelledby="grpChatH">
+              <h3 class="adv-h" id="grpChatH" data-i18n="grp.chat">Chat behaviour</h3>
+              <div class="toggle-list">
+                <label class="chk"><input type="checkbox" id="thinking" /> <span data-i18n="lbl.thinking">Thinking</span> <span class="info" data-i18n-tip="tip.thinking">ⓘ</span></label>
+                <p class="hint" data-i18n="hint.codingPreset">Coding-Preset: Thinking aus, greedy (temp 0).</p>
+                <div id="chatToolsSettingsWrap" hidden>
+                  <label class="chk">
+                    <input type="checkbox" id="settingsChatTools" />
+                    <span data-i18n="lbl.chatTools">Enable tools</span>
+                    <span class="info" data-i18n-tip="tip.chatTools">ⓘ</span>
+                  </label>
+                  <p class="hint" data-i18n="hint.chatTools">When on, Chat sends standard OpenAI tools to the active local engine (time + calculator). The Chat toolbar stays in sync.</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="adv-group-sec" aria-labelledby="grpStorageH">
+              <h3 class="adv-h" id="grpStorageH" data-i18n="grp.storage">Storage overrides</h3>
+              <p class="hint" data-i18n="hint.pathOverrides">Only if GGUF or MLX live outside the Models folder (second SSD / custom layout).</p>
+              <div class="ctrl stack-gap">
+                <div class="ctrl-head"><label for="pMirror"><span data-i18n="adv.mirror">2. SSD-Mirror (Dual-SSD)</span> <span class="info" data-i18n-tip="tip.mirror">ⓘ</span></label></div>
+                <input type="text" id="pMirror" spellcheck="false" data-i18n-ph="adv.mirrorPh" />
+                <div class="adv-warn" data-i18n="adv.mirrorWarn">⚠ Nur bei zwei gleich schnellen SSDs (2× NVMe oder TB4). Auf intern + langsamer USB ist es langsamer — dann leer lassen.</div>
+              </div>
+              <label class="chk"><input type="checkbox" id="bufferedReads" /> <span data-i18n="adv.buffered">gepufferte Reads (Nicht-NVMe-Laufwerke)</span></label>
+              <div id="pathOverridesAdvanced">
+                <div class="ctrl stack-gap" id="mlxDirWrap" hidden>
+                  <div class="ctrl-head"><label for="pMlx"><span data-i18n="lbl.mlxDir">MLX directory (override)</span></label></div>
+                  <input type="text" id="pMlx" spellcheck="false" placeholder="~/Modelle/mlx" />
+                  <p class="hint" data-i18n="hint.mlxDir">Optional override. Default is &lt;Models folder&gt;/mlx. Leave alone unless MLX trees live elsewhere.</p>
+                </div>
+                <div class="ctrl stack-gap" id="extBaseWrap">
+                  <div class="ctrl-head"><label for="extBase"><span data-i18n="lbl.extBase">GGUF on second SSD (optional overflow)</span> <span class="info" data-i18n-tip="tip.extBase">ⓘ</span></label></div>
+                  <input type="text" id="extBase" spellcheck="false" placeholder="/Volumes/…/Modelle" />
+                  <p class="hint" data-i18n="hint.extBase">Optional overflow. Empty = GGUF next to PGRN in the Models folder.</p>
+                </div>
+              </div>
+            </section>
           </details>
           <details class="paths" id="runtimeDetails">
             <summary data-i18n="runtime.check">System check</summary>

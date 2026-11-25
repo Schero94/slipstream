@@ -742,7 +742,6 @@ details summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margi
 .prepare .meter { background: var(--panel); }
 .prepare-btn { flex: none; min-height: 34px; padding: 6px 18px; }
 @media (max-width: 640px) { .prepare { flex-direction: column; align-items: stretch; } }
-details.manual-steps summary { display: flex; align-items: center; gap: var(--sp-1); }
 details.manual-steps .badge { font-size: 11px; }
 /* Settings: the recommendation is the page; tuning folds away. */
 .settings-advanced { margin-top: var(--sp-3); border-top: 1px solid var(--rule); padding-top: var(--sp-2); }
@@ -759,3 +758,15 @@ details.manual-steps .badge { font-size: 11px; }
 .connect-state[data-state="on"] { background: var(--green-tint); }
 .preset-row { display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
 .preset-row .hint { margin: 0 4px 0 0; }
+/* Advanced settings: flat groups with headings, no nested disclosures. */
+.adv-group-sec { padding: var(--sp-3) 0; border-top: 1px solid var(--rule); }
+.adv-group-sec:first-of-type { border-top: 0; padding-top: 0; }
+.adv-group-sec .adv-h { font-size: 13px; font-weight: 600; margin: 0 0 var(--sp-2); }
+.adv-h4 { font-size: 12.5px; font-weight: 600; margin: var(--sp-3) 0 var(--sp-1); display: flex; align-items: center; gap: 6px; }
+.toggle-list { display: grid; gap: 10px; margin-top: var(--sp-2); }
+.toggle-list .hint { margin: -4px 0 0 22px; }
+.adv-opt .hint { margin: 4px 0 0 22px; }
+.adv-group-sec [hidden], .toggle-list[hidden] { display: none !important; }
+.preset-help { margin: -6px 0 var(--sp-3); }
+#cacheAuto { margin-right: 6px; vertical-align: 1px; }
+details.manual-steps .manual-model { margin: 8px 0 0; }
