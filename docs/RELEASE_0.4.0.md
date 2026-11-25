@@ -71,11 +71,35 @@ and above without the prefetch mark (+12.5 % perplexity).
 Laguna 118B on the new llama.cpp base, adaptive draft, the routing logger, the ANE draft,
 SPEC_PIN, and `--parallel` above 1.
 
-## Download
+## Validation
 
-No `.dmg` is attached to this release yet. The app bundle also needs the staged MLX runtime
-components, which are not part of the repository; it will be added when it is built. Build
-from source as described in the README, or keep using the 0.3.4 bundle.
+- 14/14 engine tests incl. the e2e parity proof (streamed = resident, nmse=0, CPU + Metal).
+- 183/183 Rust workspace tests, 96/96 Tauri/Rust tests, 44/44 Python runtime/storage/signing
+  tests, 7/7 Node UI contracts, headless asset check PASS.
+- DMG checksum valid; the mounted app passes `codesign --verify --deep --strict` and its
+  designated requirement (ad-hoc: not Developer ID, not notarized).
+- The mounted app reports 0.4.0, contains 476 resource files, all 16 required runtime
+  components, no Python bytecode cache and no Ollama payload. App, llama-server, PGRN
+  converter, pinned uv 0.11.10 and the headless node are arm64; llama-server links system
+  frameworks only.
+- The bundled llama-server, started straight from the mounted DMG with no extra flags,
+  decodes the reference prompt at 9.99 tok/s (4 GiB cache, lookahead on by default) with
+  the reference output hash and 0 MB swap growth.
+- The app launches from the mounted DMG and quits cleanly; ports 8080/8081 stay free.
+
+## Release artifacts
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `Slipstream_0.4.0_aarch64.dmg` | 69,803,798 | `585ca5a60a473da759cef91fdd82a78ae26d77611fc309879d3a2e53929ff3af` |
+| `Slipstream_0.4.0_aarch64.zip` | 68,229,600 | `9496d5873cd277ec7eb4859b7087c3ea0e1b921fdd90df1ac6e206ebf7fa4aeb` |
+| `slipstream-node_0.4.0_macos_aarch64.tar.gz` | 4,344,733 | `06ac4bd7cd5cb4621ff728a7bc96175104cfdf9dbc96b7988b5e7ed256818030` |
+
+The node archive reports version 0.4.0 and contains the arm64 binary, the launchd, systemd
+and Docker templates, the deploy README and the community mesh operations guide.
+
+The app is ad-hoc signed, **not notarized**: the first launch needs right-click → Open, or
+`xattr -dr com.apple.quarantine Slipstream.app`.
 
 ## Verify
 

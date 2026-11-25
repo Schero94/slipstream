@@ -58,7 +58,7 @@ Models that won't fit in your RAM become runnable. That's the entire pitch.
 
 ## Get started
 
-1. Download the newest `Slipstream_x.y.z_aarch64.dmg` from [Releases](https://github.com/Schero94/slipstream/releases) (v0.4.0 is a source release for now; the newest bundle is 0.3.4, or build from source below).
+1. Download the latest `Slipstream_x.y.z_aarch64.dmg` from [Releases](https://github.com/Schero94/slipstream/releases/latest).
 2. Drag `Slipstream.app` into Applications. The first launch needs right-click → Open, once, because the app isn't notarized yet.
 3. Open it. Slipstream detects your Mac and proposes settings for it: cache size, context and I/O threads derived from your RAM and core count. Click "Apply best".
 4. Pick a model from the dropdown and download it (with progress), then generate its PGRN sidecar. See *Compatible models* below.

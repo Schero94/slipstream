@@ -140,3 +140,4 @@
 20261125-074025	label=default	cache=4	decode_tps=10.45	prefill_tps=20.71	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=
 20261125-074158	label=la-off	cache=4	decode_tps=6.30	prefill_tps=20.71	hit=68.89	la_recall=NA	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=-1
 20261125-074340	label=la0	cache=4	decode_tps=10.41	prefill_tps=20.86	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-082528	srv	label=bundle-dmg	cache=4	decode_tps=9.99	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=
