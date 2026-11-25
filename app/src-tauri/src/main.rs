@@ -409,9 +409,11 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         "--ctx-size", &cfg.ctx.to_string(),
         "--parallel", "1",
         // Large prefill batch: more tokens share one SSD expert-fetch, so
-        // reading big Kilo prompts is ~2.7x faster (measured 208 vs 75 tok/s).
-        "--batch-size", "2048",
-        "--ubatch-size", "2048",
+        // reading big Kilo prompts is ~2.7x faster (measured 208 vs 75 tok/s). 4096 halves the
+        // expert re-reads per prompt: 39.5k-token agent prompt TTFT 259 -> 207 s @4 GiB and
+        // 231 -> 182 s @10 GiB, identical output, decode unchanged, 0 MB swap (RESULTS 2026-11-26).
+        "--batch-size", "4096",
+        "--ubatch-size", "4096",
         "-fa", "on",
         "--jinja",
         "--alias", "slipstream",

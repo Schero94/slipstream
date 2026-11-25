@@ -3585,3 +3585,6 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 - Layer-major design: docs/plans/2026-11-26-layer-major-prefill.md (one layer per graph pass,
   the shared full-n_expert scratch holds a layer across ubatches). Its I/O-vs-compute split is
   an estimate until the llama-completion split measurement (split1) is recorded.
+- App default changed to `-b 4096 -ub 4096` for the main server (consistent −20/−21 % TTFT at
+  4/10 GiB, identical output, decode unchanged, 0 MB swap). Caveat: larger Metal compute
+  buffers — RAM headroom on 16 GB Macs is not yet measured (admission still refuses unsafe plans).
