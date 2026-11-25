@@ -3411,3 +3411,13 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   is default-on whenever steering is on (PGRN_STEER_LA=0 opts out).
 - Verdict: Turbo = 0.02 + PSR, decode-only, opt-in. 0.03 rejected as not worth the extra
   distortion (+1.5 % speed). Re-verification of the decode-only build queued (turbo_v2_verify).
+
+## Lookahead predictor input: residual + next layer's norm — REJECT (neutral) — 2026-11-25
+
+- Settle probe first: at 10 GiB with lookahead, prefetch-join wait is 0.56 s of 9.06 s
+  decode (6 %), synchronous fetches of unpredicted misses 3.47 s (38 %) → the lever is
+  recall, not lead time (so L+2 lookahead was not pursued).
+- Variant: score layer L+1's router on rms_norm(residual) * attn_post_norm[L+1] instead
+  of layer L's normed MoE input. Interleaved, 2 reps:
+  4 GiB 10.20/10.16 tok/s (la0 vs variant), 10 GiB 17.63/17.83; recall 82.87 → 83.09 %.
+- Verdict: **REJECT** — within noise; code removed to keep one predictor path.
