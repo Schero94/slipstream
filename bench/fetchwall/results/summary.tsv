@@ -84,3 +84,29 @@
 20261125-040201	srv	label=none-la0	cache=10	decode_tps=17.42	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
 20261125-040332	srv	label=mtp-turbo2	cache=10	decode_tps=15.22	draft_acc=103/220	swap_delta_mb=0	out=7f59ad38b473	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
 20261125-040505	srv	label=none-turbo2	cache=10	decode_tps=19.97	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-042431	srv	label=none-code	cache=4	decode_tps=10.16	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-042532	srv	label=ngram-code	cache=4	decode_tps=9.98	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-042647	srv	label=none-code	cache=4	decode_tps=9.82	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-042805	srv	label=ngram-code	cache=4	decode_tps=10.12	draft_acc=None/None	swap_delta_mb=-8.00	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-042921	srv	label=none-edit	cache=4	decode_tps=8.33	draft_acc=None/None	swap_delta_mb=0	out=7677641431ce	env=PGRN_LOOKAHEAD=0
+20261125-043050	srv	label=ngram-edit	cache=4	decode_tps=7.37	draft_acc=61/78	swap_delta_mb=0	out=7677641431ce	env=PGRN_LOOKAHEAD=0
+20261125-043223	srv	label=none-edit	cache=4	decode_tps=8.10	draft_acc=None/None	swap_delta_mb=0	out=7677641431ce	env=PGRN_LOOKAHEAD=0
+20261125-043353	srv	label=ngram-edit	cache=4	decode_tps=7.61	draft_acc=61/78	swap_delta_mb=0	out=7677641431ce	env=PGRN_LOOKAHEAD=0
+20261125-043622	srv	label=old-la0	cache=4	decode_tps=9.93	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-043742	srv	label=new-la0	cache=4	decode_tps=0.00	draft_acc=None/None	swap_delta_mb=0	out=e3b0c44298fc	env=PGRN_LOOKAHEAD=0
+20261125-043908	label=la0	cache=4	decode_tps=10.08	prefill_tps=19.44	hit=68.86	la_recall=82.87	swap_delta_mb=-8.00	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-044022	label=la0par	cache=4	decode_tps=10.26	prefill_tps=19.79	hit=70.48	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0 PGRN_COMPACT_PAR=1
+20261125-044139	label=la0	cache=4	decode_tps=10.10	prefill_tps=19.82	hit=68.86	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-044256	label=la0par	cache=4	decode_tps=10.08	prefill_tps=19.31	hit=70.48	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0 PGRN_COMPACT_PAR=1
+20261125-044413	label=la0	cache=10	decode_tps=17.71	prefill_tps=19.47	hit=84.88	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-044523	label=la0par	cache=10	decode_tps=17.90	prefill_tps=19.68	hit=85.13	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0 PGRN_COMPACT_PAR=1
+20261125-044645	label=la0	cache=10	decode_tps=17.86	prefill_tps=19.64	hit=84.88	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-044806	label=la0par	cache=10	decode_tps=17.75	prefill_tps=19.56	hit=85.13	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0 PGRN_COMPACT_PAR=1
+20261125-044927	srv	label=none-la0	cache=4	decode_tps=10.21	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-045102	srv	label=none-la0par	cache=4	decode_tps=10.00	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0 PGRN_COMPACT_PAR=1
+20261125-045236	srv	label=mtp-la0	cache=4	decode_tps=9.05	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-045412	srv	label=mtp-la0batch	cache=4	decode_tps=9.08	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0 PGRN_COMPACT_BATCH=1 PGRN_COMPACT_PAR=1
+20261125-045548	srv	label=none-la0	cache=4	decode_tps=10.12	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-045721	srv	label=none-la0par	cache=4	decode_tps=10.27	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0 PGRN_COMPACT_PAR=1
+20261125-045854	srv	label=mtp-la0	cache=4	decode_tps=9.19	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-050030	srv	label=mtp-la0batch	cache=4	decode_tps=9.15	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0 PGRN_COMPACT_BATCH=1 PGRN_COMPACT_PAR=1

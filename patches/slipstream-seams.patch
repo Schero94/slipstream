@@ -3719,7 +3719,7 @@ index beab9f6bc..b51d4401f 100644
      llama_model_ernie4_5(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index 7b0876cbb..d37f9482d 100644
+index 7b0876cbb..7a73a5737 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
 @@ -213,6 +213,25 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
@@ -3748,10 +3748,12 @@ index 7b0876cbb..d37f9482d 100644
          // MOE FFN layer
          cur = build_layer_ffn(attn_post_norm, il);
          cb(cur, "ffn_out", il);
-@@ -497,13 +516,25 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+@@ -497,13 +516,27 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
      // Check if this is an MoE layer
      GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
  
++    // Compact (zero-copy) slots for single-token decode. Extending them to small multi-token
++    // ubatches (speculative verify) measured neutral (bench/RESULTS.md 2026-11-25).
 +    const bool compact = model.pgrn_compact_enabled() && n_tokens == 1 &&
 +            model.pgrn_compact_capacity(static_cast<uint16_t>(il)) >= static_cast<size_t>(n_expert_used);
 +    ggml_tensor * compact_up = compact ? model.pgrn_compact_tensor(static_cast<uint16_t>(il), 1) : nullptr;
@@ -3778,7 +3780,7 @@ index 7b0876cbb..d37f9482d 100644
              n_expert, n_expert_used,
              LLM_FFN_SILU, true,
              hparams.expert_weights_scale,
-@@ -511,7 +542,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+@@ -511,7 +544,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
              nullptr, model.layers[il].ffn_gate_up_exps,
              model.layers[il].ffn_up_exps_s,
              model.layers[il].ffn_gate_exps_s,
@@ -3789,7 +3791,7 @@ index 7b0876cbb..d37f9482d 100644
      cb(moe_out, "ffn_moe_out", il);
  
      // Add shared experts if present - following Qwen3Next reference implementation
-@@ -675,12 +708,14 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
+@@ -675,12 +710,14 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
      cb(cur, "mtp_attn_post_norm", il);
  
      // MoE FFN — routed experts plus gated shared expert (mirrors qwen35moe).
@@ -3807,7 +3809,7 @@ index 7b0876cbb..d37f9482d 100644
              nullptr,
              n_expert, n_expert_used,
              LLM_FFN_SILU, true,
-@@ -689,7 +724,9 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
+@@ -689,7 +726,9 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
              nullptr, layer.ffn_gate_up_exps,
              layer.ffn_up_exps_s,
              layer.ffn_gate_exps_s,

@@ -3467,3 +3467,39 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   decoder + MTP modes) reports nmse=0 / max_abs=0 everywhere, also with PGRN_LOOKAHEAD=0.
 - Fixed a pre-existing layout bug: the e2e test assumed the repo root two levels above the
   llama.cpp tree, but apply.sh reconstructs it one level below; it now detects bench/.
+
+## Draft-model-free speculation (ngram-simple) in the streamed regime — REJECT — 2026-11-25
+
+- Idea: keep a speculative path without MTP (so grammar-forced drafts stay available) using
+  `--spec-type ngram-simple --spec-draft-n-max 8`, which drafts only when context n-grams repeat.
+- llama-server, lookahead on, no MTP, cache 4 GiB, 2 reps, two prompts:
+
+  | prompt | none | ngram-simple | ngram acceptance |
+  |---|---|---|---|
+  | fresh module (prompt_code) | 9.99 | 10.05 | no drafts |
+  | rewrite given code (prompt_edit) | 8.22 | 7.49 (−9 %) | 61/78 = 78 % |
+
+- Even at 78 % acceptance a multi-token verify step costs more than it saves when streaming:
+  it needs the union of several tokens' experts, and compact (zero-copy) slots only apply
+  when n_tokens == 1, so verify falls back to the copy path. Next lever: compact for small
+  batches. Grammar-forced drafts without speculation remain a follow-up.
+
+## Compact path: parallel cold reads (PAR) and compact for small batches (BATCH) — REJECT — 2026-11-25
+
+- PAR: in compact mode cold experts were read serially inside get_slot; variant reads this
+  layer's cold set in parallel (io_width) first. BATCH: allow compact (zero-copy) slots for
+  ubatches of <= 8 tokens (speculative verify) when the partition holds every selection.
+- Interleaved, 2 reps, output hashes identical in every pair (lossless):
+
+  | arm | 4 GiB | 10 GiB |
+  |---|---|---|
+  | llama-completion lookahead | 10.09 | 17.79 |
+  | + PAR | 10.17 | 17.83 |
+  | llama-server lookahead, no MTP | 10.17 | — |
+  | + PAR | 10.14 | — |
+  | llama-server MTP + lookahead | 9.12 | — |
+  | + BATCH + PAR | 9.12 | — |
+
+- Reading: after lookahead almost every layer has at most one cold expert left, so there is
+  nothing to parallelize; and the copy path is not what makes MTP verify expensive — the
+  union of several tokens' experts is. Both removed; MTP stays off for streamed runs.
