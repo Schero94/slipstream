@@ -67,3 +67,20 @@
 20261125-033453	srv	label=turbo2	cache=10	decode_tps=15.26	draft_acc=103/220	swap_delta_mb=-8.00	out=7f59ad38b473	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
 20261125-033626	srv	label=base	cache=10	decode_tps=13.14	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=
 20261125-033801	srv	label=la0	cache=10	decode_tps=15.23	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-033934	srv	label=turbo2	cache=10	decode_tps=15.26	draft_acc=103/220	swap_delta_mb=0	out=7f59ad38b473	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-034111	srv	label=mtp-la0	cache=4	decode_tps=9.25	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-034252	srv	label=none-la0	cache=4	decode_tps=10.15	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-034431	srv	label=mtp-turbo2	cache=4	decode_tps=9.65	draft_acc=105/214	swap_delta_mb=0	out=7a5b8dc7cca0	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-034611	srv	label=none-turbo2	cache=4	decode_tps=13.51	draft_acc=None/None	swap_delta_mb=0	out=7ddf12c5b26e	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-034746	srv	label=mtp-la0	cache=4	decode_tps=9.21	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-034928	srv	label=none-la0	cache=4	decode_tps=9.92	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-035108	srv	label=mtp-turbo2	cache=4	decode_tps=9.53	draft_acc=105/214	swap_delta_mb=0	out=7a5b8dc7cca0	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-035248	srv	label=none-turbo2	cache=4	decode_tps=13.85	draft_acc=None/None	swap_delta_mb=0	out=7ddf12c5b26e	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-035423	srv	label=mtp-la0	cache=10	decode_tps=15.11	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-035555	srv	label=none-la0	cache=10	decode_tps=17.62	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-035726	srv	label=mtp-turbo2	cache=10	decode_tps=15.28	draft_acc=103/220	swap_delta_mb=0	out=7f59ad38b473	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-035859	srv	label=none-turbo2	cache=10	decode_tps=19.25	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-040029	srv	label=mtp-la0	cache=10	decode_tps=15.30	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-040201	srv	label=none-la0	cache=10	decode_tps=17.42	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-040332	srv	label=mtp-turbo2	cache=10	decode_tps=15.22	draft_acc=103/220	swap_delta_mb=0	out=7f59ad38b473	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-040505	srv	label=none-turbo2	cache=10	decode_tps=19.97	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02

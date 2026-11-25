@@ -455,7 +455,22 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         let model_lc = cfg.model.to_ascii_lowercase();
         let no_mtp_quant = model_lc.contains("ud-q5") || model_lc.contains("ud-q6")
             || model_lc.contains("q5_k_xl") || model_lc.contains("q6_k_xl");
-        let spec_type = if no_mtp_quant { "none".to_string() } else { cfg.spec_type.clone() };
+        let mut spec_type = if no_mtp_quant { "none".to_string() } else { cfg.spec_type.clone() };
+        // Streamed + lookahead: MTP costs speed. Each MTP verify step fetches the union of
+        // ~4-5 tokens' experts from SSD, which lookahead cannot hide, and Turbo lowers the
+        // draft acceptance (58 % -> 47-49 %). Measured on the same llama-server, Qwen3.6-35B
+        // Q4, greedy, identical output (bench/RESULTS.md 2026-11-25):
+        //   lookahead   4 GiB  9.23 (MTP) vs 10.04 (no MTP) · 10 GiB 15.21 vs 17.52 tok/s
+        //   + Turbo     4 GiB  9.59 (MTP) vs 13.68 (no MTP) · 10 GiB 15.25 vs 19.61 tok/s
+        // Cost: grammar-forced drafts ride the speculative verify path, so they are off too
+        // in this mode (their measured win was mainly Laguna/DFlash, which is untouched).
+        // When the cache holds (almost) every expert the model is effectively resident and
+        // MTP wins again (README: 42 vs 29 tok/s), so only streamed runs drop it.
+        let pgrn_bytes = file_size(&cfg.pgrn) as f64;
+        let streamed = pgrn_bytes > 0.0 && cfg.cache_gb * 1073741824.0 < 0.9 * pgrn_bytes;
+        if spec_type == "draft-mtp" && streamed && cfg.pgrn_lookahead > 0 {
+            spec_type = "none".to_string();
+        }
         if spec_type != "none" && !spec_type.is_empty() {
             cmd.args(["--spec-type", &spec_type, "--spec-draft-n-max", "4"]);
             if !cfg.draft_model.is_empty() && file_size(&cfg.draft_model) > 0 {

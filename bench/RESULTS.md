@@ -3436,3 +3436,26 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   the earlier app-regime numbers are void.
 - Lesson recorded in CLAUDE.md terms: always measure in the regime the app actually uses
   (here: speculative decoding on), not only in the simplest harness.
+
+## App regime: MTP off when streaming with lookahead — KEEP (app policy) — 2026-11-25
+
+- Same llama-server, app flags, greedy /completion of the same prompt, interleaved, 2 reps;
+  MTP = `--spec-type draft-mtp --spec-draft-n-max 4`. Output hash identical within each
+  routing mode (speculation is lossless under greedy).
+
+  | config | 4 GiB | 10 GiB | MTP draft acceptance |
+  |---|---|---|---|
+  | old app default: MTP, no lookahead | 7.84 | 13.14 | 58 % |
+  | MTP + lookahead | 9.23 | 15.21 | 58 % |
+  | **no MTP + lookahead** | **10.04 (+28 %)** | **17.52 (+33 %)** | — |
+  | MTP + Turbo v2 | 9.59 | 15.25 | 47–49 % |
+  | **no MTP + Turbo v2** | **13.68 (+75 %)** | **19.61 (+49 %)** | — |
+
+- Why: an MTP verify step needs the union of ~4–5 tokens' experts from SSD; lookahead hides
+  single-token fetches well but the union is too wide, and Turbo's steering makes the
+  unsteered MTP head's drafts less acceptable. Once lookahead makes single-token decode
+  cheap, MTP's amortization no longer pays in the streamed regime.
+- Policy (app/src-tauri main.rs): drop `draft-mtp` when the run is streamed (cache < 90 % of
+  the PGRN size) and lookahead is on. Resident runs keep MTP (README: 42 vs 29 tok/s).
+  Cost: grammar-forced drafts share the verify path and are off in this mode — follow-up:
+  grammar drafts without a draft model. Laguna/DFlash untouched (not measured here).
