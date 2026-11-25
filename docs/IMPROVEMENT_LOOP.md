@@ -42,8 +42,10 @@ number on `bench/SCOREBOARD.md` without making another one worse.
 
 ## Guardrails (never broken by the loop)
 
-- No push, merge to `main`, tag or release without the user asking. Releases are always
-  complete (dmg + zip + node tarball, verified, checksums).
+- Push, merge to `main`, tag and release are allowed autonomously (user, 2026-11-26) for
+  verified milestones only: all tests green, parity held, wins recorded with numbers.
+  Every release is complete: dmg + zip + node tarball, verified on the mounted DMG,
+  checksums in docs/RELEASE_<v>.md. Never a release without the .dmg.
 - No lossy behaviour on by default without an explicit user decision.
 - Models only from the internal SSD; one model process at a time; never bypass RAM admission.
 - No deleting user data; destructive operations need the user.

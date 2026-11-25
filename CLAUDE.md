@@ -73,7 +73,8 @@ revert the rest and record it as a negative.
 
 ## Repo hygiene
 
-- Work on a feature branch, never on `main`. Commit only when asked.
+- Work on `feat/fetch-wall`; merge to `main`, push and release autonomously only for verified
+  milestones, and every release ships a verified `.dmg` (plus zip + node tarball).
 - App frontend is vanilla JS in `app/dist/` (no build step); keep EN+DE strings, a11y
   (labels, tablist, live regions) and the `app/scripts/test_*.mjs` contracts green.
 - Never commit models (`*.gguf`, `*.pgrn`), binaries, or `llama.cpp-slipstream/`.
