@@ -3554,3 +3554,17 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   explicitly when its toggle is off.
 - Check (llama-completion, 4 GiB): no env 10.45 tok/s / recall 82.9 %, `PGRN_LOOKAHEAD=0`
   10.41, `PGRN_LOOKAHEAD=-1` 6.30 (= old baseline); output `e6c6a36552db` in all three.
+
+## Colibrì upstream audit — 2026-11-25
+
+- main `e479104ae01b` (2026-11-22), dev `8ea9e9dfbd3b` (2026-11-25); ~5.9k/6.1k commits since our
+  last audit. New: a Qwen3.6-35B-A3B Metal engine streaming experts from SSD that reads unsloth
+  GGUFs (PRs #2015/#2016/#2298–#2308) — a direct reference for our model and hardware class.
+- It implements layer-major prompt processing (`c/qwen36_graph.h` qg_prompt_layers, PR #2298):
+  every batch through layer L before L+1, a layer's experts held until all batches finish
+  (≥ 256 slots), DeltaNet state carried in order, claimed bit-identical. Isolated A/B only on
+  CUDA/Vulkan (#2460: +14 % / +80–99 % prefill, bus traffic 224 → 60 GiB).
+- Other candidates and our-gaps recorded in docs/BACKLOG.md (cold insertion of prompt reads,
+  next-layer prefetch in prefill, prefix store across conversations, top-6 lookahead,
+  confidence-gated single-draft MTP, page cache re-check). Their numbers are theirs (mostly
+  8 GB M1 / Xeon / CUDA), not reproduced here.
