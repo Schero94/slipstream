@@ -20,7 +20,7 @@ LOG="$OUT/$STAMP-$LABEL-c$CACHE.log"
 swap_mb() { sysctl -n vm.swapusage | sed -E 's/.*used = ([0-9.]+)M.*/\1/'; }
 S0=$(swap_mb)
 env "$@" "$BIN" -m "$GGUF" --pgrn "$PGRN" --pgrn-cache-gb "$CACHE" --pgrn-io-threads 8 \
-    --pgrn-compact-slots -c 4096 -b 2048 -ub 2048 -no-cnv --temp 0 --seed 1 --ignore-eos \
+    ${COMPACT---pgrn-compact-slots} -c "${CTX:-4096}" -b "${UB:-2048}" -ub "${UB:-2048}" -no-cnv --temp 0 --seed 1 --ignore-eos \
     -n "$NTOK" -f "$PROMPT_FILE" --no-warmup > "$LOG.out" 2> "$LOG"
 S1=$(swap_mb)
 EVAL=$(grep -E "common_perf_print: +eval time" "$LOG" | sed -E 's/.* ([0-9.]+) tokens per second.*/\1/' || true)

@@ -3568,3 +3568,20 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   next-layer prefetch in prefill, prefix store across conversations, top-6 lookahead,
   confidence-gated single-draft MTP, page cache re-check). Their numbers are theirs (mostly
   8 GB M1 / Xeon / CUDA), not reproduced here.
+
+## v0.5 prefill baseline — 39,515-token agent prompt (llama-server, app regime) — 2026-11-26
+
+- prompt_30k.txt (repo sources as agent context), lookahead on (default), no MTP, ctx 40960,
+  one request, greedy; same output hash `54edf738c5a8` in every arm; swap growth ≤ 0 MB.
+
+  | cache | ubatch 2048 | ubatch 4096 | ubatch 2048 + io 16 |
+  |---|---|---|---|
+  | 4 GiB | TTFT 259.1 s (152.5 tok/s) | 207.0 s (190.9 tok/s, −20 %) | 249.0 s (158.7 tok/s, −4 %) |
+  | 10 GiB | 231.3 s (170.8 tok/s) | pending | pending |
+
+- Reading: halving the ubatch passes cuts 20 %, more read parallelism 4 % → re-reading the
+  routed experts once per ubatch dominates (a 2048-row ubatch touches ~all 256 experts/layer).
+  Decode right after the long prompt: 7.4 tok/s @4 GiB (vs 10.3 with a short prompt).
+- Layer-major design: docs/plans/2026-11-26-layer-major-prefill.md (one layer per graph pass,
+  the shared full-n_expert scratch holds a layer across ubatches). Its I/O-vs-compute split is
+  an estimate until the llama-completion split measurement (split1) is recorded.
