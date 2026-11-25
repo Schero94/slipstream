@@ -7,12 +7,14 @@ M3 Pro, 36 GB unified memory. Read README.md, BENCHMARKS.md and docs/ARCH.md fir
 ## Source of truth (most important rule)
 
 - The engine is **reconstructed**, not vendored: `./apply.sh` clones upstream
-  llama.cpp @ the pinned commit into `llama.cpp-slipstream/` (gitignored), copies
+  llama.cpp @ the pinned commit (`PIN` in apply.sh; ported to upstream 2026-11-24 =
+  `33aeb17f8586`, see upstream-port notes in bench/RESULTS.md) into `llama.cpp-slipstream/` (gitignored), copies
   `engine/` over it and applies `patches/slipstream-seams.patch`.
 - You may develop inside `llama.cpp-slipstream/`, but work is **lost** unless it is
   synced back before committing. Use the `engine-sync` skill:
   - new/changed Slipstream-owned files (`src/peregrine_*`, `tools/pgrn-convert`,
-    `tools/server/peregrine-routing.*`, `src/models/laguna.cpp`, tests) → `engine/`
+    `tools/server/peregrine-routing.*`, `tests/test-peregrine-*`) → `engine/`
+    (since PIN 33aeb17f8586 upstream ships Laguna; our Laguna changes live in the patch)
   - every change to an upstream file → regenerated `patches/slipstream-seams.patch`
 - After syncing, prove it: a fresh `./apply.sh /tmp/x` must apply cleanly and build.
 

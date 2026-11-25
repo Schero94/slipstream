@@ -3503,3 +3503,22 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 - Reading: after lookahead almost every layer has at most one cold expert left, so there is
   nothing to parallelize; and the copy path is not what makes MTP verify expensive — the
   union of several tokens' experts is. Both removed; MTP stays off for streamed runs.
+
+## Upstream port: llama.cpp 79bba02a6741 -> 33aeb17f8586 (+2677 commits) — KEEP — 2026-11-25
+
+- Ported by a sub-agent in a separate tree, conflicts + resolutions in docs/PORT_UPSTREAM_33aeb17.md;
+  our post-port engine changes carried over; one server blocker found in acceptance and fixed
+  (a 0-row ffn_moe_topk on the last layer when a prompt ubatch requests no outputs).
+- Acceptance in the repo layout: 14/14 peregrine tests incl. e2e parity (nmse=0), binary links
+  only system frameworks, `engine_sync.sh --verify` PASS.
+- Parity/speed vs the old pin (same commands, cache 4/10 GiB):
+
+  | arm | old pin | new pin | output |
+  |---|---|---|---|
+  | completion lookahead 4 GiB | 10.07 | 10.35 (+3 %) | identical `e6c6a36552db` |
+  | completion lookahead 10 GiB | 17.44 | 18.58 (+6.5 %) | identical |
+  | server Turbo v2, no MTP, 4 GiB | 13.50 | 14.53 (+7.6 %) | differs (lossy path, near-tie routing; quality re-check queued) |
+  | server MTP baseline 4 GiB | 7.84 | 7.67 | identical `38b5b06864f1` |
+
+- Not verified on the new pin: Laguna (upstream scaling + our DFlash drafter), adaptive draft,
+  grammar-forced drafts, routing logger, ANE draft, SPEC_PIN, --parallel > 1.

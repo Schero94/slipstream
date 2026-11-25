@@ -110,3 +110,19 @@
 20261125-045721	srv	label=none-la0par	cache=4	decode_tps=10.27	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0 PGRN_COMPACT_PAR=1
 20261125-045854	srv	label=mtp-la0	cache=4	decode_tps=9.19	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
 20261125-050030	srv	label=mtp-la0batch	cache=4	decode_tps=9.15	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0 PGRN_COMPACT_BATCH=1 PGRN_COMPACT_PAR=1
+20261125-050211	srv	label=port-dbg	cache=4	decode_tps=0.00	draft_acc=None/None	swap_delta_mb=0	out=e3b0c44298fc	env=PGRN_LOOKAHEAD=0
+20261125-050406	srv	label=port-old-nospec-la0	cache=4	decode_tps=10.07	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-050540	srv	label=port-new-nospec-la0	cache=4	decode_tps=10.31	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-050714	srv	label=port-old-mtp-la0	cache=4	decode_tps=9.07	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-050850	srv	label=port-new-mtp-la0	cache=4	decode_tps=9.12	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-051026	srv	label=port-old-nospec-la0	cache=4	decode_tps=9.98	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-051159	srv	label=port-new-nospec-la0	cache=4	decode_tps=10.20	draft_acc=None/None	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-051332	srv	label=port-old-mtp-la0	cache=4	decode_tps=9.03	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-051507	srv	label=port-new-mtp-la0	cache=4	decode_tps=8.93	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-052104	label=oldpin-la0	cache=4	decode_tps=10.07	prefill_tps=19.56	hit=68.86	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-052240	label=newpin-la0	cache=4	decode_tps=10.35	prefill_tps=20.65	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-052409	label=oldpin-la0	cache=10	decode_tps=17.44	prefill_tps=19.25	hit=84.88	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-052531	label=newpin-la0	cache=10	decode_tps=18.58	prefill_tps=20.38	hit=85.02	la_recall=82.87	swap_delta_mb=-8.00	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-052657	srv	label=oldpin-turbo2	cache=4	decode_tps=13.50	draft_acc=None/None	swap_delta_mb=0	out=7ddf12c5b26e	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-052831	srv	label=newpin-turbo2	cache=4	decode_tps=14.53	draft_acc=None/None	swap_delta_mb=0	out=48705b4156e6	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-053004	srv	label=newpin-mtpbase	cache=4	decode_tps=7.67	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=

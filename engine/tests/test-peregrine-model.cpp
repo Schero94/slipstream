@@ -63,7 +63,7 @@ static void stream_benchmark(const char * gguf, const char * pgrn, int n_tokens,
         uint64_t cache_bytes, uint64_t headroom_bytes) {
     using clock = std::chrono::steady_clock;
     llama_model_params mp = llama_model_default_params();
-    mp.use_mmap = false;
+    mp.load_mode = LLAMA_LOAD_MODE_NONE;
     mp.pgrn_path = pgrn;
     mp.pgrn_cache_bytes = cache_bytes;
     mp.pgrn_headroom_bytes = headroom_bytes;
@@ -84,21 +84,19 @@ static void stream_benchmark(const char * gguf, const char * pgrn, int n_tokens,
     llama_context_ptr ctx(llama_init_from_model(model.get(), cp));
     if (!ctx) throw std::runtime_error("context creation failed");
 
-    llama_batch prompt = llama_batch_init(4, 0, 1);
-    for (int i = 0; i < 4; ++i) common_batch_add(prompt, i + 1, i, {0}, i == 3);
+    common_batch prompt(ctx.get());
+    for (int i = 0; i < 4; ++i) prompt.add(i + 1, i, 0, i == 3);
     const auto prompt_start = clock::now();
-    const int prompt_rc = llama_decode(ctx.get(), prompt);
+    const int prompt_rc = llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, prompt.get());
     const auto prompt_end = clock::now();
-    llama_batch_free(prompt);
     if (prompt_rc != 0) throw std::runtime_error("prompt decode failed");
     const llama_perf_context_data prompt_perf = llama_perf_context(ctx.get());
 
     const auto generation_start = clock::now();
     for (int i = 0; i < n_tokens; ++i) {
-        llama_batch batch = llama_batch_init(1, 0, 1);
-        common_batch_add(batch, 1, 4 + i, {0}, true);
-        const int rc = llama_decode(ctx.get(), batch);
-        llama_batch_free(batch);
+        common_batch batch(ctx.get());
+        batch.add(1, 4 + i, 0, true);
+        const int rc = llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get());
         if (rc != 0) throw std::runtime_error("generation decode failed");
     }
     const auto generation_end = clock::now();
@@ -137,7 +135,10 @@ static void stream_benchmark(const char * gguf, const char * pgrn, int n_tokens,
 static decode_result decode(const char * gguf, const char * pgrn, bool mtp, bool gpu, bool compact,
         const char * coupling_path = nullptr) {
     llama_model_params mp = llama_model_default_params();
-    mp.use_mmap = pgrn == nullptr;
+    mp.load_mode = pgrn == nullptr ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
+    // the streamed load always materializes the NextN/MTP block (the sidecar covers it), so the
+    // resident reference does too: both runs then load the same tensor set
+    mp.load_mtp = true;
     if (gpu) mp.n_gpu_layers = 99;
     if (pgrn) {
         mp.pgrn_path = pgrn;
@@ -178,37 +179,30 @@ static decode_result decode(const char * gguf, const char * pgrn, bool mtp, bool
     const llama_token tokens[] = {1, 2, 3, 4};
     const int token_count = compact ? 1 : 4;
     const int32_t n_embd = llama_model_n_embd(model.get());
-    llama_batch batch = llama_batch_init(token_count, mtp ? n_embd : 0, 1);
-    if (mtp) {
-        batch.token = (llama_token *) std::malloc(sizeof(llama_token) * token_count);
-        if (!batch.token) {
-            llama_batch_free(batch);
-            throw std::runtime_error("MTP token allocation failed");
-        }
-    }
-    for (int i = 0; i < token_count; ++i) common_batch_add(batch, tokens[i], i, {0}, true);
-    if (mtp) {
-        for (int token = 0; token < token_count; ++token) {
+    common_batch batch(ctx.get());
+    std::vector<float> state;
+    if (mtp) state.assign((size_t) token_count * n_embd, 0.0f);
+    for (int token = 0; token < token_count; ++token) {
+        const int32_t idx = batch.add(tokens[token], token, 0, true);
+        if (mtp) {
             for (int32_t dim = 0; dim < n_embd; ++dim) {
-                batch.embd[(size_t) token * n_embd + dim] = (float) ((dim % 7) - 3) * 1.0e-4f;
+                state[(size_t) token * n_embd + dim] = (float) ((dim % 7) - 3) * 1.0e-4f;
             }
+            batch.set_embd_state(idx, { state.data() + (size_t) token * n_embd, 1, (size_t) n_embd });
         }
     }
-    if (llama_decode(ctx.get(), batch) != 0) {
-        llama_batch_free(batch);
+    if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
         throw std::runtime_error("decode failed");
     }
     const llama_perf_context_data perf = llama_perf_context(ctx.get());
     if (pgrn && (perf.pgrn_cache_bytes == 0 || perf.pgrn_cache_high_water_bytes < perf.pgrn_cache_bytes ||
             perf.pgrn_cache_hits + perf.pgrn_cache_misses == 0 || perf.pgrn_experts_staged == 0 ||
             (!compact && perf.pgrn_bytes_uploaded == 0))) {
-        llama_batch_free(batch);
         throw std::runtime_error("PGRN runtime telemetry invariants failed");
     }
     const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
     const float * logits = llama_get_logits_ith(ctx.get(), token_count - 1);
     result.logits.assign(logits, logits + n_vocab);
-    llama_batch_free(batch);
     return result;
 }
 

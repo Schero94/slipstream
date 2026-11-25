@@ -64,8 +64,8 @@ int main() {
     std::vector<std::string> splits;
     llama_model_loader loader(
         nullptr, nullptr, nullptr, path, splits, nullptr,
-        /*use_mmap*/ true, /*use_direct_io*/ false,
-        /*check_tensors*/ false, /*no_alloc*/ false,
+        LLAMA_LOAD_MODE_MMAP,
+        /*check_tensors*/ false, /*no_alloc*/ false, /*load_mtp*/ false,
         /*external_experts*/ true, nullptr, nullptr);
     CHECK(!loader.use_mmap);
 
