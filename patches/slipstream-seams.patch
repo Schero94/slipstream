@@ -2673,7 +2673,7 @@ index 4a62064e7..2a4313ea5 100644
          add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH,     hparams.n_relative);
          add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT,     hparams.n_relative_extent);
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index b20459646..228fe78bd 100644
+index b20459646..74f3def0b 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -7,6 +7,11 @@
@@ -2719,7 +2719,7 @@ index b20459646..228fe78bd 100644
 +    pgr_runtime * pgrn_runtime = nullptr;
 +    pgr_scratch * pgrn_scratch = nullptr;
 +    pgr_compact * pgrn_compact = nullptr;
-+    int   pgrn_lookahead = -1;
++    int   pgrn_lookahead = 0;    // lossless + measured faster -> on by default; PGRN_LOOKAHEAD=-1 disables
 +    float pgrn_steer = 0.0f;
 +    bool  pgrn_steer_la = true;   // PSR mark on with Turbo (measured: halves KLD); PGRN_STEER_LA=0 opts out
 +    ggml_context_ptr pgrn_steer_ctx;
@@ -3172,7 +3172,7 @@ index b20459646..228fe78bd 100644
      return (int32_t)model->devices.size();
  }
 diff --git a/src/llama-model.h b/src/llama-model.h
-index e0273d7d1..065a54ff7 100644
+index e0273d7d1..1443fc1bb 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
 @@ -1,6 +1,7 @@
@@ -3204,7 +3204,7 @@ index e0273d7d1..065a54ff7 100644
 +    bool pgrn_has_coupling() const;
 +    // Lookahead gating: next layer's router applied to this layer's MoE input predicts the
 +    // next layer's experts; they are warmed while this layer computes. Lossless (warm only).
-+    // PGRN_LOOKAHEAD=<extra experts beyond top-k>; unset/negative = off.
++    // On by default with --pgrn; PGRN_LOOKAHEAD=<extra experts beyond top-k>, negative = off.
 +    int  pgrn_lookahead_margin() const;
 +    void pgrn_prefetch_list(uint16_t layer, const int32_t * experts, size_t n) const;
 +    // Cache-steered routing (opt-in, lossy): a per-layer bonus added to the router's

@@ -388,8 +388,11 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         if cfg.pgrn_online {
             cmd.env("PGRN_ONLINE_PREDICT", "1");
         }
+        // The engine enables lookahead by default with --pgrn; the toggle's "off" must say so.
         if cfg.pgrn_lookahead > 0 {
             cmd.env("PGRN_LOOKAHEAD", (cfg.pgrn_lookahead - 1).min(16).to_string());
+        } else {
+            cmd.env("PGRN_LOOKAHEAD", "-1");
         }
         if cfg.pgrn_steer.is_finite() && cfg.pgrn_steer > 0.0 {
             cmd.env("PGRN_STEER", format!("{:.3}", cfg.pgrn_steer.min(0.5)));

@@ -51,7 +51,8 @@ Never edit files while a build is compiling them (it produces mixed binaries).
 
 ## Experiment switches (engine)
 
-- `PGRN_LOOKAHEAD=<m>` — lookahead gating: layer L+1's router on layer L's MoE input,
+- `PGRN_LOOKAHEAD=<m>` — lookahead gating (ON by default with --pgrn, m=0; `-1` disables):
+  layer L+1's router on layer L's MoE input,
   top-(k+m) prefetched during layer L compute. Lossless. Read at the existing top-k
   sync, so it adds no GPU sync point.
 - `PGRN_STEER=<bonus>` — cache-steered routing (Cache-Prior arXiv 2412.00099 / CECAR

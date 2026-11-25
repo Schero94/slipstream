@@ -269,6 +269,8 @@ Two environment variables cover the multi-disk case:
 | `PGRN_MIRROR=/path/to/copy.pgrn` | A byte-identical PGRN copy on a second SSD. Reads get striped across both, split in proportion to each disk's probed cold-read bandwidth. |
 | `PGRN_MIRROR_WEIGHT=N` | Override that split, as a percentage sent to the primary disk. |
 | `PGRN_BUFFERED=1` | Skip `F_NOCACHE` and let the OS page cache back the reads. Faster per read, but the cache is then unbounded. See BENCHMARKS.md before using it. |
+| `PGRN_LOOKAHEAD=N` | Lookahead prefetch, on by default with `--pgrn` (N = 0). N > 0 also prefetches N extra predicted experts per layer; `-1` turns it off. Lossless. |
+| `PGRN_STEER=0.02` | Turbo: while generating, prefer experts already in RAM or being prefetched. Lossy, off by default (see Measured results). |
 
 Striping is a capacity feature first. On an internal NVMe paired with a slow USB drive it comes out slower, because they share a bus.
 

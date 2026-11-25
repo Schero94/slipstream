@@ -137,3 +137,6 @@
 20261125-065132	srv	label=gdraft-tool	cache=10	decode_tps=13.23	draft_acc=25/66	swap_delta_mb=0	out=3e88f7c80626	env=PGRN_LOOKAHEAD=0
 20261125-065305	srv	label=none-tool	cache=10	decode_tps=14.76	draft_acc=None/None	swap_delta_mb=0	out=3e88f7c80626	env=PGRN_LOOKAHEAD=0
 20261125-065436	srv	label=gdraft-tool	cache=10	decode_tps=13.15	draft_acc=25/66	swap_delta_mb=0	out=3e88f7c80626	env=PGRN_LOOKAHEAD=0
+20261125-074025	label=default	cache=4	decode_tps=10.45	prefill_tps=20.71	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=
+20261125-074158	label=la-off	cache=4	decode_tps=6.30	prefill_tps=20.71	hit=68.89	la_recall=NA	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=-1
+20261125-074340	label=la0	cache=4	decode_tps=10.41	prefill_tps=20.86	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0

@@ -3546,3 +3546,11 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   MTP entry), and only 38 % of forced tokens are accepted — the grammar forces characters
   whose tokenization differs from the model's own tokens. Without a draft model to amortize,
   grammar drafts do not pay here. Streamed runs stay without speculation.
+
+## Lookahead on by default in the engine — 2026-11-25
+
+- `--pgrn` alone now enables lookahead (margin 0); `PGRN_LOOKAHEAD=-1` disables it, so CLI,
+  Linux and headless-node users get the lossless +20..33 % without the app. The app passes -1
+  explicitly when its toggle is off.
+- Check (llama-completion, 4 GiB): no env 10.45 tok/s / recall 82.9 %, `PGRN_LOOKAHEAD=0`
+  10.41, `PGRN_LOOKAHEAD=-1` 6.30 (= old baseline); output `e6c6a36552db` in all three.
