@@ -10,11 +10,12 @@ BIN=${BIN:-"$HERE/../../llama.cpp-slipstream/build-static/bin/llama-perplexity"}
 GGUF=${GGUF:-"$HOME/Modelle/qwen3.6-35b-a3b-q4/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"}
 PGRN=${PGRN:-"$HOME/Modelle/qwen3.6-35b-a3b-q4/Qwen3.6-35B-A3B-UD-Q4_K_XL.pgrn"}
 CHUNKS=${CHUNKS:-12}
+UB=${UB:-512}   # UB=1 = decode regime (token by token: lookahead + PSR active)
 OUT="$HERE/results"; mkdir -p "$OUT"
-BASE="$OUT/kld_base_c$CACHE.bin"
+BASE="$OUT/kld_base_c${CACHE}_ub${UB}_n${CHUNKS}.bin"
 COMMON=(-m "$GGUF" --pgrn "$PGRN" --pgrn-cache-gb "$CACHE" --pgrn-io-threads 8 --pgrn-compact-slots
-        -f "$HERE/kld_corpus.txt" -c 512 -b 512 -ub 512 --chunks "$CHUNKS")
-LOG="$OUT/$(date +%Y%m%d-%H%M%S)-kld-$LABEL-c$CACHE.log"
+        -f "$HERE/kld_corpus.txt" -c 512 -b 512 -ub "$UB" --chunks "$CHUNKS")
+LOG="$OUT/$(date +%Y%m%d-%H%M%S)-kld-$LABEL-c$CACHE-ub$UB.log"
 if [ "$LABEL" = base ]; then
   env "$@" "$BIN" "${COMMON[@]}" --kl-divergence-base "$BASE" > "$LOG" 2>&1
   grep -E "Final estimate|PPL" "$LOG" | tail -2
@@ -24,6 +25,6 @@ else
   TOP=$(grep -E "^Same top p" "$LOG" | awk '{print $4, $5, $6}')
   PPLR=$(grep -E "^Mean +PPL\(Q\)/PPL\(base\)" "$LOG" | awk '{print $3, $4, $5}')
   HIT=$(grep -E "PGRN cache = " "$LOG" | sed -E 's/.*\(([0-9.]+)%\).*/\1/' | tail -1)
-  printf '%s\tkld\tlabel=%s\tcache=%s\tmean_kld=%s\tsame_top=%s\tppl_ratio=%s\thit=%s\tenv=%s\n' \
-    "$(date +%Y%m%d-%H%M%S)" "$LABEL" "$CACHE" "$MKL" "$TOP" "$PPLR" "${HIT:-NA}" "$*" | tee -a "$OUT/summary.tsv"
+  printf '%s\tkld ub=%s\tlabel=%s\tcache=%s\tmean_kld=%s\tsame_top=%s\tppl_ratio=%s\thit=%s\tenv=%s\n' \
+    "$(date +%Y%m%d-%H%M%S)" "$UB" "$LABEL" "$CACHE" "$MKL" "$TOP" "$PPLR" "${HIT:-NA}" "$*" | tee -a "$OUT/summary.tsv"
 fi

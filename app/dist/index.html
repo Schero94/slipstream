@@ -736,7 +736,7 @@
                     <label class="chk" for="pgrnLookahead"><input type="checkbox" id="pgrnLookahead" checked aria-describedby="pgrnLookaheadHint" /> <span data-i18n="adv.lookahead">Lookahead prefetch</span> <span class="tag tag-lossless" data-i18n="adv.lossless">lossless</span> <span class="info" data-i18n-tip="tip.lookahead">ⓘ</span></label>
                     <p class="hint" id="pgrnLookaheadHint" data-i18n="hint.lookahead">Reads the experts the next layer is predicted to need before it asks for them.</p>
                   </div>
-                  <label class="chk"><input type="checkbox" id="onlinePredict" /> <span data-i18n="adv.predict">Predictive Prefetch (experimentell)</span> <span class="info" data-i18n-tip="tip.predict">ⓘ</span></label>
+                  <!-- superseded by lookahead prefetch (old co-activation prefetch measured -8 %, bench/RESULTS.md); kept hidden for the id contract --><label class="chk" hidden><input type="checkbox" id="onlinePredict" /> <span data-i18n="adv.predict">Predictive Prefetch (experimentell)</span> <span class="info" data-i18n-tip="tip.predict">ⓘ</span></label>
                 </div>
               </div>
             </section>
