@@ -13,8 +13,8 @@ OUT="$HERE/results"; mkdir -p "$OUT"
 STAMP=$(date +%Y%m%d-%H%M%S); LOG="$OUT/$STAMP-srv-$LABEL-c$CACHE.log"
 swap_mb() { sysctl -n vm.swapusage | sed -E 's/.*used = ([0-9.]+)M.*/\1/'; }
 S0=$(swap_mb)
-env "$@" "$BIN" -m "$GGUF" --pgrn "$PGRN" --pgrn-cache-gb "$CACHE" --pgrn-io-threads 8 \
-  --pgrn-compact-slots --gpu-layers 99 -c 4096 --parallel 1 -b 2048 -ub 2048 \
+env "$@" "$BIN" -m "$GGUF" --pgrn "$PGRN" --pgrn-cache-gb "$CACHE" --pgrn-io-threads "${IO:-8}" \
+  --pgrn-compact-slots --gpu-layers 99 -c "${CTX:-4096}" --parallel 1 -b "${UB:-2048}" -ub "${UB:-2048}" \
   ${SPEC_ARGS---spec-type draft-mtp --spec-draft-n-max 4} --host 127.0.0.1 --port "$PORT" > "$LOG" 2>&1 &
 PID=$!
 for i in $(seq 1 600); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; kill -0 $PID 2>/dev/null || break; sleep 1; done
@@ -34,6 +34,6 @@ import json, sys, hashlib
 r = json.load(open(sys.argv[1])); t = r.get("timings", {})
 h = hashlib.sha256(r.get("content", "").encode()).hexdigest()[:12]
 acc = t.get("draft_n_accepted"); dn = t.get("draft_n")
-print(f"{sys.argv[4]}\tsrv\tlabel={sys.argv[2]}\tcache={sys.argv[3]}\tdecode_tps={t.get('predicted_per_second', 0):.2f}"
+print(f"{sys.argv[4]}\tsrv\tlabel={sys.argv[2]}\tcache={sys.argv[3]}\tdecode_tps={t.get('predicted_per_second', 0):.2f}\tprompt_n={t.get('prompt_n')}\tttft_s={t.get('prompt_ms', 0)/1000:.1f}\tprefill_tps={t.get('prompt_per_second', 0):.1f}"
       f"\tdraft_acc={acc}/{dn}\tswap_delta_mb={sys.argv[5]}\tout={h}\tenv={sys.argv[6]}")
 PY

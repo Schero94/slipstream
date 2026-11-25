@@ -59,6 +59,12 @@ Never edit files while a build is compiling them (it produces mixed binaries).
   2611.20119 / PSR 2610.34721): bonus on resident experts' *selection* probability,
   mask snapshotted at ubatch start (deterministic); mixing weights stay unbiased. Lossy.
 
+## Autonomous improvement loop
+
+When working unattended (resume pings), follow `docs/IMPROVEMENT_LOOP.md`: pick the top item
+from `docs/BACKLOG.md`, measure it against `bench/SCOREBOARD.md`, have a fresh reviewer agent
+challenge every win before keeping it, and record winners and losers.
+
 ## Workflow per idea
 
 Annahme → Recherche (alphaxiv MCP, Colibrì-first per docs/COLIBRI_REFERENCE.md) →

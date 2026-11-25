@@ -1,0 +1,3732 @@
+<|im_start|>user
+You are a coding agent working in this repository. Here are the relevant source files:
+
+
+// ===== FILE: app/src-tauri/src/main.rs =====
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+use std::fs::OpenOptions;
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
+
+mod mlx;
+mod p2p;
+mod runtime;
+mod servestats;
+mod storage;
+mod sysstats;
+mod teardown;
+mod tray;
+
+use tauri::{Manager, State};
+
+const LOG_PATH: &str = "/tmp/peregrine-control-server.log";
+const DL_LOG: &str = "/tmp/peregrine-download.log";
+const CONV_LOG: &str = "/tmp/peregrine-convert.log";
+const EMB_LOG: &str = "/tmp/peregrine-embedder.log";
+const QDRANT_LOG: &str = "/tmp/peregrine-qdrant.log";
+const QSETUP_LOG: &str = "/tmp/peregrine-qdrant-setup.log";
+
+const EMBED_URL: &str = "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q5_K_M.gguf";
+const QDRANT_URL: &str = "https://github.com/qdrant/qdrant/releases/download/v1.18.3/qdrant-aarch64-apple-darwin.tar.gz";
+
+const SERVER_PORT: u16 = 8080;
+const EMB_PORT: u16 = 8090;
+
+#[derive(Default)]
+struct AppState {
+    server: Mutex<Option<Child>>,
+    dl: Mutex<Option<Child>>,
+    conv: Mutex<Option<Child>>,
+    emb: Mutex<Option<Child>>,
+    qdrant: Mutex<Option<Child>>,
+    setup: Mutex<Option<Child>>,
+}
+
+/// The readings the menubar poller takes, held where the window can read them
+/// too. One sampler for both means the menu and the Status panel cannot disagree,
+/// and that opening a panel costs no extra `/metrics` request.
+struct Live {
+    serving: Mutex<servestats::Store>,
+    system: Mutex<sysstats::SysSnapshot>,
+    /// oMLX `/api/status` extras (PGRN hit-rate, RSS) — filled by the tray poller.
+    api_extras: Mutex<servestats::ApiExtras>,
+}
+
+/// Everything the Status panel draws, in one call.
+#[tauri::command]
+fn live_stats(live: State<Live>, state: State<AppState>) -> Value {
+    // Hold Live mutexes only long enough to copy. Expert-cache parsing and any
+    // other I/O stays outside — the tray poller used to nest HTTP under these
+    // same locks and hang the window (main thread waiting on live_stats).
+    let (system, session, alltime, serving_available, extras) = {
+        let serving = live
+            .serving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let system = live
+            .system
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let extras = live
+            .api_extras
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        (
+            system,
+            serving.session(),
+            serving.alltime(),
+            serving.has_reading(),
+            extras,
+        )
+    };
+    // Metal: last decode line from the engine log. MLX: lifetime avg from /api/status
+    // when the log has no eval-time / output= line.
+    let last_tps = last_tps().or(extras.avg_generation_tps);
+    let experts = tray::expert_cache(&state).or_else(|| {
+        extras.has_pgrn().then(|| tray::ExpertCache {
+            hits: extras.pgrn_hits.unwrap_or(0),
+            misses: extras.pgrn_misses.unwrap_or(0),
+            hit_rate: extras.pgrn_hit_rate.unwrap_or(0.0),
+        })
+    });
+    // Prefer oMLX-reported RSS; else `ps` on the child we own (Metal path has no
+    // /api/status). Never invent a number — UI shows "–" when both are absent.
+    let process_rss = extras
+        .process_rss_bytes
+        .or_else(|| server_child_rss_bytes(&state));
+    let (rss_bytes, rss_source) = match (process_rss, extras.model_memory_bytes) {
+        (Some(b), _) => (Some(b), Some("process")),
+        (None, Some(b)) => (Some(b), Some("model_memory")),
+        _ => (None, None),
+    };
+    json!({
+        "system": system,
+        "session": session,
+        "alltime": alltime,
+        // False until a server answered /metrics: the panel then says so instead
+        // of drawing a row of zeroes that look like a measurement.
+        "serving_available": serving_available,
+        // Hit rate and misses in one object: the window draws the rate and derives
+        // SSD throughput from the miss delta, both off this single parse.
+        "experts": experts,
+        // Last completed decode (Metal/oMLX log) or oMLX avg_generation_tps fallback.
+        "last_tps": last_tps,
+        "model_memory_bytes": extras.model_memory_bytes,
+        "process_rss_bytes": process_rss,
+        // Unified RSS for the status strip: process preferred, model_memory fallback.
+        "rss_bytes": rss_bytes,
+        "rss_source": rss_source,
+        "pgrn_high_water_bytes": extras.pgrn_high_water_bytes,
+        "pgrn_mx_size": extras.pgrn_mx_size,
+    })
+}
+
+/// Current RSS of the server child this app spawned (`ps` KiB → bytes).
+/// None when we do not own the process or `ps` fails — honest empty for UI.
+fn server_child_rss_bytes(state: &AppState) -> Option<u64> {
+    let pid = {
+        let guard = state.server.lock().ok()?;
+        guard.as_ref().map(|c| c.id())?
+    };
+    let out = Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let kib: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+    (kib > 0).then_some(kib.saturating_mul(1024))
+}
+
+/// Resets one scope. The session is ours to offset; the all-time total is ours to
+/// delete. Neither touches the running server.
+#[tauri::command]
+fn clear_stats(scope: String, live: State<Live>) -> Result<(), String> {
+    let mut serving = live
+        .serving
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match scope.as_str() {
+        "session" => serving.clear_session(),
+        "alltime" => {
+            serving.clear_alltime();
+            serving.persist();
+        }
+        other => return Err(format!("unknown scope: {other}")),
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn runtime_preflight(app: tauri::AppHandle) -> Result<runtime::RuntimeReport, String> {
+    let root = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("resources");
+    runtime::preflight(&root)
+}
+
+#[tauri::command]
+fn inspect_storage(
+    path: String,
+    role: String,
+    planned_bytes: u64,
+    reserve_bytes: u64,
+) -> Result<storage::StorageReport, String> {
+    storage::inspect_storage(
+        std::path::Path::new(path.trim()),
+        role.trim(),
+        planned_bytes,
+        reserve_bytes,
+    )
+}
+
+/// HTTP status code of a GET (via curl), or 0 if the connection was refused.
+/// Used to detect a live/ready server we may not own the child handle for.
+fn http_status(url: &str) -> u16 {
+    Command::new("curl")
+        .args(["-s", "-m", "2", "-o", "/dev/null", "-w", "%{http_code}", url])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u16>().ok())
+        .unwrap_or(0)
+}
+
+/// Body of a GET, or None if the request failed. Same curl route as
+/// `http_status` so there is one HTTP mechanism in this app, not two.
+fn http_body(url: &str) -> Option<String> {
+    let out = Command::new("curl")
+        .args(["-s", "-m", "2", "--fail", url])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// True if anything is listening on 127.0.0.1:port (llama.cpp answers /health
+/// with 503 while loading, 200 when ready - both mean the port is taken).
+fn port_alive(port: u16) -> bool {
+    http_status(&format!("http://127.0.0.1:{port}/health")) != 0
+}
+
+fn num(v: f64) -> String {
+    if v.fract() == 0.0 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v}")
+    }
+}
+
+fn file_size(path: &str) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// True while the child in `slot` is alive; reaps it and returns false if it exited.
+fn alive(slot: &Mutex<Option<Child>>) -> bool {
+    let mut g = match slot.lock() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    if let Some(c) = g.as_mut() {
+        match c.try_wait() {
+            Ok(Some(_)) => {
+                *g = None;
+                false
+            }
+            Ok(None) => true,
+            Err(_) => true,
+        }
+    } else {
+        false
+    }
+}
+
+fn kill(slot: &Mutex<Option<Child>>) {
+    // SIGTERM first so launcher EXIT traps (oMLX lock release) can run.
+    let _ = teardown::kill_child_graceful(slot, 2000);
+}
+
+// ---------------------------------------------------------------- server ----
+
+#[derive(Deserialize)]
+struct ServerConfig {
+    server: String,
+    model: String,
+    pgrn: String,
+    cache_gb: f64,
+    headroom_gb: f64,
+    ctx: u32,
+    io_threads: u32,
+    port: u16,
+    thinking: bool,
+    spec_type: String,   // "draft-mtp" (Qwen), "draft-dflash" (Laguna), or "none"
+    draft_model: String, // draft gguf path (DFlash); empty for MTP/none
+    #[serde(default)]
+    pgrn_mirror: String, // advanced: byte-identical PGRN copy on a 2nd SSD -> dual-SSD striping
+    #[serde(default)]
+    pgrn_buffered: bool, // advanced: buffered reads (skip F_NOCACHE) for non-NVMe drives
+    #[serde(default)]
+    pgrn_online: bool,   // advanced: online co-activation predictor -> speculative prefetch
+    /// Lookahead gating (lossless, measured +29-33% decode at 4-8 GiB cache): the next
+    /// layer's experts are predicted from this layer's hidden state and warmed during compute.
+    /// 0 = off, n >= 1 = on with n-1 extra experts beyond top-k (1 = recommended).
+    /// -> PGRN_LOOKAHEAD=<n-1>
+    #[serde(default)]
+    pgrn_lookahead: u32,
+    /// Cache-steered routing / Turbo (lossy, opt-in): selection bonus for resident experts.
+    /// 0 = off (exact routing). -> PGRN_STEER
+    #[serde(default)]
+    pgrn_steer: f64,
+    #[serde(default = "default_true")]
+    pgrn_compact: bool,  // default-on: zero-copy compact slots -> +13-24% decode at moderate cache, swap-safe (measured)
+    #[serde(default = "default_true")]
+    grammar_draft: bool, // default-on: grammar-forced drafts for structured output (JSON/tool-calls); adaptive-guarded + lossless. Measured +45% tok/s fetch-bound on rigid schemas, neutral on easy JSON (guard stands down)
+    #[serde(default = "default_kv_quant")]
+    kv_quant: String, // per-model KV type: "q8_0" for full-attention models (KV-RAM becomes cache headroom), "f16" for hybrids (S1 measured q8-KV at -12..-28% decode on the resident hybrid 35B; its linear-attention KV is tiny, so q8 buys nothing there)
+    /// Dense GGUF (no MoE experts): allow Metal start without a PGRN sidecar.
+    #[serde(default)]
+    dense: bool,
+    /// "metal" | "mlx" | "auto" | "heuristic". Auto/heuristic resolved at start (see mlx::resolve_backend).
+    #[serde(default = "default_backend")]
+    backend: String,
+    /// Parent directory of MLX model subdirs (`--model-dir`). Empty → default SSD path.
+    #[serde(default)]
+    mlx_dir: String,
+    /// Optional absolute path to the `omlx` binary.
+    #[serde(default)]
+    omlx_bin: String,
+    /// Estimated prompt size (chars) for Auto hybrid: long → Metal, short/warm → MLX.
+    #[serde(default)]
+    prompt_chars: usize,
+    /// MLX-only: `SLIPSTREAM_PGRN_PROFILE` (`balanced` | `quality` | `fast`).
+    #[serde(default = "default_pgrn_profile")]
+    pgrn_profile: String,
+    /// MLX-only: `SLIPSTREAM_PGRN_RESIDENCY` (`mlock` | `touch` | `off`).
+    #[serde(default = "default_pgrn_residency")]
+    pgrn_residency: String,
+    /// MLX-only: `SLIPSTREAM_PGRN_KEEP_HOT` (default on).
+    #[serde(default = "default_true")]
+    pgrn_keep_hot: bool,
+    /// MLX-only: `SLIPSTREAM_PGRN_WARMUP` (default on).
+    #[serde(default = "default_true")]
+    pgrn_warmup: bool,
+    /// MLX-only: when set → `SLIPSTREAM_PGRN_L3=peer` + `PEER_BASE`. Metal ignores.
+    #[serde(default)]
+    pgrn_l3_peer_base: String,
+    /// MLX-only: path to MCP JSON/YAML → `OMLX_MCP_CONFIG` + `--mcp-config`.
+    /// Empty (default) → MCP OFF (no server-side tool merge).
+    #[serde(default)]
+    mcp_config: String,
+    /// MLX-only: Settings opt-in → `--memory-guard off` (Metal wired ~28 GiB escape).
+    /// Default false → `--memory-guard-gb` = total − headroom.
+    #[serde(default)]
+    memory_guard_off: bool,
+}
+
+fn annotate_auto_backend(preference: &str, effective: &str, msg: String) -> String {
+    if matches!(preference, "auto" | "heuristic") {
+        format!("Auto → {effective}: {msg}")
+    } else {
+        msg
+    }
+}
+
+fn default_true() -> bool { true }
+fn default_kv_quant() -> String { "q8_0".into() }
+fn default_backend() -> String { "auto".into() }
+fn default_pgrn_profile() -> String { "balanced".into() }
+fn default_pgrn_residency() -> String { "touch".into() }
+
+#[tauri::command]
+fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>) -> Result<String, String> {
+    let mut guard = state.server.lock().map_err(|e| e.to_string())?;
+    if guard.is_some() {
+        return Err("Server läuft bereits - erst stoppen.".into());
+    }
+    let mlx_model_dir = {
+        let trimmed = cfg.mlx_dir.trim();
+        if trimmed.is_empty() {
+            mlx::default_model_dir()
+        } else {
+            std::path::PathBuf::from(trimmed)
+        }
+    };
+    let has_experts = mlx::any_experts_sidecar(&mlx_model_dir);
+    let effective = mlx::resolve_backend(&cfg.backend, cfg.prompt_chars, has_experts);
+    if effective == "mlx" {
+        let msg = start_mlx_server(&app, &cfg, &mut *guard)?;
+        return Ok(annotate_auto_backend(&cfg.backend, effective, msg));
+    }
+    if file_size(&cfg.model) == 0 {
+        return Err("Modell (.gguf) fehlt - erst herunterladen.".into());
+    }
+    let has_pgrn = file_size(&cfg.pgrn) > 0;
+    if !has_pgrn && !cfg.dense {
+        return Err("PGRN-Sidecar fehlt - erst konvertieren.".into());
+    }
+    let log = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(LOG_PATH)
+        .map_err(|e| format!("Log-Fehler: {e}"))?;
+    let log_err = log.try_clone().map_err(|e| e.to_string())?;
+
+    let mut cmd = Command::new(&cfg.server);
+    if has_pgrn {
+        // Advanced I/O levers (opt-in): dual-SSD striping + buffered reads. The engine
+        // reads these env vars; both default-off, parity-safe (mirror is CRC-checked).
+        if !cfg.pgrn_mirror.trim().is_empty() {
+            cmd.env("PGRN_MIRROR", cfg.pgrn_mirror.trim());
+        }
+        if cfg.pgrn_buffered {
+            cmd.env("PGRN_BUFFERED", "1");
+        }
+        if cfg.pgrn_online {
+            cmd.env("PGRN_ONLINE_PREDICT", "1");
+        }
+        // The engine enables lookahead by default with --pgrn; the toggle's "off" must say so.
+        if cfg.pgrn_lookahead > 0 {
+            cmd.env("PGRN_LOOKAHEAD", (cfg.pgrn_lookahead - 1).min(16).to_string());
+        } else {
+            cmd.env("PGRN_LOOKAHEAD", "-1");
+        }
+        if cfg.pgrn_steer.is_finite() && cfg.pgrn_steer > 0.0 {
+            cmd.env("PGRN_STEER", format!("{:.3}", cfg.pgrn_steer.min(0.5)));
+        }
+        // Compact slots (zero-copy): GPU reads experts directly from arena slots — no re-upload
+        // copy. Measured +13-24% decode across cache 4-8 GiB, neutral higher, swap-safe. Default-on.
+        if cfg.pgrn_compact {
+            cmd.arg("--pgrn-compact-slots");
+        }
+    }
+    cmd.args([
+        "--model", &cfg.model,
+        "--gpu-layers", "99",
+        "--ctx-size", &cfg.ctx.to_string(),
+        "--parallel", "1",
+        // Large prefill batch: more tokens share one SSD expert-fetch, so
+        // reading big Kilo prompts is ~2.7x faster (measured 208 vs 75 tok/s).
+        "--batch-size", "2048",
+        "--ubatch-size", "2048",
+        "-fa", "on",
+        "--jinja",
+        "--alias", "slipstream",
+        "--host", "127.0.0.1",
+        "--port", &cfg.port.to_string(),
+        "--no-warmup",
+        // llama.cpp otherwise permits up to 8 GiB of extra prompt-cache state.
+        // Real Qwen3.6 tool-schema A/B: add=260 MiB, multiply=197 MiB; 512 MiB
+        // retained both warm prefixes (271 cached tokens, 3.7-3.9 s TTFT) while
+        // bounding long-running multi-client growth and preserving the RAM gate.
+        "--cache-ram", "512",
+        // Serving counters for the menubar's Serving Stats submenu.
+        "--metrics",
+    ]);
+    if has_pgrn {
+        cmd.args([
+            "--pgrn", &cfg.pgrn,
+            "--pgrn-cache-gb", &num(cfg.cache_gb),
+            "--pgrn-headroom-gb", &num(cfg.headroom_gb),
+        ]);
+    }
+    // KV type per model family: f16 = engine default (skip the flags entirely).
+    if !cfg.kv_quant.is_empty() && cfg.kv_quant != "f16" {
+        cmd.args(["-ctk", &cfg.kv_quant, "-ctv", &cfg.kv_quant]);
+    }
+    if has_pgrn {
+        // Width-weighted cache partition: auto-enable when a weights sidecar sits next
+        // to the PGRN (bench.m1.partition_weights). Engine is fail-soft (equal split on
+        // any file problem). Measured 2026-07-27 on the streamed 35B: +11% warm decode,
+        // output byte-identical.
+        if let Some(weights) = std::path::Path::new(&cfg.pgrn)
+            .parent()
+            .map(|dir| dir.join("partition-weights.txt"))
+            .filter(|p| p.exists())
+        {
+            cmd.arg("--pgrn-partition-weights").arg(weights);
+        }
+        if cfg.io_threads > 1 {
+            cmd.arg("--pgrn-io-threads").arg(cfg.io_threads.to_string());
+        }
+        // Speculative decoding is model-specific: Qwen Q4 ships an MTP head (no draft
+        // file); Laguna uses a separate DFlash draft. "none" disables it.
+        // UD-Q5_K_XL / UD-Q6 have no MTP layers — draft-max=4 aborts load (MTP context).
+        let model_lc = cfg.model.to_ascii_lowercase();
+        let no_mtp_quant = model_lc.contains("ud-q5") || model_lc.contains("ud-q6")
+            || model_lc.contains("q5_k_xl") || model_lc.contains("q6_k_xl");
+        let mut spec_type = if no_mtp_quant { "none".to_string() } else { cfg.spec_type.clone() };
+        // Streamed + lookahead: MTP costs speed. Each MTP verify step fetches the union of
+        // ~4-5 tokens' experts from SSD, which lookahead cannot hide, and Turbo lowers the
+        // draft acceptance (58 % -> 47-49 %). Measured on the same llama-server, Qwen3.6-35B
+        // Q4, greedy, identical output (bench/RESULTS.md 2026-11-25):
+        //   lookahead   4 GiB  9.23 (MTP) vs 10.04 (no MTP) · 10 GiB 15.21 vs 17.52 tok/s
+        //   + Turbo     4 GiB  9.59 (MTP) vs 13.68 (no MTP) · 10 GiB 15.25 vs 19.61 tok/s
+        // Cost: grammar-forced drafts ride the speculative verify path, so they are off too
+        // in this mode (their measured win was mainly Laguna/DFlash, which is untouched).
+        // When the cache holds (almost) every expert the model is effectively resident and
+        // MTP wins again (README: 42 vs 29 tok/s), so only streamed runs drop it.
+        let pgrn_bytes = file_size(&cfg.pgrn) as f64;
+        let streamed = pgrn_bytes > 0.0 && cfg.cache_gb * 1073741824.0 < 0.9 * pgrn_bytes;
+        if spec_type == "draft-mtp" && streamed && cfg.pgrn_lookahead > 0 {
+            spec_type = "none".to_string();
+        }
+        if spec_type != "none" && !spec_type.is_empty() {
+            cmd.args(["--spec-type", &spec_type, "--spec-draft-n-max", "4"]);
+            if !cfg.draft_model.is_empty() && file_size(&cfg.draft_model) > 0 {
+                cmd.args(["--model-draft", &cfg.draft_model, "--spec-draft-ngl", "99"]);
+            }
+            // Grammar-forced drafts ride the same verify path (needs a draft path, so gated here).
+            // Engine defaults on + adaptive-guarded; pass 0 only when the user disables it.
+            cmd.args(["--spec-grammar-draft", if cfg.grammar_draft { "1" } else { "0" }]);
+        }
+    }
+    // Couple sampler to thinking mode. Thinking-on uses Qwen3's recommended
+    // sampler AND a bounded reasoning budget, so the model can't over-think into
+    // an endless-looking chain that never answers. Coding (thinking off) stays
+    // deterministic and skips reasoning entirely.
+    // Dense chat models (Dolphin/Llama-3.1): mild temp when thinking is off —
+    // temp 0 is for agentic coding MoE, not conversational cyber assistants.
+    if cfg.thinking {
+        cmd.args([
+            "--temp", "0.6", "--top-p", "0.95", "--top-k", "20",
+            "--reasoning-budget", "2048",
+        ]);
+    } else if cfg.dense {
+        cmd.args([
+            "--reasoning", "off",
+            "--temp", "0.7", "--top-p", "0.9", "--top-k", "40",
+            "--repeat-penalty", "1.1",
+        ]);
+    } else {
+        cmd.args(["--reasoning", "off", "--temp", "0"]);
+    }
+    cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log_err));
+    let child = cmd.spawn().map_err(|e| format!("Start fehlgeschlagen: {e}"))?;
+    *guard = Some(child);
+    let load_msg = if has_pgrn {
+        "Server gestartet - lädt Modell (~60s)..."
+    } else {
+        "Server gestartet - dense Metal Vollast (~15–30s)..."
+    };
+    Ok(annotate_auto_backend(
+        &cfg.backend,
+        "metal",
+        load_msg.into(),
+    ))
+}
+
+fn resource_dir_of(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().resource_dir().ok()
+}
+
+/// MLX via forked oMLX + PGRN when the launcher is present; else stock resident
+/// `omlx serve`. Memory ceiling comes from Slipstream (`headroom_gb`).
+fn start_mlx_server(
+    app: &tauri::AppHandle,
+    cfg: &ServerConfig,
+    slot: &mut Option<Child>,
+) -> Result<String, String> {
+    let model_dir = {
+        let trimmed = cfg.mlx_dir.trim();
+        if trimmed.is_empty() {
+            mlx::default_model_dir()
+        } else {
+            std::path::PathBuf::from(trimmed)
+        }
+    };
+    let rd = resource_dir_of(app);
+    let rd_ref = rd.as_deref();
+    let streaming_launcher = mlx::pgrn_launcher(rd_ref).is_some();
+    let has_sidecar = mlx::any_experts_sidecar(&model_dir);
+    let need = mlx::largest_model_gib(&model_dir);
+    let total_gib = sysctl_total_gib().unwrap_or(36.0);
+    let free_gib = vm_stat_free_inactive_gib().unwrap_or(0.0);
+    let ceiling = (total_gib - cfg.headroom_gb).max(1.0);
+    if free_gib > 0.0 && free_gib < mlx::MLX_MIN_FREE_GIB {
+        return Err(mlx::mlx_critical_free_refuse_msg(free_gib, mlx::MLX_MIN_FREE_GIB));
+    }
+    // Streaming: expert banks stay on SSD — do not refuse on full safetensors size.
+    // Resident: refuse when the largest model cannot fit under the memory ceiling.
+    if !(streaming_launcher && has_sidecar) {
+        if need > 0.0 && need + 1.0 > ceiling {
+            return Err(mlx::mlx_resident_refuse_msg(
+                need,
+                ceiling,
+                cfg.headroom_gb,
+                free_gib,
+            ));
+        }
+    }
+    // PGRN launcher uses Slipstream mlx-runtime (or legacy oMLX.app) — stock
+    // `omlx` binary only needed for resident fallback without the launcher.
+    let omlx = if streaming_launcher {
+        std::path::PathBuf::from("omlx-unused")
+    } else {
+        mlx::resolve_omlx(&cfg.omlx_bin)?
+    };
+    let pgrn_env = mlx::PgrnMlxEnv::from_parts(
+        &cfg.pgrn_profile,
+        &cfg.pgrn_residency,
+        cfg.pgrn_keep_hot,
+        cfg.pgrn_warmup,
+        cfg.pgrn_online,
+        &cfg.pgrn_l3_peer_base,
+        &cfg.mcp_config,
+    );
+    let (mut cmd, streaming) = mlx::serve_command(
+        &omlx,
+        &model_dir,
+        cfg.port,
+        ceiling,
+        rd_ref,
+        Some(&pgrn_env),
+        cfg.memory_guard_off,
+    )?;
+    let log = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(LOG_PATH)
+        .map_err(|e| format!("Log-Fehler: {e}"))?;
+    let log_err = log.try_clone().map_err(|e| e.to_string())?;
+    cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log_err));
+    if streaming && !mlx::python_runtime_available() {
+        return Err(
+            "MLX runtime missing — Settings → Install MLX runtime (one-time wheels), or install oMLX.app as fallback."
+                .into(),
+        );
+    }
+    let child = cmd.spawn().map_err(|e| format!("MLX start failed: {e}"))?;
+    *slot = Some(child);
+    let guard_note = if cfg.memory_guard_off {
+        " · memory-guard off"
+    } else {
+        ""
+    };
+    let soft = mlx::mlx_low_free_soft_tip(free_gib, &pgrn_env.residency).unwrap_or_default();
+    Ok(if streaming && has_sidecar {
+        format!(
+            "MLX+PGRN started (SSD expert streaming, ~{need:.0} GiB on disk; free ≈ {free:.0} GiB{guard}) — first chat loads…{soft}",
+            free = free_gib,
+            guard = guard_note,
+            soft = soft,
+        )
+    } else if streaming {
+        format!(
+            "MLX started via PGRN launcher but experts.pgrn missing — resident fallback (~{need:.0} GiB, free ≈ {free:.0} GiB{guard}). Add experts.pgrn next to the model for SSD streaming.{soft}",
+            free = free_gib,
+            guard = guard_note,
+            soft = soft,
+        )
+    } else {
+        format!(
+            "MLX server started (resident, ~{need:.0} GiB, free ≈ {free:.0} GiB{guard}) — first chat loads the model…{soft}",
+            free = free_gib,
+            guard = guard_note,
+            soft = soft,
+        )
+    })
+}
+
+#[tauri::command]
+fn mlx_capability(app: tauri::AppHandle, mlx_dir: String) -> mlx::MlxCapability {
+    let dir = {
+        let trimmed = mlx_dir.trim();
+        if trimmed.is_empty() {
+            mlx::default_model_dir()
+        } else {
+            std::path::PathBuf::from(trimmed)
+        }
+    };
+    mlx::capability(resource_dir_of(&app).as_deref(), &dir)
+}
+
+#[tauri::command]
+fn mlx_runtime_status(app: tauri::AppHandle) -> Result<String, String> {
+    mlx::runtime_status_json(resource_dir_of(&app).as_deref())
+}
+
+#[tauri::command]
+fn install_mlx_runtime(app: tauri::AppHandle) -> Result<String, String> {
+    mlx::start_runtime_install(resource_dir_of(&app).as_deref())
+}
+
+fn sysctl_total_gib() -> Option<f64> {
+    let out = Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()?;
+    let bytes: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+    Some(bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+}
+
+/// free + inactive pages (Mach-visible), same basis as Settings memory panel.
+fn vm_stat_free_inactive_gib() -> Option<f64> {
+    let out = Command::new("vm_stat").output().ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    let get = |k: &str| -> f64 {
+        s.lines()
+            .find(|l| l.contains(k))
+            .and_then(|l| l.split_whitespace().last())
+            .and_then(|v| v.trim_end_matches('.').parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    Some((get("Pages free:") + get("Pages inactive:")) * 16384.0 / 1_073_741_824.0)
+}
+
+fn stop_server_impl(state: &AppState) {
+    // Owned PID → lockfile holder → port-scoped llama → lsof listeners.
+    // No broad `pkill -f omlx-server` (CRASH_AVOIDANCE).
+    teardown::stop_server(
+        &state.server,
+        SERVER_PORT,
+        port_alive,
+        &teardown::default_lock_path(),
+        &teardown::default_hands_off_path(),
+    );
+}
+
+#[tauri::command]
+fn stop_server(state: State<AppState>) -> Result<String, String> {
+    stop_server_impl(&state);
+    Ok("Server gestoppt.".into())
+}
+
+/// Last decode tok/s parsed from the server log tail (llama.cpp "eval time").
+fn last_tps() -> Option<f64> {
+    // Tail only — a multi-hour engine log must not be slurped on the menubar tick.
+    let s = tray::log_tail(LOG_PATH, 256 * 1024)?;
+    servestats::parse_last_tps(&s)
+}
+
+/// Compact menubar status line: state plus last decode speed when running.
+fn tray_status_line() -> String {
+    match http_status(&format!("http://127.0.0.1:{SERVER_PORT}/health")) {
+        200 => match last_tps() {
+            Some(v) => format!("Slipstream · {v:.0} tok/s"),
+            None => "Slipstream · bereit".into(),
+        },
+        0 => "Slipstream · gestoppt".into(),
+        _ => "Slipstream · lädt…".into(),
+    }
+}
+
+#[tauri::command]
+fn is_running(state: State<AppState>) -> bool {
+    alive(&state.server) || port_alive(SERVER_PORT)
+}
+
+/// "down" | "loading" | "ready" - based on a real /health probe, so it is
+/// correct even for a server this app instance did not spawn.
+#[tauri::command]
+fn server_state() -> String {
+    match http_status(&format!("http://127.0.0.1:{SERVER_PORT}/health")) {
+        200 => "ready".into(),
+        0 => "down".into(),
+        _ => "loading".into(),
+    }
+}
+
+#[tauri::command]
+fn read_log(max_lines: usize) -> String {
+    let s = std::fs::read_to_string(LOG_PATH).unwrap_or_default();
+    let lines: Vec<&str> = s.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
+}
+
+// ------------------------------------------------------------- sys stats ----
+
+#[derive(Serialize)]
+struct SysStats {
+    free_gib: f64,
+    swap_used_mb: f64,
+    total_gib: f64,
+    cores: f64,       // total physical cores
+    perf_cores: f64,  // Apple Silicon performance (P-) cores -> good proxy for parallel I/O width
+}
+
+fn sysctl(key: &str) -> Option<String> {
+    let out = Command::new("sysctl").arg("-n").arg(key).output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[tauri::command]
+fn system_stats() -> SysStats {
+    let free_gib = (|| {
+        let out = Command::new("vm_stat").output().ok()?;
+        let s = String::from_utf8_lossy(&out.stdout);
+        let get = |k: &str| -> f64 {
+            s.lines()
+                .find(|l| l.contains(k))
+                .and_then(|l| l.split_whitespace().last())
+                .and_then(|v| v.trim_end_matches('.').parse::<f64>().ok())
+                .unwrap_or(0.0)
+        };
+        Some((get("Pages free:") + get("Pages inactive:")) * 16384.0 / 1_073_741_824.0)
+    })()
+    .unwrap_or(0.0);
+    let swap_used_mb = sysctl("vm.swapusage")
+        .and_then(|s| s.split("used =").nth(1)?.trim().split('M').next()?.trim().parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let total_gib = sysctl("hw.memsize")
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|b| b / 1_073_741_824.0)
+        .unwrap_or(0.0);
+    let cores = sysctl("hw.physicalcpu").and_then(|s| s.parse::<f64>().ok()).unwrap_or(8.0);
+    let perf_cores = sysctl("hw.perflevel0.physicalcpu")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(cores); // Intel Macs lack perflevel0 -> fall back to all physical cores
+    SysStats { free_gib, swap_used_mb, total_gib, cores, perf_cores }
+}
+
+// --------------------------------------------------------- model manager ----
+
+#[derive(Serialize)]
+struct ModelStatus {
+    gguf_bytes: u64,
+    pgrn_bytes: u64,
+    downloading: bool,
+    converting: bool,
+    disk_free_gib: f64,
+    /// A `partition-weights.txt` sidecar next to the PGRN — the same file
+    /// `start_server` auto-passes to the engine as `--pgrn-partition-weights`.
+    weights: bool,
+    /// An interrupted conversion that can be continued (R1.5).
+    resume: ConvResume,
+}
+
+/// State of an interrupted conversion, read from the converter's journal
+/// sidecar (`<pgrn>.partial.journal`). `records_*` count experts, so the UI can
+/// say "angehalten bei 41 %" instead of just "da liegt eine Datei".
+#[derive(Serialize, Default, Clone)]
+struct ConvResume {
+    resumable: bool,
+    records_done: u64,
+    records_total: u64,
+    partial_bytes: u64,
+    /// A `.partial` without a usable journal: only a fresh start can fix it.
+    orphan_partial: bool,
+}
+
+const PGRNJ_MAGIC: &[u8; 8] = b"PGRNJRN1";
+const PGRNJ_HEADER_BYTES: u64 = 120;
+const PGRN_DIR_RECORD: u64 = 26;
+
+fn conv_resume(pgrn: &str) -> ConvResume {
+    let partial = format!("{pgrn}.partial");
+    let partial_bytes = file_size(&partial);
+    if partial_bytes == 0 {
+        return ConvResume::default();
+    }
+    let journal = format!("{partial}.journal");
+    let head = std::fs::read(&journal).unwrap_or_default();
+    if head.len() < PGRNJ_HEADER_BYTES as usize || &head[..8] != PGRNJ_MAGIC {
+        return ConvResume { orphan_partial: true, partial_bytes, ..Default::default() };
+    }
+    let u64_at = |off: usize| -> u64 {
+        u64::from_le_bytes(head[off..off + 8].try_into().unwrap_or([0; 8]))
+    };
+    let records_done = (head.len() as u64 - PGRNJ_HEADER_BYTES) / PGRN_DIR_RECORD;
+    ConvResume {
+        resumable: true,
+        records_done,
+        records_total: u64_at(88).saturating_mul(u64_at(96)), // expert_count x layers
+        partial_bytes,
+        orphan_partial: false,
+    }
+}
+
+fn disk_free_gib(dir: &str) -> f64 {
+    // parse `df -k <dir>`: last row, 4th column = available KiB
+    let probe = if std::path::Path::new(dir).exists() { dir } else { "/" };
+    (|| {
+        let out = Command::new("df").arg("-k").arg(probe).output().ok()?;
+        let s = String::from_utf8_lossy(&out.stdout);
+        let last = s.lines().last()?;
+        let avail_kb: f64 = last.split_whitespace().nth(3)?.parse().ok()?;
+        Some(avail_kb * 1024.0 / 1_073_741_824.0)
+    })()
+    .unwrap_or(0.0)
+}
+
+/// Expand a first-shard path/URL ("…-00001-of-00006.gguf") into all N shard
+/// strings by substituting the running index. Returns `[s]` for non-sharded
+/// inputs. Works on any string (file path or URL) since only the tail differs.
+fn shard_expand(s: &str) -> Vec<String> {
+    // find the "-NNNNN-of-MMMMM.gguf" tail
+    let Some(pos) = s.rfind("-of-") else { return vec![s.to_string()] };
+    if !s.ends_with(".gguf") || pos < 5 {
+        return vec![s.to_string()];
+    }
+    let no_str = &s[pos - 5..pos];
+    let of_str = &s[pos + 4..s.len() - 5];
+    let (Ok(_no), Ok(of)) = (no_str.parse::<u32>(), of_str.parse::<u32>()) else {
+        return vec![s.to_string()];
+    };
+    if !(2..=999).contains(&of) {
+        return vec![s.to_string()];
+    }
+    let prefix = &s[..pos - 5];
+    (1..=of)
+        .map(|i| format!("{prefix}{i:05}-of-{of:05}.gguf"))
+        .collect()
+}
+
+/// Sum file sizes across all shards of a (possibly sharded) gguf path.
+fn gguf_total_bytes(first: &str) -> u64 {
+    shard_expand(first).iter().map(|p| file_size(p)).sum()
+}
+
+#[tauri::command]
+fn model_status(gguf: String, pgrn: String, dir: String, state: State<AppState>) -> ModelStatus {
+    ModelStatus {
+        gguf_bytes: gguf_total_bytes(&gguf),
+        pgrn_bytes: file_size(&pgrn),
+        downloading: alive(&state.dl),
+        converting: alive(&state.conv),
+        disk_free_gib: disk_free_gib(&dir),
+        weights: std::path::Path::new(&pgrn)
+            .parent()
+            .map(|d| d.join("partition-weights.txt").exists())
+            .unwrap_or(false),
+        resume: conv_resume(&pgrn),
+    }
+}
+
+/// True when `path` exists and is a directory (UI path defaults / pickers).
+#[tauri::command]
+fn path_is_dir(path: String) -> bool {
+    std::path::Path::new(&path).is_dir()
+}
+
+/// Mounted volumes that already have a `Modelle/` tree — candidates for the
+/// optional second-disk GGUF base (`extBase` in the UI).
+#[tauri::command]
+fn list_ext_model_bases() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/Volumes") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for e in entries.flatten() {
+        let p = e.path().join("Modelle");
+        if p.is_dir() {
+            out.push(p.to_string_lossy().into_owned());
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Content-Length of the (redirect-followed) URL, summed across all shards for
+/// a sharded first-shard URL, or 0.
+#[tauri::command]
+fn remote_size(url: String) -> u64 {
+    let one = |u: &str| -> u64 {
+        (|| {
+            let out = Command::new("curl").args(["-sIL", u]).output().ok()?;
+            let s = String::from_utf8_lossy(&out.stdout);
+            s.lines()
+                .filter(|l| l.to_lowercase().starts_with("content-length:"))
+                .filter_map(|l| l.split(':').nth(1)?.trim().parse::<u64>().ok())
+                .max()
+        })()
+        .unwrap_or(0)
+    };
+    shard_expand(&url).iter().map(|u| one(u)).sum()
+}
+
+#[tauri::command]
+fn start_download(url: String, dest: String, dir: String, state: State<AppState>) -> Result<String, String> {
+    if alive(&state.dl) {
+        return Err("Download läuft bereits.".into());
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Ordner: {e}"))?;
+    let log = OpenOptions::new().create(true).write(true).truncate(true).open(DL_LOG)
+        .map_err(|e| e.to_string())?;
+    // Sharded XL models: one curl per shard, sequential, each resumable (-C -).
+    // The shard index in dest and URL advance in lockstep (shard_expand).
+    let dests = shard_expand(&dest);
+    let urls = shard_expand(&url);
+    let child = if dests.len() > 1 && dests.len() == urls.len() {
+        let mut script = String::from("set -e\n");
+        for (d, u) in dests.iter().zip(urls.iter()) {
+            script += &format!(
+                "curl -L -C - --fail --retry 5 -o {} {}\n",
+                shell_quote(d), shell_quote(u)
+            );
+        }
+        script += "echo ALL_SHARDS_DONE\n";
+        Command::new("sh").arg("-c").arg(script)
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log))
+            .spawn()
+    } else {
+        Command::new("curl")
+            .args(["-L", "-C", "-", "--fail", "--retry", "5", "-o", &dest, &url])
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log))
+            .spawn()
+    }
+    .map_err(|e| format!("curl-Start: {e}"))?;
+    *state.dl.lock().map_err(|e| e.to_string())? = Some(child);
+    Ok("Download gestartet.".into())
+}
+
+/// Minimal POSIX single-quote escaping for a shell argument.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+#[tauri::command]
+fn cancel_download(state: State<AppState>) {
+    kill(&state.dl);
+}
+
+/// Resolve the bundled native GGUF->PGRN converter (Reloaded R1). Prefers the
+/// self-contained binary inside the .app; falls back to the dev build dir.
+fn convert_bin(app: &tauri::AppHandle) -> String {
+    app.path()
+        .resource_dir()
+        .ok()
+        .and_then(|d| {
+            ["resources/pgrn-convert", "pgrn-convert"]
+                .iter()
+                .map(|c| d.join(c))
+                .find(|p| p.exists())
+        })
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| {
+            let repo = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
+            let repo = std::fs::canonicalize(repo)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            format!("{repo}/vendor/llama.cpp/build-static/bin/llama-pgrn-convert")
+        })
+}
+
+#[tauri::command]
+fn start_convert(app: tauri::AppHandle, gguf: String, pgrn: String, io_threads: u32, resume: bool, state: State<AppState>) -> Result<String, String> {
+    if alive(&state.conv) {
+        return Err("Konvertierung läuft bereits.".into());
+    }
+    if file_size(&gguf) == 0 {
+        return Err("GGUF fehlt - erst herunterladen.".into());
+    }
+    if file_size(&pgrn) > 0 {
+        return Err("PGRN existiert bereits - erst löschen, dann neu konvertieren.".into());
+    }
+    let partial = format!("{pgrn}.partial");
+    let journal = format!("{partial}.journal");
+    let state_before = conv_resume(&pgrn);
+    if resume && !state_before.resumable {
+        return Err("Keine fortsetzbare Konvertierung gefunden - bitte neu starten.".into());
+    }
+    if !resume {
+        // Starting over: drop the interrupted work explicitly. Safe here because
+        // no conversion we own is alive.
+        let _ = std::fs::remove_file(&partial);
+        let _ = std::fs::remove_file(&journal);
+    }
+    let bin = convert_bin(&app);
+    if file_size(&bin) == 0 {
+        return Err("Converter-Binary fehlt (pgrn-convert nicht gebündelt?).".into());
+    }
+    let threads = io_threads.clamp(1, 16).to_string();
+    // Resuming appends to the log so the earlier attempt stays readable.
+    let log = OpenOptions::new().create(true).write(true).append(resume).truncate(!resume)
+        .open(CONV_LOG)
+        .map_err(|e| e.to_string())?;
+    let mut args = vec![
+        "--input", &gguf,
+        "--output", &pgrn,
+        "--min-free-gb", "8",
+        "--io-threads", &threads,
+        "--progress", "jsonl",
+    ];
+    if resume {
+        args.push("--resume");
+    }
+    let child = Command::new(&bin)
+        .args(&args)
+        .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
+        .stderr(Stdio::from(log))
+        .spawn()
+        .map_err(|e| format!("Converter-Start: {e}"))?;
+    *state.conv.lock().map_err(|e| e.to_string())? = Some(child);
+    Ok(if resume {
+        format!("Konvertierung fortgesetzt ({} von {} Experten bereits fertig).",
+                state_before.records_done, state_before.records_total)
+    } else {
+        "Konvertierung gestartet.".into()
+    })
+}
+
+/// Discard an interrupted conversion's `.partial` + journal (UI: "Neu beginnen").
+#[tauri::command]
+fn discard_convert(pgrn: String, state: State<AppState>) -> Result<String, String> {
+    if alive(&state.conv) {
+        return Err("Konvertierung läuft - erst abbrechen.".into());
+    }
+    let partial = format!("{pgrn}.partial");
+    let _ = std::fs::remove_file(format!("{partial}.journal"));
+    let _ = std::fs::remove_file(&partial);
+    Ok("Angehaltene Konvertierung verworfen.".into())
+}
+
+/// Last JSONL progress line the converter wrote (phase/done/total/mb_s/eta).
+/// The UI polls this while `model_status.converting` to render a real bar.
+#[derive(Serialize, Default)]
+struct ConvProgress {
+    phase: String,
+    done_bytes: u64,
+    total_bytes: u64,
+    mb_s: f64,
+    eta_s: f64,
+    expert: u64,
+    expert_total: u64,
+    message: String,
+    /// Set on the converter's final `cancelled` line (R1.5).
+    resumable: bool,
+    records_done: u64,
+    records_total: u64,
+}
+
+#[tauri::command]
+fn convert_progress() -> ConvProgress {
+    let s = std::fs::read_to_string(CONV_LOG).unwrap_or_default();
+    let line = s
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with('{'))
+        .unwrap_or("");
+    let v: Value = serde_json::from_str(line).unwrap_or(Value::Null);
+    ConvProgress {
+        phase: v["phase"].as_str().unwrap_or("").into(),
+        done_bytes: v["done_bytes"].as_u64().unwrap_or(0),
+        total_bytes: v["total_bytes"].as_u64().unwrap_or(0),
+        mb_s: v["mb_s"].as_f64().unwrap_or(0.0),
+        eta_s: v["eta_s"].as_f64().unwrap_or(0.0),
+        expert: v["expert"].as_u64().unwrap_or(0),
+        expert_total: v["expert_total"].as_u64().unwrap_or(0),
+        message: v["message"].as_str().unwrap_or("").into(),
+        resumable: v["resumable"].as_bool().unwrap_or(false),
+        records_done: v["records_done"].as_u64().unwrap_or(0),
+        records_total: v["records_total"].as_u64().unwrap_or(0),
+    }
+}
+
+#[tauri::command]
+fn cancel_convert(state: State<AppState>) {
+    // SIGTERM first: the converter traps it, flushes its journal, and keeps the
+    // .partial so `start_convert(resume = true)` can continue it. Hard-kill only
+    // if it doesn't exit within ~2s — the journal still describes a valid prefix
+    // then, because it is only ever fsynced behind durable payload.
+    if let Ok(mut g) = state.conv.lock() {
+        if let Some(mut c) = g.take() {
+            let _ = Command::new("kill").args(["-TERM", &c.id().to_string()]).status();
+            for _ in 0..20 {
+                if matches!(c.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
+#[tauri::command]
+fn tail_file(path: String, max_lines: usize) -> String {
+    let s = std::fs::read_to_string(&path).unwrap_or_default();
+    let lines: Vec<&str> = s.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
+}
+
+/// MIME for chat attach data URLs (images → `image_url`; docs → oMLX `file` parts).
+/// Matches oMLX MarkItDown attachment extensions (+ common image types).
+fn chat_attach_mime(ext: &str) -> Option<&'static str> {
+    match ext {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "pdf" => Some("application/pdf"),
+        "txt" => Some("text/plain"),
+        "md" | "markdown" => Some("text/markdown"),
+        "docx" => Some(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        "pptx" => Some(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
+        _ => None,
+    }
+}
+
+/// Read a local image or document as a `data:<mime>;base64,…` URL for
+/// OpenAI-compatible chat parts (`image_url` / oMLX MarkItDown `file`).
+#[tauri::command]
+fn read_file_data_url(path: String) -> Result<String, String> {
+    // Align with oMLX `markitdown_max_file_size_mb` default (25).
+    const MAX_BYTES: u64 = 25 * 1024 * 1024;
+    let p = std::path::Path::new(path.trim());
+    if !p.is_file() {
+        return Err(format!("Datei fehlt: {}", p.display()));
+    }
+    let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+    if meta.len() > MAX_BYTES {
+        return Err(format!(
+            "Datei zu groß ({:.1} MiB) — max. {} MiB.",
+            meta.len() as f64 / (1024.0 * 1024.0),
+            MAX_BYTES / (1024 * 1024)
+        ));
+    }
+    let bytes = std::fs::read(p).map_err(|e| format!("Lesen: {e}"))?;
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = chat_attach_mime(&ext).ok_or_else(|| {
+        format!(
+            "Nicht unterstützter Typ: .{ext} (Bilder: png/jpg/gif/webp/bmp; \
+             Docs: pdf/md/txt/docx/pptx)"
+        )
+    })?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{mime};base64,{b64}"))
+}
+
+#[cfg(test)]
+mod chat_attach_mime_tests {
+    use super::chat_attach_mime;
+
+    #[test]
+    fn images_and_docs() {
+        assert_eq!(chat_attach_mime("png"), Some("image/png"));
+        assert_eq!(chat_attach_mime("pdf"), Some("application/pdf"));
+        assert_eq!(chat_attach_mime("md"), Some("text/markdown"));
+        assert_eq!(chat_attach_mime("txt"), Some("text/plain"));
+        assert!(chat_attach_mime("docx").unwrap().contains("wordprocessingml"));
+        assert!(chat_attach_mime("pptx").unwrap().contains("presentationml"));
+        assert_eq!(chat_attach_mime("xlsx"), None);
+        assert_eq!(chat_attach_mime("exe"), None);
+    }
+
+    #[test]
+    fn image_aliases_and_extra_docs() {
+        assert_eq!(chat_attach_mime("jpg"), Some("image/jpeg"));
+        assert_eq!(chat_attach_mime("jpeg"), Some("image/jpeg"));
+        assert_eq!(chat_attach_mime("gif"), Some("image/gif"));
+        assert_eq!(chat_attach_mime("webp"), Some("image/webp"));
+        assert_eq!(chat_attach_mime("bmp"), Some("image/bmp"));
+        assert_eq!(chat_attach_mime("markdown"), Some("text/markdown"));
+        assert_eq!(chat_attach_mime(""), None);
+        assert_eq!(chat_attach_mime("PNG"), None); // caller lowercases; map is lowercase-only
+    }
+
+    #[test]
+    fn rejects_unsupported_office_web_and_archives() {
+        for ext in ["html", "htm", "svg", "zip", "xlsx", "csv", "json", "rtf"] {
+            assert_eq!(chat_attach_mime(ext), None, "ext={ext}");
+        }
+    }
+}
+
+// ------------------------------------------------------------- indexing ----
+// Embedder = our llama-server in --embedding mode (nomic-embed). Qdrant = the
+// upstream release binary. Both downloadable + startable from the app so Kilo
+// codebase indexing works fully local.
+
+#[derive(Deserialize)]
+struct EmbConfig {
+    server: String,
+    model: String,
+}
+
+#[tauri::command]
+fn start_embedder(cfg: EmbConfig, state: State<AppState>) -> Result<String, String> {
+    if alive(&state.emb) || port_alive(EMB_PORT) {
+        return Err("Embedder laeuft bereits.".into());
+    }
+    if file_size(&cfg.model) == 0 {
+        return Err("Embed-Modell fehlt - erst herunterladen.".into());
+    }
+    let log = OpenOptions::new().create(true).write(true).truncate(true).open(EMB_LOG)
+        .map_err(|e| e.to_string())?;
+    let errlog = log.try_clone().map_err(|e| e.to_string())?;
+    let child = Command::new(&cfg.server)
+        .args([
+            "--model", &cfg.model,
+            "--embedding",
+            "--pooling", "mean",
+            "--ctx-size", "2048",
+            "--batch-size", "2048",
+            "--ubatch-size", "2048",
+            "-ngl", "99",
+            "--alias", "nomic-embed-text",
+            "--host", "127.0.0.1",
+            "--port", &EMB_PORT.to_string(),
+        ])
+        .stdout(Stdio::from(log)).stderr(Stdio::from(errlog))
+        .spawn().map_err(|e| format!("Embedder-Start: {e}"))?;
+    *state.emb.lock().map_err(|e| e.to_string())? = Some(child);
+    Ok("Embedder gestartet (Port 8090).".into())
+}
+
+#[tauri::command]
+fn stop_embedder(state: State<AppState>) {
+    kill(&state.emb);
+    if port_alive(EMB_PORT) {
+        let _ = Command::new("pkill")
+            .args(["-f", &format!("llama-server.*--port {EMB_PORT}")]).status();
+    }
+}
+
+/// Download + extract the Qdrant release binary into `dir` (dir/qdrant).
+#[tauri::command]
+fn install_qdrant(dir: String, state: State<AppState>) -> Result<String, String> {
+    if alive(&state.setup) {
+        return Err("Installation laeuft bereits.".into());
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Ordner: {e}"))?;
+    let log = OpenOptions::new().create(true).write(true).truncate(true).open(QSETUP_LOG)
+        .map_err(|e| e.to_string())?;
+    let errlog = log.try_clone().map_err(|e| e.to_string())?;
+    let script = format!(
+        "set -e; cd '{dir}'; curl -L --fail --retry 5 -o qdrant.tar.gz '{QDRANT_URL}'; \
+         tar xzf qdrant.tar.gz; rm -f qdrant.tar.gz; chmod +x qdrant; echo INSTALL_DONE"
+    );
+    let child = Command::new("sh").arg("-c").arg(script)
+        .stdout(Stdio::from(log)).stderr(Stdio::from(errlog))
+        .spawn().map_err(|e| format!("Setup-Start: {e}"))?;
+    *state.setup.lock().map_err(|e| e.to_string())? = Some(child);
+    Ok("Qdrant-Download gestartet.".into())
+}
+
+#[tauri::command]
+fn start_qdrant(bin: String, storage: String, state: State<AppState>) -> Result<String, String> {
+    if alive(&state.qdrant) || port_alive(6333) {
+        return Err("Qdrant laeuft bereits.".into());
+    }
+    if file_size(&bin) == 0 {
+        return Err("Qdrant-Binary fehlt - erst installieren.".into());
+    }
+    std::fs::create_dir_all(&storage).map_err(|e| format!("Storage: {e}"))?;
+    let dir = std::path::Path::new(&bin).parent()
+        .map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| ".".into());
+    let log = OpenOptions::new().create(true).write(true).truncate(true).open(QDRANT_LOG)
+        .map_err(|e| e.to_string())?;
+    let errlog = log.try_clone().map_err(|e| e.to_string())?;
+    let child = Command::new(&bin)
+        .current_dir(&dir)
+        .env("QDRANT__STORAGE__STORAGE_PATH", &storage)
+        .env("QDRANT__SERVICE__HOST", "127.0.0.1")
+        .stdout(Stdio::from(log)).stderr(Stdio::from(errlog))
+        .spawn().map_err(|e| format!("Qdrant-Start: {e}"))?;
+    *state.qdrant.lock().map_err(|e| e.to_string())? = Some(child);
+    Ok("Qdrant gestartet (Port 6333).".into())
+}
+
+#[tauri::command]
+fn stop_qdrant(state: State<AppState>) {
+    kill(&state.qdrant);
+    if port_alive(6333) {
+        let _ = Command::new("pkill").args(["-f", "/qdrant"]).status();
+    }
+}
+
+#[derive(Serialize)]
+struct IndexStatus {
+    emb_bytes: u64,
+    emb_state: String, // down | loading | ready
+    qdrant_installed: bool,
+    qdrant_running: bool,
+    installing: bool,
+}
+
+#[tauri::command]
+fn index_status(emb_model: String, qdrant_bin: String, state: State<AppState>) -> IndexStatus {
+    let emb_state = match http_status(&format!("http://127.0.0.1:{EMB_PORT}/health")) {
+        200 => "ready",
+        0 => "down",
+        _ => "loading",
+    }
+    .to_string();
+    IndexStatus {
+        emb_bytes: file_size(&emb_model),
+        emb_state,
+        qdrant_installed: file_size(&qdrant_bin) > 0,
+        qdrant_running: alive(&state.qdrant) || port_alive(6333),
+        installing: alive(&state.setup),
+    }
+}
+
+// -------------------------------------------------------------- defaults ----
+
+#[derive(Serialize)]
+struct Defaults {
+    home: String,
+    repo: String,
+    server_bin: String,
+    model_dir: String,
+    embed_url: String,
+    embed_file: String,
+}
+
+/// Sensible starting paths so the UI is pre-filled but everything stays
+/// editable (and pickable) by the user.
+#[tauri::command]
+fn defaults(app: tauri::AppHandle) -> Defaults {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users".into());
+    // The repo that ships this app (dev layout); overridable in the UI.
+    let repo = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
+    let repo = std::fs::canonicalize(repo)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| format!("{home}/LLM-BOOM"));
+    // Prefer the self-contained engine bundled inside the .app (works on any Mac);
+    // fall back to the dev build dir when running from the repo.
+    let server_bin = app
+        .path()
+        .resource_dir()
+        .ok()
+        .and_then(|d| {
+            ["resources/llama-server", "llama-server"]
+                .iter()
+                .map(|c| d.join(c))
+                .find(|p| p.exists())
+        })
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("{repo}/vendor/llama.cpp/build/bin/llama-server"));
+    let model_dir = format!("{home}/Modelle");
+    Defaults {
+        home,
+        repo,
+        server_bin,
+        model_dir,
+        embed_url: EMBED_URL.into(),
+        embed_file: "nomic-embed-text-v1.5.Q5_K_M.gguf".into(),
+    }
+}
+
+// ------------------------------------------------------------ kilo patch ----
+
+#[derive(Deserialize)]
+struct KiloConfig {
+    home: String,
+    base_url: String,
+    model: String, // bare model id, e.g. "slipstream"
+    api_key: String,
+    ctx: u32,
+    max_out: u32,
+    #[serde(default)]
+    target: String, // "kilo" (default) or "opencode" - same app.kilo.ai schema, different path
+}
+
+/// Patch an agent's global config in place, using the app.kilo.ai / opencode
+/// schema (provider + model). Non-destructive: other top-level keys (mcp,
+/// permission, ...) are preserved. Kilo + OpenCode share this schema; the user
+/// just restarts the editor afterwards - no export/import copy-paste.
+#[tauri::command]
+fn patch_kilo_config(cfg: KiloConfig) -> Result<String, String> {
+    let (dir, fname) = match cfg.target.as_str() {
+        "opencode" => (format!("{}/.config/opencode", cfg.home), "opencode.json"),
+        _ => (format!("{}/.config/kilo", cfg.home), "kilo.jsonc"),
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Ordner: {e}"))?;
+    let path = format!("{dir}/{fname}");
+
+    // Reuse the existing config if it parses as a JSON object; else start fresh.
+    // (A file with // comments won't parse - we then write a clean valid one.)
+    let mut root: Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| json!({}));
+    let obj = root.as_object_mut().unwrap();
+
+    let mut model_info = Map::new();
+    model_info.insert("name".into(), json!("Peregrine 35B (local SSD-streaming)"));
+    model_info.insert("tool_call".into(), json!(true));
+    model_info.insert("limit".into(), json!({ "context": cfg.ctx, "output": cfg.max_out }));
+
+    let mut models = Map::new();
+    models.insert(cfg.model.clone(), Value::Object(model_info));
+
+    let provider_entry = json!({
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "Peregrine Local",
+        "options": { "baseURL": cfg.base_url, "apiKey": cfg.api_key },
+        "models": Value::Object(models),
+    });
+    let mut provider = Map::new();
+    provider.insert("peregrine".into(), provider_entry);
+
+    obj.insert("$schema".into(), json!("https://app.kilo.ai/config.json"));
+    obj.insert("model".into(), json!(format!("peregrine/{}", cfg.model)));
+    obj.insert("provider".into(), Value::Object(provider));
+    obj.entry("permission").or_insert_with(|| json!({ "bash": "allow" }));
+    // Enable Kilo's codebase search (documented schema key). The embedder /
+    // Qdrant values themselves live in Kilo's Settings UI, so we only flip the
+    // valid flag here and don't inject uncertain keys that could invalidate.
+    let exp = obj.entry("experimental").or_insert_with(|| json!({}));
+    if let Some(e) = exp.as_object_mut() {
+        e.insert("codebase_search".into(), json!(true));
+    } else {
+        *exp = json!({ "codebase_search": true });
+    }
+
+    let out = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+    std::fs::write(&path, out + "\n").map_err(|e| format!("Schreiben: {e}"))?;
+    Ok(path)
+}
+
+/// Show + focus the main window (used by the tray "open" item and left-click).
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(AppState::default())
+        .manage(p2p::P2pState::default())
+        .invoke_handler(tauri::generate_handler![
+            start_server, stop_server, is_running, server_state, read_log, system_stats,
+            model_status, path_is_dir, list_ext_model_bases, remote_size, start_download, cancel_download,
+            start_convert, cancel_convert, discard_convert, convert_progress, tail_file, patch_kilo_config, defaults,
+            start_embedder, stop_embedder, install_qdrant, start_qdrant, stop_qdrant, index_status,
+            live_stats, clear_stats, runtime_preflight, inspect_storage, mlx_capability, mlx_runtime_status, install_mlx_runtime,
+            read_file_data_url,
+            // Slipstream P2P (UI gate: localStorage `slipstream.p2p`; Cluster tab)
+            p2p::p2p_status, p2p::p2p_start, p2p::p2p_stop, p2p::p2p_send_test_job,
+            p2p::p2p_chat, p2p::p2p_peers, p2p::p2p_recent_peers, p2p::p2p_credits
+        ])
+        .setup(|app| {
+            app.manage(Live {
+                serving: Mutex::new(servestats::Store::load()),
+                system: Mutex::new(sysstats::SysSnapshot::default()),
+                api_extras: Mutex::new(servestats::ApiExtras::default()),
+            });
+            tray::install(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Close = hide to tray (menubar app stays resident), not quit.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running Peregrine Control");
+}
+
+
+// ===== FILE: app/src-tauri/src/mlx.rs =====
+//! MLX path via forked oMLX (PGRN SSD staging) or Homebrew / oMLX.app resident.
+//!
+//! Prefer the Slipstream-bundled launcher (`resources/omlx-pgrn/`) when present
+//! so `/Applications/Slipstream.app` can start SSD expert streaming without a
+//! checkout. Python/MLX wheels come from:
+//!   1. `~/Library/Application Support/Slipstream/mlx-runtime` (bootstrap)
+//!   2. `/Applications/oMLX.app` (legacy fallback)
+//! Falls back to the repo `tools/pgrn-mlx` layout for `cargo run`,
+//! then to stock `omlx` (fully resident).
+
+use serde::Serialize;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+/// Parent directory that contains one subdirectory per MLX model (config.json +
+/// safetensors). Matches `omlx serve --model-dir`.
+/// Canonical: `~/Modelle/mlx` on internal SSD. External volumes are Advanced overflow only.
+pub fn default_model_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join("Modelle/mlx");
+    }
+    PathBuf::from("/tmp/Modelle/mlx")
+}
+
+/// Application-support root so Slipstream does not share `~/.omlx` with a
+/// separately installed oMLX.
+pub fn base_path() -> PathBuf {
+    dirs_next_data().join("omlx-pgrn")
+}
+
+fn dirs_next_data() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join("Library/Application Support/Slipstream");
+    }
+    PathBuf::from("/tmp/slipstream")
+}
+
+/// `~/Library/Application Support/Slipstream/mlx-runtime` — CPython + MLX wheels.
+pub fn mlx_runtime_root() -> PathBuf {
+    if let Ok(p) = std::env::var("SLIPSTREAM_MLX_RUNTIME") {
+        let trimmed = p.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    dirs_next_data().join("mlx-runtime")
+}
+
+/// True when bootstrap finished (`READY` + python).
+/// Canonical interpreter: `venv/bin/python` (see `bootstrap_mlx_runtime.sh`).
+/// Also accepts a flat `bin/python{,3}` layout if present.
+pub fn mlx_runtime_ready() -> bool {
+    let root = mlx_runtime_root();
+    root.join("READY").is_file()
+        && (root.join("venv/bin/python").is_file()
+            || root.join("bin/python").is_file()
+            || root.join("bin/python3").is_file())
+}
+
+pub fn omlx_app_present() -> bool {
+    Path::new("/Applications/oMLX.app/Contents/Resources/Python/cpython-3.11/bin/python3")
+        .is_file()
+}
+
+/// Either Application Support mlx-runtime or legacy oMLX.app can run the launcher.
+pub fn python_runtime_available() -> bool {
+    mlx_runtime_ready() || omlx_app_present()
+}
+
+/// Resolve `omlx`: explicit override, then PATH, then Homebrew, then oMLX.app CLI.
+pub fn resolve_omlx(override_path: &str) -> Result<PathBuf, String> {
+    let trimmed = override_path.trim();
+    if !trimmed.is_empty() {
+        let p = PathBuf::from(trimmed);
+        if p.is_file() {
+            return Ok(p);
+        }
+        return Err(format!("omlx binary not found at {trimmed}"));
+    }
+    if let Ok(path) = which("omlx") {
+        return Ok(path);
+    }
+    for brew in ["/opt/homebrew/bin/omlx", "/usr/local/bin/omlx"] {
+        let p = PathBuf::from(brew);
+        if p.is_file() {
+            return Ok(p);
+        }
+    }
+    Err(
+        "omlx not found. Install the Slipstream MLX runtime (Settings), oMLX.app, or `brew install omlx`."
+            .into(),
+    )
+}
+
+fn which(name: &str) -> Result<PathBuf, ()> {
+    let out = Command::new("/usr/bin/which")
+        .arg(name)
+        .output()
+        .map_err(|_| ())?;
+    if !out.status.success() {
+        return Err(());
+    }
+    let line = String::from_utf8_lossy(&out.stdout);
+    let path = PathBuf::from(line.trim());
+    if path.is_file() {
+        Ok(path)
+    } else {
+        Err(())
+    }
+}
+
+/// True if `dir` is a usable `--model-dir`: at least one child with config.json.
+pub fn model_dir_ready(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let p = entry.path();
+        p.is_dir() && p.join("config.json").is_file()
+    })
+}
+
+/// Estimated resident GiB from the largest model subdirectory (file sizes).
+pub fn largest_model_gib(dir: &Path) -> f64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0.0;
+    };
+    let mut best = 0u64;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if !p.is_dir() {
+            continue;
+        }
+        let size = dir_bytes(&p);
+        if size > best {
+            best = size;
+        }
+    }
+    best as f64 / (1024.0 * 1024.0 * 1024.0)
+}
+
+fn dir_bytes(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+        .sum()
+}
+
+/// True when a model subdirectory under `model_dir` has `experts.pgrn`.
+pub fn any_experts_sidecar(model_dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(model_dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let p = entry.path();
+        p.is_dir()
+            && (p.join("experts.pgrn").is_file()
+                || p
+                    .parent()
+                    .map(|parent| {
+                        parent.join(format!(
+                            "{}.pgrn",
+                            p.file_name().unwrap_or_default().to_string_lossy()
+                        ))
+                    })
+                    .map(|alt| alt.is_file())
+                    .unwrap_or(false))
+    })
+}
+
+/// Prompt-char threshold for Auto (hybrid): at/above → prefer Metal (long prefill
+/// amortizes SSD fetch; measured ~2.7× on large agent prompts). Below + `experts.pgrn`
+/// → prefer MLX (short/warm decode ~Metal-class after residency gate).
+pub const AUTO_PREFILL_CHARS: usize = 8000;
+
+/// Resolve Settings backend to an effective engine. Explicit `metal`/`mlx` are sticky.
+/// `auto` / `heuristic`: long prefill → metal; short/warm → mlx only when experts.pgrn exists.
+pub fn resolve_backend(preference: &str, prompt_chars: usize, has_experts_pgrn: bool) -> &'static str {
+    match preference {
+        "mlx" => "mlx",
+        "metal" => "metal",
+        "auto" | "heuristic" => {
+            if prompt_chars >= AUTO_PREFILL_CHARS {
+                "metal"
+            } else if has_experts_pgrn {
+                "mlx"
+            } else {
+                "metal"
+            }
+        }
+        _ => "metal",
+    }
+}
+
+/// Count model subdirs and how many have an experts.pgrn sidecar.
+pub fn model_sidecar_counts(model_dir: &Path) -> (usize, usize) {
+    let Ok(entries) = std::fs::read_dir(model_dir) else {
+        return (0, 0);
+    };
+    let mut models = 0usize;
+    let mut with_pgrn = 0usize;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if !(p.is_dir() && p.join("config.json").is_file()) {
+            continue;
+        }
+        models += 1;
+        if p.join("experts.pgrn").is_file() {
+            with_pgrn += 1;
+        }
+    }
+    (models, with_pgrn)
+}
+
+fn launcher_is_ready(script: &Path) -> bool {
+    if !script.is_file() {
+        return false;
+    }
+    let Some(dir) = script.parent() else {
+        return false;
+    };
+    // Bundled layout
+    if dir.join("libpgrn_host.dylib").is_file() && dir.join("omlx/pgrn").is_dir() {
+        return true;
+    }
+    // Dev checkout layout
+    if dir.join("native/build/libpgrn_host.dylib").is_file() {
+        return true;
+    }
+    false
+}
+
+/// Directory that holds the staged/bundled oMLX+PGRN sidecar, if any.
+pub fn pgrn_bundle_dir(resource_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(rd) = resource_dir {
+        for rel in ["resources/omlx-pgrn", "omlx-pgrn"] {
+            let d = rd.join(rel);
+            if d.join("run_omlx_pgrn.sh").is_file() && launcher_is_ready(&d.join("run_omlx_pgrn.sh"))
+            {
+                return Some(d);
+            }
+        }
+    }
+    None
+}
+
+/// Launcher that puts the Slipstream oMLX fork on PYTHONPATH and sets
+/// `SLIPSTREAM_PGRN*`. No hardcoded absolute checkout paths.
+///
+/// Order: env override → app resources → repo-relative (cargo / sibling of
+/// resources folder in a checkout).
+pub fn pgrn_launcher(resource_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("SLIPSTREAM_OMLX_LAUNCHER") {
+        let path = PathBuf::from(p.trim());
+        if launcher_is_ready(&path) {
+            return Some(path);
+        }
+    }
+    if let Some(dir) = pgrn_bundle_dir(resource_dir) {
+        return Some(dir.join("run_omlx_pgrn.sh"));
+    }
+    // Canonical app checkout first, then the legacy monorepo tools layout.
+    for checkout in [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/omlx-pgrn/run_omlx_pgrn.sh"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tools/pgrn-mlx/run_omlx_pgrn.sh"),
+    ] {
+        if let Ok(c) = std::fs::canonicalize(&checkout) {
+            if launcher_is_ready(&c) {
+                return Some(c);
+            }
+        } else if launcher_is_ready(&checkout) {
+            return Some(checkout);
+        }
+    }
+    None
+}
+
+/// `bootstrap_mlx_runtime.sh` next to the launcher (bundle or checkout).
+pub fn bootstrap_script(resource_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(dir) = pgrn_bundle_dir(resource_dir) {
+        let s = dir.join("bootstrap_mlx_runtime.sh");
+        if s.is_file() {
+            return Some(s);
+        }
+    }
+    if let Some(launcher) = pgrn_launcher(resource_dir) {
+        if let Some(parent) = launcher.parent() {
+            let s = parent.join("bootstrap_mlx_runtime.sh");
+            if s.is_file() {
+                return Some(s);
+            }
+        }
+    }
+    let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tools/pgrn-mlx/bootstrap_mlx_runtime.sh");
+    if checkout.is_file() {
+        return Some(checkout);
+    }
+    None
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MlxCapability {
+    /// "streaming" | "resident" | "unavailable"
+    pub mode: String,
+    pub omlx_app: bool,
+    /// Application Support mlx-runtime bootstrap complete.
+    pub runtime_ready: bool,
+    /// ready | missing | installing | failed | unknown
+    pub runtime_state: String,
+    /// runtime | omlx_app | none
+    pub provider: String,
+    pub launcher: bool,
+    pub lib_bundled: bool,
+    pub fork_bundled: bool,
+    pub model_dir_ok: bool,
+    pub models: usize,
+    pub models_with_experts_pgrn: usize,
+    pub detail: String,
+}
+
+fn read_runtime_state_file() -> Option<(String, String)> {
+    let path = mlx_runtime_root().join("status.json");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return None;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return None;
+    };
+    let state = v
+        .get("state")
+        .and_then(|x| x.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let detail = v
+        .get("detail")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some((state, detail))
+}
+
+/// Snapshot for Settings UI: what the MLX backend will do on Start.
+pub fn capability(resource_dir: Option<&Path>, mlx_dir: &Path) -> MlxCapability {
+    let omlx_app = omlx_app_present();
+    let runtime_ready = mlx_runtime_ready();
+    let python_ok = runtime_ready || omlx_app;
+    let provider = if runtime_ready {
+        "runtime"
+    } else if omlx_app {
+        "omlx_app"
+    } else {
+        "none"
+    };
+    let (file_state, file_detail) = read_runtime_state_file().unwrap_or_else(|| {
+        if runtime_ready {
+            ("ready".into(), String::new())
+        } else {
+            ("missing".into(), String::new())
+        }
+    });
+    let runtime_state = if runtime_ready {
+        "ready".into()
+    } else {
+        file_state
+    };
+
+    let launcher_path = pgrn_launcher(resource_dir);
+    let launcher = launcher_path.is_some();
+    let bundle = pgrn_bundle_dir(resource_dir);
+    let lib_bundled = bundle
+        .as_ref()
+        .map(|d| d.join("libpgrn_host.dylib").is_file())
+        .unwrap_or(false)
+        || launcher_path
+            .as_ref()
+            .and_then(|p| {
+                p.parent().map(|d| {
+                    d.join("native/build/libpgrn_host.dylib").is_file()
+                        || d.join("libpgrn_host.dylib").is_file()
+                })
+            })
+            .unwrap_or(false);
+    let fork_bundled = bundle
+        .as_ref()
+        .map(|d| d.join("omlx/pgrn").is_dir())
+        .unwrap_or(false)
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../vendor/omlx/omlx/pgrn")
+            .is_dir();
+
+    let model_dir_ok = model_dir_ready(mlx_dir);
+    let (models, with_pgrn) = model_sidecar_counts(mlx_dir);
+    let stock_omlx = resolve_omlx("").is_ok();
+
+    let (mode, detail) = if launcher && !python_ok {
+        let hint = if runtime_state == "installing" {
+            if file_detail.is_empty() {
+                "MLX runtime installing — wait, then Start.".into()
+            } else {
+                file_detail
+            }
+        } else {
+            "MLX runtime not installed — one-time download of MLX wheels (~0.5–1 GiB). Click Install MLX runtime (oMLX.app optional fallback)."
+                .into()
+        };
+        ("unavailable".into(), hint)
+    } else if !launcher && !python_ok && !stock_omlx {
+        (
+            "unavailable".into(),
+            "Install MLX runtime (Settings) or oMLX.app — required for the MLX backend.".into(),
+        )
+    } else if launcher && with_pgrn > 0 {
+        let via = if runtime_ready {
+            "Slipstream mlx-runtime"
+        } else {
+            "oMLX.app"
+        };
+        (
+            "streaming".into(),
+            format!(
+                "MLX + SSD PGRN ready via {via} — {with_pgrn}/{models} model(s) have experts.pgrn (profile balanced)."
+            ),
+        )
+    } else if launcher && models > 0 {
+        (
+            "resident".into(),
+            format!(
+                "Launcher present but experts.pgrn missing for {models} model(s) — Start falls back to resident (no expert streaming)."
+            ),
+        )
+    } else if launcher {
+        (
+            "streaming".into(),
+            "MLX + PGRN launcher ready — set MLX model dir; place experts.pgrn next to each model for SSD streaming.".into(),
+        )
+    } else if omlx_app || stock_omlx {
+        (
+            "resident".into(),
+            "Stock oMLX only (PGRN sidecar not bundled) — fully resident, no SSD expert streaming.".into(),
+        )
+    } else {
+        ("unavailable".into(), "MLX backend unavailable.".into())
+    };
+
+    MlxCapability {
+        mode,
+        omlx_app,
+        runtime_ready,
+        runtime_state,
+        provider: provider.into(),
+        launcher,
+        lib_bundled,
+        fork_bundled,
+        model_dir_ok,
+        models,
+        models_with_experts_pgrn: with_pgrn,
+        detail,
+    }
+}
+
+/// Run `bootstrap_mlx_runtime.sh --json` (status only; does not install).
+pub fn runtime_status_json(resource_dir: Option<&Path>) -> Result<String, String> {
+    let script = bootstrap_script(resource_dir)
+        .ok_or("bootstrap_mlx_runtime.sh not found (stage resources/omlx-pgrn)")?;
+    let out = Command::new("/bin/bash")
+        .arg(&script)
+        .arg("--json")
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH")
+        .output()
+        .map_err(|e| format!("bootstrap --json failed: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("bootstrap --json exit {}: {err}", out.status));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Start one-time MLX wheel bootstrap in the background (idempotent).
+pub fn start_runtime_install(resource_dir: Option<&Path>) -> Result<String, String> {
+    if mlx_runtime_ready() {
+        return Ok("MLX runtime already ready.".into());
+    }
+    let script = bootstrap_script(resource_dir)
+        .ok_or("bootstrap_mlx_runtime.sh not found (stage resources/omlx-pgrn)")?;
+    let log = mlx_runtime_root().join("bootstrap.log");
+    if let Some(parent) = log.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+        .map_err(|e| format!("bootstrap log: {e}"))?;
+    let log_err = log_file.try_clone().map_err(|e| e.to_string())?;
+    Command::new("/bin/bash")
+        .arg(&script)
+        .arg("install")
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_err))
+        .spawn()
+        .map_err(|e| format!("failed to start MLX runtime install: {e}"))?;
+    Ok("MLX runtime install started (one-time wheel download).".into())
+}
+
+/// Settings-backed `SLIPSTREAM_PGRN_*` (+ optional oMLX MCP) env for MLX serve.
+/// Metal ignores these.
+///
+/// Interactive product defaults: profile io=16, no cold-io boost, residency=
+/// `touch` (mlock opt-in), keep-hot + warmup on. Benches pin `RESIDENCY=mlock`
+/// for the recovered ~18.9 tok/s io16 recipe — see PERF_RECOVERY.md /
+/// CRASH_AVOIDANCE.md. Prefetch stays opt-in via process env only.
+/// MCP is default OFF — empty `mcp_config` leaves `OMLX_MCP_CONFIG` unset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PgrnMlxEnv {
+    pub profile: String,
+    pub residency: String,
+    pub keep_hot: bool,
+    pub warmup: bool,
+    /// Settings → Advanced predictive prefetch → `SLIPSTREAM_PGRN_ONLINE` (default OFF).
+    pub online: bool,
+    /// When non-empty → `SLIPSTREAM_PGRN_L3=peer` + `PEER_BASE` (default OFF).
+    pub l3_peer_base: String,
+    /// When non-empty → `OMLX_MCP_CONFIG` + `--mcp-config` (default OFF).
+    pub mcp_config: String,
+}
+
+impl Default for PgrnMlxEnv {
+    fn default() -> Self {
+        Self {
+            profile: "balanced".into(),
+            residency: "touch".into(),
+            keep_hot: true,
+            warmup: true,
+            online: false,
+            l3_peer_base: String::new(),
+            mcp_config: String::new(),
+        }
+    }
+}
+
+impl PgrnMlxEnv {
+    pub fn from_parts(
+        profile: impl Into<String>,
+        residency: impl Into<String>,
+        keep_hot: bool,
+        warmup: bool,
+        online: bool,
+        l3_peer_base: impl Into<String>,
+        mcp_config: impl Into<String>,
+    ) -> Self {
+        Self {
+            profile: profile.into(),
+            residency: residency.into(),
+            keep_hot,
+            warmup,
+            online,
+            l3_peer_base: l3_peer_base.into(),
+            mcp_config: mcp_config.into(),
+        }
+        .sanitized()
+    }
+
+    pub fn sanitized(mut self) -> Self {
+        let p = self.profile.trim().to_ascii_lowercase();
+        self.profile = match p.as_str() {
+            "quality" | "fast" | "balanced" | "contract" => p,
+            _ => "balanced".into(),
+        };
+        let r = self.residency.trim().to_ascii_lowercase();
+        self.residency = match r.as_str() {
+            "mlock" | "1" | "true" | "yes" => "mlock".into(),
+            "touch" => "touch".into(),
+            "off" | "0" | "false" | "no" => "off".into(),
+            // Unrecognized → interactive-safe default (mlock is opt-in).
+            _ => "touch".into(),
+        };
+        self.l3_peer_base = self.l3_peer_base.trim().to_string();
+        self.mcp_config = self.mcp_config.trim().to_string();
+        self
+    }
+
+    /// Child env pairs. Empty peer base / mcp_config leave those features OFF.
+    pub fn env_pairs(&self) -> Vec<(String, String)> {
+        let s = self.clone().sanitized();
+        let mut out = vec![
+            ("SLIPSTREAM_PGRN_PROFILE".into(), s.profile),
+            ("SLIPSTREAM_PGRN_RESIDENCY".into(), s.residency),
+            (
+                "SLIPSTREAM_PGRN_KEEP_HOT".into(),
+                if s.keep_hot { "1" } else { "0" }.into(),
+            ),
+            (
+                "SLIPSTREAM_PGRN_WARMUP".into(),
+                if s.warmup { "1" } else { "0" }.into(),
+            ),
+            // Pin recovered recipe: balanced/quality profile io=16, no cold boost.
+            ("SLIPSTREAM_PGRN_COLD_IO_WIDTH".into(), "0".into()),
+            (
+                "SLIPSTREAM_PGRN_ONLINE".into(),
+                if s.online { "1" } else { "0" }.into(),
+            ),
+        ];
+        if !s.l3_peer_base.is_empty() {
+            out.push(("SLIPSTREAM_PGRN_L3".into(), "peer".into()));
+            out.push(("SLIPSTREAM_PGRN_PEER_BASE".into(), s.l3_peer_base));
+        }
+        if !s.mcp_config.is_empty() {
+            out.push(("OMLX_MCP_CONFIG".into(), s.mcp_config));
+        }
+        out
+    }
+
+    pub fn apply_to(&self, cmd: &mut Command) {
+        for (k, v) in self.env_pairs() {
+            cmd.env(k, v);
+        }
+    }
+}
+
+/// oMLX `--mcp-config` CLI args. Empty path → no args (MCP stays OFF).
+pub fn mcp_cli_args(mcp_config: &str) -> Vec<String> {
+    let p = mcp_config.trim();
+    if p.is_empty() {
+        vec![]
+    } else {
+        vec!["--mcp-config".into(), p.to_string()]
+    }
+}
+
+/// True when Settings MCP path looks usable (absolute POSIX/Windows path).
+/// Empty is valid (MCP OFF). Relative paths are rejected so serve doesn't
+/// silently resolve against cwd.
+pub fn mcp_config_path_ok(mcp_config: &str) -> bool {
+    let p = mcp_config.trim();
+    if p.is_empty() {
+        return true;
+    }
+    if p.starts_with('/') {
+        return true;
+    }
+    // Windows: C:\… or C:/…
+    let bytes = p.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+}
+
+/// oMLX memory-guard CLI args.
+///
+/// Default product path: `--memory-guard-gb` = total − headroom.
+/// Opt-in Settings escape for Metal wired ~28 GiB: `--memory-guard off`
+/// (see `prefill_memory_exceeded` / CODING_SMOKE.md).
+pub fn memory_guard_cli_args(memory_guard_gb: f64, off: bool) -> Vec<String> {
+    if off {
+        vec!["--memory-guard".into(), "off".into()]
+    } else {
+        vec![
+            "--memory-guard-gb".into(),
+            format!("{memory_guard_gb:.1}"),
+        ]
+    }
+}
+
+/// Clear refuse text when resident MLX cannot fit under the Slipstream ceiling.
+pub fn mlx_resident_refuse_msg(
+    need_gib: f64,
+    ceiling_gib: f64,
+    headroom_gib: f64,
+    free_gib: f64,
+) -> String {
+    format!(
+        "RAM too low for resident MLX: model needs ~{need:.1} GiB, \
+ceiling after {headroom:.1} GiB reserve is {ceiling:.1} GiB \
+(free+inactive ≈ {free:.1} GiB). Close apps, lower the reserve in Settings, \
+or add experts.pgrn next to the model for SSD streaming. \
+Tip: long coding/full-PGRN can also hit the Metal wired cap (~28 GiB) — \
+enable “Memory guard off” in Settings or raise iogpu.wired_limit_mb (sudo).",
+        need = need_gib,
+        headroom = headroom_gib,
+        ceiling = ceiling_gib,
+        free = free_gib,
+    )
+}
+
+/// Clear refuse when free+inactive is critically low before any MLX serve.
+pub fn mlx_critical_free_refuse_msg(free_gib: f64, min_free_gib: f64) -> String {
+    format!(
+        "RAM too low to start MLX safely: free+inactive ≈ {free:.1} GiB \
+(need ≥ {min:.1} GiB). Close browsers/IDEs and retry. \
+Metal wired cap is ~28 GiB — even with headroom, long prefill can fail \
+with prefill_memory_exceeded unless you enable “Memory guard off” in Settings.",
+        free = free_gib,
+        min = min_free_gib,
+    )
+}
+
+/// Floor free+inactive before spawning MLX (product start, not bench).
+pub const MLX_MIN_FREE_GIB: f64 = 4.0;
+
+/// Soft-warn band (matches safety watchdog MEMORY floor). Start still allowed
+/// when free ≥ `MLX_MIN_FREE_GIB`; UI toasts + success tip nudge the user.
+pub const MLX_WARN_FREE_GIB: f64 = 8.0;
+
+/// Optional tip appended to a successful MLX start when free RAM is in the
+/// warn band `[MLX_MIN_FREE_GIB, MLX_WARN_FREE_GIB)`. Does not refuse —
+/// that is `MLX_MIN_FREE_GIB`. Below the critical floor returns `None`
+/// (refuse path owns that UX; never imply a successful start tip).
+pub fn mlx_low_free_soft_tip(free_gib: f64, residency: &str) -> Option<String> {
+    if !(free_gib >= MLX_MIN_FREE_GIB && free_gib < MLX_WARN_FREE_GIB) {
+        return None;
+    }
+    let residency_note = if residency.eq_ignore_ascii_case("mlock") {
+        " residency=mlock is risky here — prefer touch for interactive use."
+    } else {
+        ""
+    };
+    Some(format!(
+        " Tip: free+inactive ≈ {free:.1} GiB is tight (< {warn:.0} GiB) — \
+close apps before long coding; avoid overnight mlock.{extra}",
+        free = free_gib,
+        warn = MLX_WARN_FREE_GIB,
+        extra = residency_note,
+    ))
+}
+
+/// Build the serve command. Prefers the PGRN fork launcher; else stock omlx.
+///
+/// `pgrn_env` comes from Settings (or defaults). Applied unconditionally so the
+/// UI wins over ambient process env for these keys.
+/// `memory_guard_off`: Settings opt-in → `--memory-guard off` instead of gb.
+pub fn serve_command(
+    omlx: &Path,
+    model_dir: &Path,
+    port: u16,
+    memory_guard_gb: f64,
+    resource_dir: Option<&Path>,
+    pgrn_env: Option<&PgrnMlxEnv>,
+    memory_guard_off: bool,
+) -> Result<(Command, bool), String> {
+    if !model_dir_ready(model_dir) {
+        // Common UX mistake: picker chose the model leaf (…/mlx/Qwen…), not the
+        // catalog parent (…/mlx). Leaf has config.json itself; we need a child.
+        let leaf_hint = if model_dir.join("config.json").is_file() {
+            " — this looks like a model folder; set MLX dir to its parent (…/mlx)"
+        } else {
+            ""
+        };
+        return Err(format!(
+            "MLX model directory is empty or missing config.json under {}{}",
+            model_dir.display(),
+            leaf_hint
+        ));
+    }
+    let base = base_path();
+    std::fs::create_dir_all(&base).map_err(|e| format!("omlx base path: {e}"))?;
+
+    let pgrn = pgrn_launcher(resource_dir);
+    let streaming = pgrn.is_some();
+    let bin = pgrn.clone().unwrap_or_else(|| omlx.to_path_buf());
+    let mut cmd = Command::new(&bin);
+    // Prefer Application Support mlx-runtime over /Applications/oMLX.app.
+    if mlx_runtime_ready() {
+        if let Some(root) = mlx_runtime_root().to_str() {
+            cmd.env("SLIPSTREAM_MLX_RUNTIME", root);
+        }
+    }
+    // Prefetch stays off unless SLIPSTREAM_PGRN_PREFETCH is set in the
+    // ambient process environment (opt-in). Auto-enabling overlap before a
+    // measured win made prefill slower — see PREFILL_PARITY_PLAN.md.
+    let env = pgrn_env
+        .cloned()
+        .unwrap_or_default()
+        .sanitized();
+    env.apply_to(&mut cmd);
+    cmd.args([
+        "serve",
+        "--model-dir",
+        model_dir.to_str().ok_or("model dir is not UTF-8")?,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        &port.to_string(),
+        "--base-path",
+        base.to_str().ok_or("base path is not UTF-8")?,
+    ]);
+    for a in memory_guard_cli_args(memory_guard_gb, memory_guard_off) {
+        cmd.arg(a);
+    }
+    // MCP default OFF — only when Settings/env path is non-empty.
+    for a in mcp_cli_args(&env.mcp_config) {
+        cmd.arg(a);
+    }
+    cmd.args(["--max-concurrent-requests", "1"]);
+    // Stock resident oMLX: keep KV SSD off until Disk-Gates know about it.
+    // PGRN streaming needs in-memory KV reuse — otherwise every turn re-prefills.
+    if !streaming {
+        cmd.arg("--no-cache");
+    }
+    Ok((cmd, streaming))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn empty_dir_is_not_ready() {
+        let dir = std::env::temp_dir().join(format!("slip-mlx-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        assert!(!model_dir_ready(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_subdir_with_config_is_ready() {
+        let dir = std::env::temp_dir().join(format!("slip-mlx-ready-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let model = dir.join("Qwen-test");
+        fs::create_dir_all(&model).unwrap();
+        fs::write(model.join("config.json"), "{}").unwrap();
+        assert!(model_dir_ready(&dir));
+        assert_eq!(model_sidecar_counts(&dir), (1, 0));
+        fs::write(model.join("experts.pgrn"), b"PGRN").unwrap();
+        assert_eq!(model_sidecar_counts(&dir), (1, 1));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checkout_launcher_ready_when_lib_built() {
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tools/pgrn-mlx/run_omlx_pgrn.sh");
+        let lib = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tools/pgrn-mlx/native/build/libpgrn_host.dylib");
+        if lib.is_file() && script.is_file() {
+            assert!(launcher_is_ready(&script));
+            assert!(pgrn_launcher(None).is_some());
+        }
+    }
+
+    #[test]
+    fn bootstrap_script_resolves_in_checkout() {
+        let s = bootstrap_script(None);
+        assert!(s.is_some(), "expected the staged MLX bootstrap script");
+        assert!(s.unwrap().ends_with("bootstrap_mlx_runtime.sh"));
+    }
+
+    #[test]
+    fn resolve_backend_explicit_is_sticky() {
+        assert_eq!(resolve_backend("metal", 0, true), "metal");
+        assert_eq!(resolve_backend("metal", AUTO_PREFILL_CHARS + 1, true), "metal");
+        assert_eq!(resolve_backend("mlx", 0, false), "mlx");
+        assert_eq!(resolve_backend("mlx", AUTO_PREFILL_CHARS + 1, false), "mlx");
+    }
+
+    #[test]
+    fn resolve_backend_auto_short_warm_prefers_mlx_with_experts() {
+        assert_eq!(resolve_backend("auto", 100, true), "mlx");
+        assert_eq!(resolve_backend("heuristic", 0, true), "mlx");
+        assert_eq!(resolve_backend("auto", AUTO_PREFILL_CHARS - 1, true), "mlx");
+    }
+
+    #[test]
+    fn resolve_backend_auto_long_prefill_prefers_metal() {
+        assert_eq!(resolve_backend("auto", AUTO_PREFILL_CHARS, true), "metal");
+        assert_eq!(resolve_backend("heuristic", AUTO_PREFILL_CHARS * 2, true), "metal");
+    }
+
+    #[test]
+    fn resolve_backend_auto_without_experts_falls_back_metal() {
+        assert_eq!(resolve_backend("auto", 50, false), "metal");
+        assert_eq!(resolve_backend("heuristic", 50, false), "metal");
+    }
+
+    #[test]
+    fn pgrn_mlx_env_defaults_match_balanced_path() {
+        let e = PgrnMlxEnv::default();
+        let pairs: std::collections::HashMap<_, _> = e.env_pairs().into_iter().collect();
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_PROFILE").map(String::as_str), Some("balanced"));
+        // Interactive-safe: touch default; benches pin mlock for ~18.9 tok/s.
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_RESIDENCY").map(String::as_str), Some("touch"));
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_KEEP_HOT").map(String::as_str), Some("1"));
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_WARMUP").map(String::as_str), Some("1"));
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_COLD_IO_WIDTH").map(String::as_str), Some("0"));
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_ONLINE").map(String::as_str), Some("0"));
+        assert!(!pairs.contains_key("SLIPSTREAM_PGRN_L3"));
+        assert!(!pairs.contains_key("SLIPSTREAM_PGRN_PEER_BASE"));
+        assert!(!pairs.contains_key("OMLX_MCP_CONFIG"));
+    }
+
+    #[test]
+    fn pgrn_mlx_env_mlock_still_opt_in() {
+        let e = PgrnMlxEnv::from_parts("balanced", "mlock", true, true, false, "", "");
+        assert_eq!(e.residency, "mlock");
+        let pairs: std::collections::HashMap<_, _> = e.env_pairs().into_iter().collect();
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_RESIDENCY").map(String::as_str), Some("mlock"));
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_COLD_IO_WIDTH").map(String::as_str), Some("0"));
+    }
+
+    #[test]
+    fn pgrn_mlx_env_sanitizes_and_enables_peer_l3() {
+        let e = PgrnMlxEnv::from_parts(
+            "FAST",
+            "Touch",
+            false,
+            false,
+            true,
+            "  http://192.168.1.10:8765  ",
+            "",
+        );
+        assert_eq!(e.profile, "fast");
+        assert_eq!(e.residency, "touch");
+        let pairs: std::collections::HashMap<_, _> = e.env_pairs().into_iter().collect();
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_PROFILE").map(String::as_str), Some("fast"));
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_RESIDENCY").map(String::as_str), Some("touch"));
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_KEEP_HOT").map(String::as_str), Some("0"));
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_WARMUP").map(String::as_str), Some("0"));
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_ONLINE").map(String::as_str), Some("1"));
+        assert_eq!(pairs.get("SLIPSTREAM_PGRN_L3").map(String::as_str), Some("peer"));
+        assert_eq!(
+            pairs.get("SLIPSTREAM_PGRN_PEER_BASE").map(String::as_str),
+            Some("http://192.168.1.10:8765")
+        );
+        assert!(!pairs.contains_key("OMLX_MCP_CONFIG"));
+    }
+
+    #[test]
+    fn pgrn_mlx_env_mcp_config_opt_in() {
+        let e = PgrnMlxEnv::from_parts(
+            "balanced",
+            "touch",
+            true,
+            true,
+            false,
+            "",
+            "  /tmp/slipstream-mcp.json  ",
+        );
+        assert_eq!(e.mcp_config, "/tmp/slipstream-mcp.json");
+        let pairs: std::collections::HashMap<_, _> = e.env_pairs().into_iter().collect();
+        assert_eq!(
+            pairs.get("OMLX_MCP_CONFIG").map(String::as_str),
+            Some("/tmp/slipstream-mcp.json")
+        );
+        assert_eq!(
+            mcp_cli_args(&e.mcp_config),
+            vec![
+                "--mcp-config".to_string(),
+                "/tmp/slipstream-mcp.json".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn pgrn_mlx_env_unknown_profile_falls_back_balanced() {
+        let e = PgrnMlxEnv::from_parts("turbo", "banana", true, true, false, "", "");
+        assert_eq!(e.profile, "balanced");
+        assert_eq!(e.residency, "touch");
+    }
+
+    #[test]
+    fn pgrn_mlx_env_accepts_internal_contract_profile() {
+        let e = PgrnMlxEnv::from_parts("CONTRACT", "touch", true, true, false, "", "");
+        assert_eq!(e.profile, "contract");
+        let pairs: std::collections::HashMap<_, _> = e.env_pairs().into_iter().collect();
+        assert_eq!(
+            pairs.get("SLIPSTREAM_PGRN_PROFILE").map(String::as_str),
+            Some("contract")
+        );
+    }
+
+    #[test]
+    fn mcp_cli_empty_is_off() {
+        assert!(mcp_cli_args("").is_empty());
+        assert!(mcp_cli_args("   ").is_empty());
+    }
+
+    #[test]
+    fn mcp_config_path_ok_absolute_or_empty() {
+        assert!(mcp_config_path_ok(""));
+        assert!(mcp_config_path_ok("   "));
+        assert!(mcp_config_path_ok("/tmp/mcp.json"));
+        assert!(mcp_config_path_ok("C:\\Users\\a\\mcp.json"));
+        assert!(mcp_config_path_ok("D:/mcp.yaml"));
+        assert!(!mcp_config_path_ok("mcp.json"));
+        assert!(!mcp_config_path_ok("./mcp.json"));
+        assert!(!mcp_config_path_ok("relative/mcp.json"));
+    }
+
+    #[test]
+    fn memory_guard_cli_default_uses_gb() {
+        let args = memory_guard_cli_args(33.0, false);
+        assert_eq!(args, vec!["--memory-guard-gb".to_string(), "33.0".to_string()]);
+    }
+
+    #[test]
+    fn memory_guard_cli_off_escape() {
+        let args = memory_guard_cli_args(33.0, true);
+        assert_eq!(args, vec!["--memory-guard".to_string(), "off".to_string()]);
+    }
+
+    #[test]
+    fn resident_refuse_msg_mentions_wired_cap_and_free() {
+        let msg = mlx_resident_refuse_msg(28.0, 33.0, 3.0, 5.5);
+        assert!(msg.contains("RAM too low"));
+        assert!(msg.contains("28.0"));
+        assert!(msg.contains("5.5"));
+        assert!(msg.contains("~28 GiB"));
+        assert!(msg.contains("Memory guard off"));
+        assert!(msg.contains("experts.pgrn"));
+    }
+
+    #[test]
+    fn critical_free_refuse_msg_actionable() {
+        let msg = mlx_critical_free_refuse_msg(2.1, MLX_MIN_FREE_GIB);
+        assert!(msg.contains("2.1"));
+        assert!(msg.contains("4.0"));
+        assert!(msg.contains("prefill_memory_exceeded"));
+        assert!(msg.contains("Memory guard off"));
+    }
+
+    #[test]
+    fn low_free_soft_tip_only_in_warn_band() {
+        assert!(mlx_low_free_soft_tip(8.0, "touch").is_none());
+        assert!(mlx_low_free_soft_tip(0.0, "touch").is_none());
+        // Below critical floor: refuse owns UX — no success tip.
+        assert!(mlx_low_free_soft_tip(2.0, "touch").is_none());
+        assert!(mlx_low_free_soft_tip(3.99, "mlock").is_none());
+        let tip = mlx_low_free_soft_tip(5.0, "touch").expect("warn band");
+        assert!(tip.contains("5.0"));
+        assert!(tip.contains("8"));
+        assert!(!tip.contains("risky"));
+        let mlock = mlx_low_free_soft_tip(5.0, "mlock").expect("warn band");
+        assert!(mlock.contains("prefer touch"));
+        // Boundaries: inclusive MIN, exclusive WARN.
+        assert!(mlx_low_free_soft_tip(4.0, "touch").is_some());
+        assert!(mlx_low_free_soft_tip(7.99, "touch").is_some());
+        // Case-insensitive mlock note.
+        let mlock_up = mlx_low_free_soft_tip(4.5, "MLOCK").expect("warn band");
+        assert!(mlock_up.contains("prefer touch"));
+        assert!(mlx_low_free_soft_tip(4.5, "TOUCH").expect("tip").contains("4.5"));
+        assert!(!mlx_low_free_soft_tip(4.5, "TOUCH").unwrap().contains("risky"));
+    }
+
+    #[test]
+    fn residency_aliases_and_unknown_default_touch() {
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "mlock", true, true, false, "", "").residency, "mlock");
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "1", true, true, false, "", "").residency, "mlock");
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "YES", true, true, false, "", "").residency, "mlock");
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "True", true, true, false, "", "").residency, "mlock");
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "off", true, true, false, "", "").residency, "off");
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "0", true, true, false, "", "").residency, "off");
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "NO", true, true, false, "", "").residency, "off");
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "", true, true, false, "", "").residency, "touch");
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "  ", true, true, false, "", "").residency, "touch");
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "banana", true, true, false, "", "").residency, "touch");
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "  Touch  ", true, true, false, "", "").residency, "touch");
+        assert_eq!(PgrnMlxEnv::from_parts("balanced", "  MLOCK ", true, true, false, "", "").residency, "mlock");
+    }
+
+    #[test]
+    fn memory_guard_cli_fractional_and_off_ignores_gb() {
+        // `{:.1}` uses ties-to-even: 33.25 → "33.2"; 33.26 rounds up.
+        assert_eq!(
+            memory_guard_cli_args(33.25, false),
+            vec!["--memory-guard-gb".to_string(), "33.2".to_string()]
+        );
+        assert_eq!(
+            memory_guard_cli_args(33.26, false),
+            vec!["--memory-guard-gb".to_string(), "33.3".to_string()]
+        );
+        assert_eq!(
+            memory_guard_cli_args(0.0, false),
+            vec!["--memory-guard-gb".to_string(), "0.0".to_string()]
+        );
+        assert_eq!(
+            memory_guard_cli_args(99.0, true),
+            vec!["--memory-guard".to_string(), "off".to_string()]
+        );
+    }
+
+    #[test]
+    fn cold_io_pinned_zero_for_all_residency_modes() {
+        for res in ["touch", "mlock", "off"] {
+            let e = PgrnMlxEnv::from_parts("balanced", res, true, true, false, "", "");
+            let pairs: std::collections::HashMap<_, _> = e.env_pairs().into_iter().collect();
+            assert_eq!(
+                pairs.get("SLIPSTREAM_PGRN_COLD_IO_WIDTH").map(String::as_str),
+                Some("0"),
+                "cold_io must stay 0 for residency={res}"
+            );
+            assert_eq!(
+                pairs.get("SLIPSTREAM_PGRN_RESIDENCY").map(String::as_str),
+                Some(res)
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_backend_unknown_and_empty_fall_back_metal() {
+        assert_eq!(resolve_backend("", 0, true), "metal");
+        assert_eq!(resolve_backend("MLX", 0, true), "metal");
+        assert_eq!(resolve_backend("unknown", AUTO_PREFILL_CHARS + 1, true), "metal");
+        assert_eq!(resolve_backend("cpu", 10, false), "metal");
+    }
+
+    #[test]
+    fn any_experts_sidecar_detects_nested_pgrn() {
+        let dir = std::env::temp_dir().join(format!("slip-mlx-experts-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let model = dir.join("M");
+        fs::create_dir_all(&model).unwrap();
+        fs::write(model.join("config.json"), "{}").unwrap();
+        assert!(!any_experts_sidecar(&dir));
+        fs::write(model.join("experts.pgrn"), b"PGRN").unwrap();
+        assert!(any_experts_sidecar(&dir));
+        assert!(!any_experts_sidecar(&dir.join("missing")));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn model_sidecar_counts_skips_non_models() {
+        let dir = std::env::temp_dir().join(format!("slip-mlx-sidecar-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("readme.txt"), "x").unwrap();
+        let bare = dir.join("no-config");
+        fs::create_dir_all(&bare).unwrap();
+        assert_eq!(model_sidecar_counts(&dir), (0, 0));
+        assert_eq!(model_sidecar_counts(&dir.join("gone")), (0, 0));
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+
+// ===== FILE: app/src-tauri/src/p2p.rs =====
+//! Slipstream P2P thin adapter (feature-flagged from the UI via `slipstream.p2p`).
+//!
+//! Completely separate from Metal / MLX `start_server` paths. Uses `p2p-node`
+//! runtime helpers with `EngineChoice::Mock` by default so no real oMLX/llama
+//! is required. Optional `engine` on [`p2p_start`] selects stubs (`mlx`/`llama`/
+//! `auto`); non-mock engines HTTP-infer against local Slipstream (`:8080`).
+//! Process spawn stays behind CLI `--features launch`.
+
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+use p2p_core::{JobRequest, NodeId};
+use p2p_crypto::NodeKeypair;
+use p2p_ledger::Ledger;
+use p2p_node::{
+    capability_for_engine, capability_to_advert, client_hello, default_capability, send_sealed_job,
+    EngineChoice, NodeConfig, NodeMode, NodePolicy, RunningNode,
+};
+use serde::{Deserialize, Serialize};
+use tauri::State;
+
+const DEFAULT_LISTEN: &str = "127.0.0.1:9002";
+const DEFAULT_HTTP_INFER: &str = "http://127.0.0.1:8080";
+const RECENT_PEERS_MAX: usize = 16;
+const TEST_JOB_MAX_TOKENS: u32 = 8;
+const CHAT_JOB_MAX_TOKENS: u32 = 64;
+
+/// Managed state for the optional in-process P2P listener.
+#[derive(Default)]
+pub struct P2pState {
+    inner: Mutex<Option<P2pRuntime>>,
+    last_engine: Mutex<String>,
+    last_job_id: Mutex<Option<String>>,
+    recent_peers: Mutex<Vec<P2pPeerInfo>>,
+}
+
+struct P2pRuntime {
+    node_id: String,
+    listen_addr: String,
+    engine: String,
+    mode: String,
+    donate_capacity: bool,
+    stop: tokio::sync::watch::Sender<bool>,
+    _thread: thread::JoinHandle<()>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct P2pStatus {
+    pub running: bool,
+    pub node_id: String,
+    pub listen_addr: String,
+    pub credits: u64,
+    pub mock: bool,
+    /// Selected engine label: `mock` | `auto` | `mlx` | `llama`.
+    pub engine: String,
+    pub mode: String,
+    pub donate_capacity: bool,
+    pub last_job_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct P2pJobOutcome {
+    pub ok: bool,
+    pub job_id: String,
+    pub text: String,
+    pub tokens: u32,
+    pub error: Option<String>,
+    pub peer_node_id: String,
+    pub peer_addr: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct P2pPeerInfo {
+    pub addr: String,
+    pub ok: bool,
+    pub identity_id: String,
+    pub node_id: String,
+    pub backend: String,
+    pub models: Vec<String>,
+    pub ram_gib: u32,
+    pub vram_gib: u32,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct P2pSettlementView {
+    pub job_id: String,
+    pub consumer_id: String,
+    pub provider_id: String,
+    pub tokens: u64,
+    pub credits: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct P2pCredits {
+    pub account: String,
+    pub balance: u64,
+    /// Back-compat alias (`credits` == `balance`).
+    pub credits: u64,
+    pub node_id: String,
+    pub settlement: Option<P2pSettlementView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct RecentPeersFile {
+    peers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct JobParams {
+    prompt: String,
+    model: String,
+    system: String,
+    max_tokens: u32,
+    job_id: Option<String>,
+}
+
+fn data_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join("Library/Application Support/Slipstream/p2p");
+    }
+    PathBuf::from("/tmp/slipstream-p2p")
+}
+
+fn ensure_dir(path: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(path).map_err(|e| format!("p2p data dir: {e}"))
+}
+
+/// Load or create the persistent node key under Application Support.
+pub fn load_or_create_keypair() -> Result<(NodeKeypair, PathBuf), String> {
+    let dir = data_dir();
+    ensure_dir(&dir)?;
+    let key_path = dir.join("node.key");
+    if key_path.is_file() {
+        let kp = NodeKeypair::load(&key_path).map_err(|e| format!("load key: {e}"))?;
+        return Ok((kp, key_path));
+    }
+    let kp = NodeKeypair::generate();
+    kp.save(&key_path).map_err(|e| format!("save key: {e}"))?;
+    Ok((kp, key_path))
+}
+
+fn ledger_path() -> PathBuf {
+    data_dir().join("ledger.db")
+}
+
+fn recent_peers_path() -> PathBuf {
+    data_dir().join("recent_peers.json")
+}
+
+fn read_credits(node_id: &str) -> u64 {
+    let path = ledger_path();
+    if !path.is_file() {
+        return 0;
+    }
+    Ledger::open_sqlite(&path)
+        .ok()
+        .and_then(|l| l.balance(node_id).ok())
+        .unwrap_or(0)
+}
+
+fn load_recent_addrs() -> Vec<String> {
+    let path = recent_peers_path();
+    if !path.is_file() {
+        return vec![];
+    }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<RecentPeersFile>(&s).ok())
+        .map(|f| f.peers)
+        .unwrap_or_default()
+}
+
+fn remember_peer_addr(addr: &str) {
+    let addr = addr.trim();
+    if addr.is_empty() {
+        return;
+    }
+    let mut peers = load_recent_addrs();
+    peers.retain(|p| p != addr);
+    peers.insert(0, addr.to_string());
+    peers.truncate(RECENT_PEERS_MAX);
+    let _ = ensure_dir(&data_dir());
+    if let Ok(json) = serde_json::to_string_pretty(&RecentPeersFile { peers }) {
+        let _ = std::fs::write(recent_peers_path(), json);
+    }
+}
+
+fn push_recent_peer(state: &P2pState, info: P2pPeerInfo) {
+    remember_peer_addr(&info.addr);
+    if let Ok(mut g) = state.recent_peers.lock() {
+        g.retain(|p| p.addr != info.addr);
+        g.insert(0, info);
+        g.truncate(RECENT_PEERS_MAX);
+    }
+}
+
+fn parse_engine_opt(engine: Option<String>) -> Result<EngineChoice, String> {
+    match engine {
+        None => Ok(EngineChoice::Mock),
+        Some(s) if s.trim().is_empty() => Ok(EngineChoice::Mock),
+        Some(s) => EngineChoice::parse(&s),
+    }
+}
+
+fn parse_addrs_csv(csv: &str) -> Result<Vec<SocketAddr>, String> {
+    let mut out = Vec::new();
+    for part in csv.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        out.push(
+            part.parse()
+                .map_err(|e| format!("invalid addr '{part}': {e}"))?,
+        );
+    }
+    Ok(out)
+}
+
+/// Ensure non-mock engines target local Slipstream HTTP (:8080) when unset.
+fn ensure_http_infer_env(choice: EngineChoice) {
+    if choice.is_mock() {
+        return;
+    }
+    if std::env::var_os("P2P_MLX_ENDPOINT").is_none()
+        && std::env::var_os("SLIPSTREAM_MLX_ENDPOINT").is_none()
+    {
+        std::env::set_var("P2P_MLX_ENDPOINT", DEFAULT_HTTP_INFER);
+    }
+    if matches!(choice, EngineChoice::Llama | EngineChoice::Auto)
+        && std::env::var_os("P2P_LLAMA_ENDPOINT").is_none()
+    {
+        std::env::set_var("P2P_LLAMA_ENDPOINT", DEFAULT_HTTP_INFER);
+    }
+}
+
+fn last_engine_of(state: &P2pState) -> String {
+    state
+        .last_engine
+        .lock()
+        .map(|g| {
+            if g.is_empty() {
+                "mock".into()
+            } else {
+                g.clone()
+            }
+        })
+        .unwrap_or_else(|_| "mock".into())
+}
+
+fn last_job_of(state: &P2pState) -> Option<String> {
+    state.last_job_id.lock().ok().and_then(|g| g.clone())
+}
+
+fn set_last_job(state: &P2pState, job_id: &str) {
+    if let Ok(mut g) = state.last_job_id.lock() {
+        *g = Some(job_id.to_string());
+    }
+}
+
+fn status_from(
+    runtime: Option<&P2pRuntime>,
+    kp: &NodeKeypair,
+    last_engine: &str,
+    last_job_id: Option<String>,
+) -> P2pStatus {
+    let node_id = kp.node_id().as_hex().to_string();
+    match runtime {
+        Some(rt) => P2pStatus {
+            running: true,
+            node_id: rt.node_id.clone(),
+            listen_addr: rt.listen_addr.clone(),
+            credits: read_credits(&rt.node_id),
+            mock: rt.engine == "mock",
+            engine: rt.engine.clone(),
+            mode: rt.mode.clone(),
+            donate_capacity: rt.donate_capacity,
+            last_job_id,
+        },
+        None => P2pStatus {
+            running: false,
+            credits: read_credits(&node_id),
+            node_id,
+            listen_addr: String::new(),
+            mock: last_engine == "mock",
+            engine: last_engine.to_string(),
+            mode: "local".into(),
+            donate_capacity: false,
+            last_job_id,
+        },
+    }
+}
+
+fn running_listen_addr(state: &P2pState) -> Option<String> {
+    state
+        .inner
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|rt| rt.listen_addr.clone()))
+}
+
+/// Snapshot: node id / credits always available; listen only while running.
+#[tauri::command]
+pub fn p2p_status(state: State<P2pState>) -> Result<P2pStatus, String> {
+    let (kp, _) = load_or_create_keypair()?;
+    let guard = state
+        .inner
+        .lock()
+        .map_err(|_| "p2p state poisoned".to_string())?;
+    Ok(status_from(
+        guard.as_ref(),
+        &kp,
+        &last_engine_of(&state),
+        last_job_of(&state),
+    ))
+}
+
+/// Credits balance (+ optional settlement by `job_id`).
+/// `account` defaults to this node's persistent id.
+#[tauri::command]
+pub fn p2p_credits(account: Option<String>, job_id: Option<String>) -> Result<P2pCredits, String> {
+    let (kp, _) = load_or_create_keypair()?;
+    let node_id = kp.node_id().as_hex().to_string();
+    let account = account
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| node_id.clone());
+    let path = ledger_path();
+    let balance = if path.is_file() {
+        Ledger::open_sqlite(&path)
+            .and_then(|l| l.balance(&account))
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let settlement = job_id.filter(|s| !s.trim().is_empty()).and_then(|jid| {
+        if !path.is_file() {
+            return None;
+        }
+        Ledger::open_sqlite(&path)
+            .ok()
+            .and_then(|l| l.get_settlement(&jid).ok())
+            .flatten()
+            .map(|s| P2pSettlementView {
+                job_id: s.job_id,
+                consumer_id: s.consumer_id,
+                provider_id: s.provider_id,
+                tokens: s.tokens,
+                credits: s.credits,
+            })
+    });
+    Ok(P2pCredits {
+        account: account.clone(),
+        balance,
+        credits: balance,
+        node_id,
+        settlement,
+    })
+}
+
+/// Start the P2P listener. Does not touch Metal/MLX server state.
+///
+/// `engine`: optional `mock` (default) | `auto` | `mlx` | `llama`.
+/// `bootstrap`: optional comma-separated peer addrs dialed at bind time.
+/// Non-mock → HTTP infer to local Slipstream (`P2P_MLX_ENDPOINT` / `:8080`).
+/// Does **not** spawn oMLX/llama-server from the UI path.
+#[tauri::command]
+pub fn p2p_start(
+    listen: String,
+    engine: Option<String>,
+    bootstrap: Option<String>,
+    mode: Option<String>,
+    donate_capacity: Option<bool>,
+    state: State<P2pState>,
+) -> Result<P2pStatus, String> {
+    let choice = parse_engine_opt(engine)?;
+    ensure_http_infer_env(choice);
+    let listen_raw = if listen.trim().is_empty() {
+        DEFAULT_LISTEN.to_string()
+    } else {
+        listen.trim().to_string()
+    };
+    let listen_addr: SocketAddr = listen_raw
+        .parse()
+        .map_err(|e| format!("invalid listen addr '{listen_raw}': {e}"))?;
+    let mode: NodeMode = mode
+        .as_deref()
+        .unwrap_or("local")
+        .parse()
+        .map_err(|e| format!("invalid node mode: {e}"))?;
+    let mut policy = NodePolicy::for_mode(mode);
+    policy.donate_capacity = donate_capacity.unwrap_or(false);
+    policy
+        .validate_for_listen(listen_addr)
+        .map_err(|e| format!("invalid node policy: {e}"))?;
+    let bootstrap_addrs = parse_addrs_csv(bootstrap.as_deref().unwrap_or(""))?;
+
+    let mut guard = state
+        .inner
+        .lock()
+        .map_err(|_| "p2p state poisoned".to_string())?;
+    if guard.is_some() {
+        let (kp, _) = load_or_create_keypair()?;
+        return Ok(status_from(
+            guard.as_ref(),
+            &kp,
+            &last_engine_of(&state),
+            last_job_of(&state),
+        ));
+    }
+
+    let (kp, _) = load_or_create_keypair()?;
+    let node_id = kp.node_id().as_hex().to_string();
+    let ledger_for_node = ledger_path();
+    ensure_dir(
+        ledger_for_node
+            .parent()
+            .unwrap_or(std::path::Path::new(".")),
+    )?;
+
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<String, String>>();
+
+    let keypair = Arc::new(kp);
+    let engine_label = choice.as_str().to_string();
+    let mode_label = mode.to_string();
+    let donate_enabled = policy.donate_capacity;
+    if let Ok(mut g) = state.last_engine.lock() {
+        *g = engine_label.clone();
+    }
+    for addr in &bootstrap_addrs {
+        remember_peer_addr(&addr.to_string());
+    }
+
+    let thread = thread::Builder::new()
+        .name("slipstream-p2p".into())
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .worker_threads(2)
+                .thread_name("slipstream-p2p-worker")
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(format!("tokio runtime: {e}")));
+                    return;
+                }
+            };
+            rt.block_on(async move {
+                let models = if choice.is_mock() {
+                    vec!["mock".into()]
+                } else {
+                    vec!["slipstream".into()]
+                };
+                let capability =
+                    capability_for_engine(default_capability(models, choice.is_mock()), choice);
+                let mut node = match RunningNode::open(NodeConfig {
+                    listen: listen_addr,
+                    keypair: Arc::clone(&keypair),
+                    capability,
+                    engine: choice,
+                    spawn_engine: false,
+                    ledger_path: Some(ledger_for_node),
+                    bootstrap: bootstrap_addrs,
+                    policy,
+                }) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(format!("open node: {e}")));
+                        return;
+                    }
+                };
+                let (listener, addr) = match node.bind().await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(format!("bind: {e}")));
+                        return;
+                    }
+                };
+                let _ = ready_tx.send(Ok(addr.to_string()));
+                let accept = tokio::spawn(async move {
+                    let _ = node.accept_loop(listener).await;
+                });
+                let mut stop_rx = stop_rx;
+                loop {
+                    if *stop_rx.borrow() {
+                        break;
+                    }
+                    if stop_rx.changed().await.is_err() {
+                        break;
+                    }
+                }
+                accept.abort();
+            });
+        })
+        .map_err(|e| format!("spawn p2p thread: {e}"))?;
+
+    let bound = ready_rx
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|_| "p2p start timed out".to_string())??;
+
+    *guard = Some(P2pRuntime {
+        node_id: node_id.clone(),
+        listen_addr: bound,
+        engine: engine_label,
+        mode: mode_label,
+        donate_capacity: donate_enabled,
+        stop: stop_tx,
+        _thread: thread,
+    });
+
+    let (kp, _) = load_or_create_keypair()?;
+    Ok(status_from(
+        guard.as_ref(),
+        &kp,
+        &last_engine_of(&state),
+        last_job_of(&state),
+    ))
+}
+
+/// Stop the in-process listener (Metal/MLX unchanged).
+#[tauri::command]
+pub fn p2p_stop(state: State<P2pState>) -> Result<P2pStatus, String> {
+    let mut guard = state
+        .inner
+        .lock()
+        .map_err(|_| "p2p state poisoned".to_string())?;
+    if let Some(rt) = guard.take() {
+        let _ = rt.stop.send(true);
+        drop(rt);
+    }
+    let (kp, _) = load_or_create_keypair()?;
+    Ok(status_from(
+        None,
+        &kp,
+        &last_engine_of(&state),
+        last_job_of(&state),
+    ))
+}
+
+/// Dial Hello against comma-separated peer addrs (capability probe).
+#[tauri::command]
+pub fn p2p_peers(addrs: String, state: State<P2pState>) -> Result<Vec<P2pPeerInfo>, String> {
+    let parsed = parse_addrs_csv(&addrs)?;
+    if parsed.is_empty() {
+        return Err("provide at least one peer address".into());
+    }
+    let (kp, _) = load_or_create_keypair()?;
+    let cap = default_capability(vec!["mock".into()], true);
+    let ours = capability_to_advert(&kp.node_id(), &cap, true);
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(2)
+        .thread_name("slipstream-p2p-peers")
+        .build()
+        .map_err(|e| format!("tokio: {e}"))?;
+
+    let out = rt.block_on(async move {
+        let mut out = Vec::with_capacity(parsed.len());
+        for addr in parsed {
+            match client_hello(addr, ours.clone(), &kp, None).await {
+                Ok((_session, remote)) => out.push(P2pPeerInfo {
+                    addr: addr.to_string(),
+                    ok: true,
+                    identity_id: remote.identity_id,
+                    node_id: remote.node_id,
+                    backend: remote.backend,
+                    models: remote.models,
+                    ram_gib: remote.ram_gib,
+                    vram_gib: remote.vram_gib,
+                    error: None,
+                }),
+                Err(e) => out.push(P2pPeerInfo {
+                    addr: addr.to_string(),
+                    ok: false,
+                    identity_id: String::new(),
+                    node_id: String::new(),
+                    backend: String::new(),
+                    models: vec![],
+                    ram_gib: 0,
+                    vram_gib: 0,
+                    error: Some(e.to_string()),
+                }),
+            }
+        }
+        out
+    });
+    for info in out.iter().filter(|p| p.ok) {
+        push_recent_peer(&state, info.clone());
+    }
+    Ok(out)
+}
+
+/// Recent peers (in-memory probe cache + persisted addrs).
+#[tauri::command]
+pub fn p2p_recent_peers(state: State<P2pState>) -> Result<Vec<P2pPeerInfo>, String> {
+    let cached = state
+        .recent_peers
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    if !cached.is_empty() {
+        return Ok(cached);
+    }
+    Ok(load_recent_addrs()
+        .into_iter()
+        .map(|addr| P2pPeerInfo {
+            addr,
+            ok: false,
+            identity_id: String::new(),
+            node_id: String::new(),
+            backend: String::new(),
+            models: vec![],
+            ram_gib: 0,
+            vram_gib: 0,
+            error: None,
+        })
+        .collect())
+}
+
+fn normalize_prompt(prompt: Option<String>, fallback: &str) -> String {
+    let p = prompt.unwrap_or_default().trim().to_string();
+    if p.is_empty() {
+        fallback.to_string()
+    } else {
+        p
+    }
+}
+
+fn resolve_job_params(
+    prompt: String,
+    model: Option<String>,
+    system: Option<String>,
+    max_tokens: Option<u32>,
+    job_id: Option<String>,
+    default_max: u32,
+    default_model: &str,
+) -> JobParams {
+    let model = model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| default_model.to_string());
+    JobParams {
+        prompt,
+        model,
+        system: system.unwrap_or_default(),
+        max_tokens: max_tokens.unwrap_or(default_max).max(1),
+        job_id: job_id.filter(|s| !s.trim().is_empty()),
+    }
+}
+
+fn require_chat_prompt(prompt: String) -> Result<String, String> {
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("prompt required".into());
+    }
+    Ok(prompt)
+}
+
+/// Resolve empty/loopback peer to the running node listen addr when available.
+fn resolve_peer_target(peer: &str, state: &P2pState) -> PeerTarget {
+    let trimmed = peer.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("loopback") {
+        if let Some(addr) = running_listen_addr(state) {
+            return PeerTarget::Addr(addr);
+        }
+        return PeerTarget::EphemeralLoopback;
+    }
+    PeerTarget::Addr(trimmed.to_string())
+}
+
+enum PeerTarget {
+    EphemeralLoopback,
+    Addr(String),
+}
+
+fn run_p2p_job(peer: String, params: JobParams, state: &P2pState) -> Result<P2pJobOutcome, String> {
+    let target = resolve_peer_target(&peer, state);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(2)
+        .thread_name("slipstream-p2p-job")
+        .build()
+        .map_err(|e| format!("tokio: {e}"))?;
+
+    rt.block_on(async move {
+        match target {
+            PeerTarget::EphemeralLoopback => send_loopback_job(&params).await,
+            PeerTarget::Addr(addr_str) => {
+                let addr: SocketAddr = addr_str
+                    .parse()
+                    .map_err(|e| format!("invalid peer '{addr_str}': {e}"))?;
+                send_job_to(addr, &params).await
+            }
+        }
+    })
+}
+
+/// Seal + send a job to `peer` (host:port). Empty peer → running node, else ephemeral loopback.
+#[tauri::command]
+pub fn p2p_send_test_job(
+    peer: String,
+    prompt: Option<String>,
+    model: Option<String>,
+    system: Option<String>,
+    max_tokens: Option<u32>,
+    job_id: Option<String>,
+    state: State<P2pState>,
+) -> Result<P2pJobOutcome, String> {
+    let prompt = normalize_prompt(prompt, "hello slipstream p2p");
+    let params = resolve_job_params(
+        prompt,
+        model,
+        system,
+        max_tokens,
+        job_id,
+        TEST_JOB_MAX_TOKENS,
+        "mock",
+    );
+    let out = run_p2p_job(peer, params, &state)?;
+    if out.ok {
+        set_last_job(&state, &out.job_id);
+        remember_peer_addr(&out.peer_addr);
+    }
+    Ok(out)
+}
+
+/// Chat-oriented P2P ask: prompt required, optional peer (empty = running node / loopback).
+#[tauri::command]
+pub fn p2p_chat(
+    prompt: String,
+    peer: Option<String>,
+    model: Option<String>,
+    system: Option<String>,
+    max_tokens: Option<u32>,
+    job_id: Option<String>,
+    state: State<P2pState>,
+) -> Result<P2pJobOutcome, String> {
+    let prompt = require_chat_prompt(prompt)?;
+    let default_model = if last_engine_of(&state) == "mock" {
+        "mock"
+    } else {
+        "slipstream"
+    };
+    let params = resolve_job_params(
+        prompt,
+        model,
+        system,
+        max_tokens,
+        job_id,
+        CHAT_JOB_MAX_TOKENS,
+        default_model,
+    );
+    let out = run_p2p_job(peer.unwrap_or_default(), params, &state)?;
+    if out.ok {
+        set_last_job(&state, &out.job_id);
+        remember_peer_addr(&out.peer_addr);
+    }
+    Ok(out)
+}
+
+async fn send_job_to(addr: SocketAddr, params: &JobParams) -> Result<P2pJobOutcome, String> {
+    // Persistent client identity — same key as this Mac's provider node.
+    let (client_kp, _) = load_or_create_keypair()?;
+    let cap = default_capability(vec![params.model.clone()], true);
+    let ours = capability_to_advert(&client_kp.node_id(), &cap, true);
+    let (mut session, remote) = client_hello(addr, ours, &client_kp, None)
+        .await
+        .map_err(|e| format!("hello: {e}"))?;
+    let job_id = params
+        .job_id
+        .clone()
+        .unwrap_or_else(|| format!("ui-{}", chrono_like_id()));
+    let job = JobRequest {
+        job_id: job_id.clone(),
+        model: params.model.clone(),
+        system: params.system.clone(),
+        prompt: params.prompt.clone(),
+        max_tokens: params.max_tokens.max(1),
+    };
+    let recipient = NodeId::from_hex(&remote.node_id).map_err(|e| format!("peer id: {e}"))?;
+    let result = send_sealed_job(&mut session, &job, &recipient, &client_kp)
+        .await
+        .map_err(|e| format!("job: {e}"))?;
+    remember_peer_addr(&addr.to_string());
+    Ok(P2pJobOutcome {
+        ok: result.ok,
+        job_id: result.job_id,
+        text: result.text,
+        tokens: result.tokens,
+        error: result.error,
+        peer_node_id: remote.node_id,
+        peer_addr: addr.to_string(),
+    })
+}
+
+/// Ephemeral mock worker on `127.0.0.1:0` so Ask works without a started node.
+async fn send_loopback_job(params: &JobParams) -> Result<P2pJobOutcome, String> {
+    let dir = tempfile_dir()?;
+    let ledger = dir.join("loopback.db");
+    let worker_kp = Arc::new(NodeKeypair::generate());
+    let mut node = RunningNode::open(NodeConfig {
+        listen: "127.0.0.1:0"
+            .parse()
+            .map_err(|e| format!("listen parse: {e}"))?,
+        keypair: Arc::clone(&worker_kp),
+        capability: default_capability(vec![params.model.clone()], true),
+        engine: EngineChoice::Mock,
+        spawn_engine: false,
+        ledger_path: Some(ledger),
+        bootstrap: vec![],
+        policy: p2p_node::NodePolicy::default(),
+    })
+    .map_err(|e| format!("open: {e}"))?;
+    let (listener, addr) = node.bind().await.map_err(|e| format!("bind: {e}"))?;
+    let accept = tokio::spawn(async move {
+        let _ = node.accept_loop(listener).await;
+    });
+    let outcome = send_job_to(addr, params).await;
+    accept.abort();
+    let _ = std::fs::remove_dir_all(&dir);
+    outcome
+}
+
+fn tempfile_dir() -> Result<PathBuf, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let base = std::env::temp_dir().join(format!("slipstream-p2p-{}-{}", chrono_like_id(), n));
+    std::fs::create_dir_all(&base).map_err(|e| format!("temp dir: {e}"))?;
+    Ok(base)
+}
+
+fn chrono_like_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("{ms}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_params(prompt: &str, max_tokens: u32) -> JobParams {
+        JobParams {
+            prompt: prompt.into(),
+            model: "mock".into(),
+            system: String::new(),
+            max_tokens,
+            job_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn loopback_sealed_job_ok() {
+        let out = send_loopback_job(&sample_params("hello mesh", TEST_JOB_MAX_TOKENS))
+            .await
+            .expect("loopback");
+        assert!(out.ok, "{out:?}");
+        assert!(out.tokens > 0);
+        assert!(!out.peer_node_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn loopback_chat_job_ok() {
+        let out = send_loopback_job(&sample_params("what is slipstream?", CHAT_JOB_MAX_TOKENS))
+            .await
+            .expect("chat loopback");
+        assert!(out.ok, "{out:?}");
+        assert!(out.tokens > TEST_JOB_MAX_TOKENS);
+        assert!(out.text.contains("[mock"));
+        assert!(!out.peer_node_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn loopback_uses_persistent_client_key() {
+        let (kp, _) = load_or_create_keypair().expect("key");
+        let local_id = kp.node_id().as_hex().to_string();
+        let a = send_loopback_job(&sample_params("a", 4)).await.expect("a");
+        let b = send_loopback_job(&sample_params("b", 4)).await.expect("b");
+        assert!(a.ok && b.ok, "{a:?} {b:?}");
+        assert_ne!(a.peer_node_id, local_id);
+        assert_ne!(b.peer_node_id, local_id);
+    }
+
+    #[tokio::test]
+    async fn job_fields_model_system_job_id_roundtrip() {
+        let params = JobParams {
+            prompt: "ping".into(),
+            model: "mock".into(),
+            system: "be brief".into(),
+            max_tokens: 6,
+            job_id: Some("ui-job-fields-1".into()),
+        };
+        let out = send_loopback_job(&params).await.expect("job");
+        assert!(out.ok, "{out:?}");
+        assert_eq!(out.job_id, "ui-job-fields-1");
+        assert_eq!(out.tokens, 6);
+    }
+
+    #[test]
+    fn peers_hello_against_ephemeral_worker() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("rt");
+        let dir = tempfile_dir().expect("dir");
+        let addr = rt.block_on(async {
+            let worker_kp = Arc::new(NodeKeypair::generate());
+            let mut node = RunningNode::open(NodeConfig {
+                listen: "127.0.0.1:0".parse().unwrap(),
+                keypair: Arc::clone(&worker_kp),
+                capability: default_capability(vec!["mock".into()], true),
+                engine: EngineChoice::Mock,
+                spawn_engine: false,
+                ledger_path: Some(dir.join("peers.db")),
+                bootstrap: vec![],
+                policy: p2p_node::NodePolicy::default(),
+            })
+            .expect("open");
+            let (listener, addr) = node.bind().await.expect("bind");
+            tokio::spawn(async move {
+                let _ = node.accept_loop(listener).await;
+            });
+            addr
+        });
+        // Probe without Tauri State: exercise parse + hello path via client_hello.
+        let list = rt.block_on(async {
+            let (kp, _) = load_or_create_keypair().unwrap();
+            let cap = default_capability(vec!["mock".into()], true);
+            let ours = capability_to_advert(&kp.node_id(), &cap, true);
+            let (_s, remote) = client_hello(addr, ours, &kp, None).await.expect("hello");
+            vec![P2pPeerInfo {
+                addr: addr.to_string(),
+                ok: true,
+                identity_id: remote.identity_id,
+                node_id: remote.node_id,
+                backend: remote.backend,
+                models: remote.models,
+                ram_gib: remote.ram_gib,
+                vram_gib: remote.vram_gib,
+                error: None,
+            }]
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(list.len(), 1);
+        assert!(list[0].ok, "{:?}", list[0]);
+        assert_eq!(list[0].node_id.len(), 64);
+        assert_eq!(list[0].backend, "mock");
+    }
+
+    #[test]
+    fn chat_prompt_rejects_empty() {
+        let err = require_chat_prompt("   ".into()).expect_err("empty");
+        assert!(err.contains("prompt"), "{err}");
+    }
+
+    #[test]
+    fn parse_bootstrap_csv() {
+        let v = parse_addrs_csv("127.0.0.1:9001, 127.0.0.1:9002").expect("ok");
+        assert_eq!(v.len(), 2);
+        assert!(parse_addrs_csv("").unwrap().is_empty());
+        assert!(parse_addrs_csv("not-an-addr").is_err());
+    }
+
+    #[test]
+    fn parse_engine_opt_defaults_mock() {
+        assert!(parse_engine_opt(None).unwrap().is_mock());
+        assert_eq!(
+            parse_engine_opt(Some("mlx".into())).unwrap().as_str(),
+            "mlx"
+        );
+    }
+
+    #[test]
+    fn keypair_persists_under_data_dir() {
+        let (kp, path) = load_or_create_keypair().expect("key");
+        assert_eq!(kp.node_id().as_hex().len(), 64);
+        assert!(path.is_file());
+        let (kp2, _) = load_or_create_keypair().expect("reload");
+        assert_eq!(kp.node_id().as_hex(), kp2.node_id().as_hex());
+    }
+
+    #[test]
+    fn credits_view_shape() {
+        let (kp, _) = load_or_create_keypair().expect("key");
+        let view = p2p_credits(Some(kp.node_id().as_hex().to_string()), None).expect("credits");
+        assert_eq!(view.account, kp.node_id().as_hex());
+        assert_eq!(view.balance, view.credits);
+        assert!(view.settlement.is_none());
+    }
+
+    #[test]
+    fn empty_peer_prefers_running_listen() {
+        let state = P2pState::default();
+        assert!(matches!(
+            resolve_peer_target("", &state),
+            PeerTarget::EphemeralLoopback
+        ));
+        {
+            let mut g = state.inner.lock().unwrap();
+            let (tx, _rx) = tokio::sync::watch::channel(false);
+            *g = Some(P2pRuntime {
+                node_id: "abc".into(),
+                listen_addr: "127.0.0.1:9002".into(),
+                engine: "mock".into(),
+                mode: "local".into(),
+                donate_capacity: false,
+                stop: tx,
+                _thread: thread::spawn(|| {}),
+            });
+        }
+        match resolve_peer_target("", &state) {
+            PeerTarget::Addr(a) => assert_eq!(a, "127.0.0.1:9002"),
+            _ => panic!("expected Addr"),
+        }
+        let _ = state.inner.lock().unwrap().take();
+    }
+
+    #[test]
+    fn remember_peer_persists() {
+        remember_peer_addr("127.0.0.1:9555");
+        assert!(load_recent_addrs().iter().any(|p| p == "127.0.0.1:9555"));
+    }
+}
+
+
+Task: find where the PGRN cache hit-rate is computed for the UI and explain in two sentences how it flows from the engine to the app.<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
