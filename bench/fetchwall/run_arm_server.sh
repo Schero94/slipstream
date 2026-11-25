@@ -15,7 +15,7 @@ swap_mb() { sysctl -n vm.swapusage | sed -E 's/.*used = ([0-9.]+)M.*/\1/'; }
 S0=$(swap_mb)
 env "$@" "$BIN" -m "$GGUF" --pgrn "$PGRN" --pgrn-cache-gb "$CACHE" --pgrn-io-threads 8 \
   --pgrn-compact-slots --gpu-layers 99 -c 4096 --parallel 1 -b 2048 -ub 2048 \
-  --spec-type draft-mtp --spec-draft-n-max 4 --host 127.0.0.1 --port "$PORT" > "$LOG" 2>&1 &
+  ${SPEC_ARGS---spec-type draft-mtp --spec-draft-n-max 4} --host 127.0.0.1 --port "$PORT" > "$LOG" 2>&1 &
 PID=$!
 for i in $(seq 1 600); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; kill -0 $PID 2>/dev/null || break; sleep 1; done
 req() { python3 -c 'import json,sys; print(json.dumps({"prompt": open(sys.argv[1]).read(), "n_predict": int(sys.argv[2]), "temperature": 0, "seed": 1, "ignore_eos": True, "cache_prompt": False}))' "$HERE/prompt_code.txt" "$1"; }

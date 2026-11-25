@@ -3421,3 +3421,18 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   of layer L's normed MoE input. Interleaved, 2 reps:
   4 GiB 10.20/10.16 tok/s (la0 vs variant), 10 GiB 17.63/17.83; recall 82.87 → 83.09 %.
 - Verdict: **REJECT** — within noise; code removed to keep one predictor path.
+
+## Bug: lookahead inert under speculative decoding (app regime) — FIXED — 2026-11-25
+
+- First app-regime run (llama-server, MTP draft 4 — how the app starts Qwen): lookahead
+  7.80 vs base 7.92 tok/s at 4 GiB, and PGRN hits/misses identical to base (38 256 /
+  25 342 vs 38 211 / 25 309) → no prefetch happened at all.
+- Cause (PGRN_DEBUG trace): `ggml_argsort_top_k` returns a strided view. With one token it
+  is contiguous, so llama-completion (n_tokens = 1) worked; speculative verify runs
+  n_tokens = 1 + drafts, the view is non-contiguous and the callback silently dropped the
+  prediction. The PSR mark of Turbo depended on the same read, so it was inert there too.
+- Fix: `ggml_cont` on the lookahead node; the callback now warns once if a prediction is
+  ever unreadable instead of skipping silently. The app-regime sweep is being re-run;
+  the earlier app-regime numbers are void.
+- Lesson recorded in CLAUDE.md terms: always measure in the regime the app actually uses
+  (here: speculative decoding on), not only in the simplest harness.

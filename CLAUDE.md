@@ -30,6 +30,9 @@ Never edit files while a build is compiling them (it produces mixed binaries).
 - A/B = same binary, same model, same cache, one variable; interleave arms
   (A,B,A,B…), ≥2 reps, ≥25 s cooldown. Use `bench/fetchwall/run_arm.sh` (skill
   `bench-ab`).
+- Measure in the regime the app actually runs: llama-server with the app's flags incl.
+  MTP speculation (`bench/fetchwall/run_arm_server.sh`), not only llama-completion
+  (single-token decode hid a lookahead bug that only appears with multi-token verify).
 - Measure in the regime a feature targets: cache band {4,6,8,10,14} GiB, PGRN on
   **internal NVMe** (`~/Modelle/...`). **Both GGUF and PGRN must be loaded from the internal SSD** (user rule) — copy from `/Volumes/Crucial X10/Modelle` first, never load from the external drive.
 - Shippable only if: consistent win · **0 MB swap growth** · parity:

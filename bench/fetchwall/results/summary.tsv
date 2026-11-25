@@ -53,3 +53,17 @@
 20261125-030452	label=turbo2	cache=4	decode_tps=14.28	prefill_tps=19.84	hit=74.35	la_recall=86.16	swap_delta_mb=0	out=67f74861d500	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
 20261125-030622	label=la0	cache=4	decode_tps=10.27	prefill_tps=19.71	hit=68.86	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
 20261125-030756	label=turbo2	cache=4	decode_tps=14.32	prefill_tps=19.64	hit=74.35	la_recall=86.16	swap_delta_mb=0	out=67f74861d500	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-030926	srv	label=base	cache=4	decode_tps=7.92	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=
+20261125-031112	srv	label=la0	cache=4	decode_tps=7.80	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-031957	label=la0	cache=4	decode_tps=10.41	prefill_tps=19.82	hit=68.86	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261125-032131	srv	label=base	cache=4	decode_tps=7.92	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=
+20261125-032317	srv	label=la0	cache=4	decode_tps=9.29	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-032458	srv	label=turbo2	cache=4	decode_tps=9.70	draft_acc=105/214	swap_delta_mb=0	out=7a5b8dc7cca0	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-032638	srv	label=base	cache=4	decode_tps=7.75	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=
+20261125-032824	srv	label=la0	cache=4	decode_tps=9.31	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-033005	srv	label=turbo2	cache=4	decode_tps=9.56	draft_acc=105/214	swap_delta_mb=0	out=7a5b8dc7cca0	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-033146	srv	label=base	cache=10	decode_tps=13.13	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=
+20261125-033321	srv	label=la0	cache=10	decode_tps=15.26	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0
+20261125-033453	srv	label=turbo2	cache=10	decode_tps=15.26	draft_acc=103/220	swap_delta_mb=-8.00	out=7f59ad38b473	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261125-033626	srv	label=base	cache=10	decode_tps=13.14	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=
+20261125-033801	srv	label=la0	cache=10	decode_tps=15.23	draft_acc=110/191	swap_delta_mb=0	out=38b5b06864f1	env=PGRN_LOOKAHEAD=0

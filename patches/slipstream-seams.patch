@@ -2010,7 +2010,7 @@ index b74d53af4..c397c7512 100644
      LLM_TENSOR_CLS_OUT,
      LLM_TENSOR_CLS_NORM,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 3a469bc90..deca331bc 100644
+index 3a469bc90..e8ec0251a 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -11,6 +11,8 @@
@@ -2073,7 +2073,7 @@ index 3a469bc90..deca331bc 100644
      if (status != GGML_STATUS_SUCCESS) {
          LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
          ret = status;
-@@ -2433,6 +2462,157 @@ ggml_status llama_context::graph_compute(
+@@ -2433,6 +2462,164 @@ ggml_status llama_context::graph_compute(
      return status;
  }
  
@@ -2172,7 +2172,14 @@ index 3a469bc90..deca331bc 100644
 +            ggml_tensor * la = pgrn_la_tensor[layer];
 +            pgrn_la_tensor[layer] = nullptr;
 +            const size_t la_n = (size_t) ggml_nelements(la);
-+            if (la->type == GGML_TYPE_I32 && la_n <= 4096 && ggml_is_contiguous(la)) {
++            if (la->type != GGML_TYPE_I32 || la_n > 4096 || !ggml_is_contiguous(la)) {
++                static bool warned = false;
++                if (!warned) {
++                    warned = true;
++                    LLAMA_LOG_WARN("%s: PGRN lookahead tensor unreadable (type %d, n %zu, contiguous %d) - prefetch skipped\n",
++                            __func__, (int) la->type, la_n, (int) ggml_is_contiguous(la));
++                }
++            } else {
 +                pgrn_la_buf.resize(la_n);
 +                ggml_backend_tensor_get(la, pgrn_la_buf.data(), 0, la_n * sizeof(int32_t));
 +                la_next = &pgrn_la_pred[layer + 1];
@@ -2231,7 +2238,7 @@ index 3a469bc90..deca331bc 100644
  llm_graph_cb llama_context::graph_get_cb() const {
      return [&](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
          if (il >= 0) {
-@@ -3171,6 +3351,27 @@ llama_perf_context_data llama_context::perf_get_data() const {
+@@ -3171,6 +3358,27 @@ llama_perf_context_data llama_context::perf_get_data() const {
      data.n_p_eval    = std::max(1, n_p_eval);
      data.n_eval      = std::max(1, n_eval);
      data.n_reused    = std::max(0, n_reused);
@@ -2259,7 +2266,7 @@ index 3a469bc90..deca331bc 100644
  
      return data;
  }
-@@ -3180,6 +3381,11 @@ void llama_context::perf_reset() {
+@@ -3180,6 +3388,11 @@ void llama_context::perf_reset() {
      t_eval_us   = n_eval = 0;
      t_p_eval_us = n_p_eval = 0;
      n_reused    = 0;
@@ -2271,7 +2278,7 @@ index 3a469bc90..deca331bc 100644
  }
  
  llama_memory_breakdown llama_context::memory_breakdown() const {
-@@ -3549,6 +3755,22 @@ llama_context * llama_init_from_model(
+@@ -3549,6 +3762,22 @@ llama_context * llama_init_from_model(
  
      try {
          auto * ctx = new llama_context(*model, params);
@@ -2294,7 +2301,7 @@ index 3a469bc90..deca331bc 100644
          return ctx;
      } catch (const std::exception & err) {
          LLAMA_LOG_ERROR("%s: failed to initialize the context: %s\n", __func__, err.what());
-@@ -4076,6 +4298,32 @@ void llama_perf_context_print(const llama_context * ctx) {
+@@ -4076,6 +4305,32 @@ void llama_perf_context_print(const llama_context * ctx) {
              __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
      LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
      LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
@@ -3712,10 +3719,10 @@ index beab9f6bc..b51d4401f 100644
      llama_model_ernie4_5(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index 7b0876cbb..991dab103 100644
+index 7b0876cbb..d37f9482d 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
-@@ -213,6 +213,23 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
+@@ -213,6 +213,25 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
          ggml_tensor * attn_post_norm = build_norm(cur, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, il);
          cb(attn_post_norm, "attn_post_norm", il);
  
@@ -3730,7 +3737,9 @@ index 7b0876cbb..991dab103 100644
 +            ggml_tensor * la_in = attn_post_norm;
 +            const int64_t la_k = std::min<int64_t>(n_expert, n_expert_used + la_margin);
 +            ggml_tensor * la_logits = build_lora_mm(model.layers[il + 1].ffn_gate_inp, la_in);
-+            ggml_tensor * la = ggml_argsort_top_k(ctx0, la_logits, la_k);
++            // argsort_top_k is a strided view; make it contiguous so the callback can read
++            // it for multi-token ubatches too (speculative verify: n_tokens = 1 + drafts).
++            ggml_tensor * la = ggml_cont(ctx0, ggml_argsort_top_k(ctx0, la_logits, la_k));
 +            cb(la, "pgrn_lookahead", il);
 +            ggml_set_output(la);
 +            ggml_build_forward_expand(gf, la);
@@ -3739,7 +3748,7 @@ index 7b0876cbb..991dab103 100644
          // MOE FFN layer
          cur = build_layer_ffn(attn_post_norm, il);
          cb(cur, "ffn_out", il);
-@@ -497,13 +514,25 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+@@ -497,13 +516,25 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
      // Check if this is an MoE layer
      GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
  
@@ -3769,7 +3778,7 @@ index 7b0876cbb..991dab103 100644
              n_expert, n_expert_used,
              LLM_FFN_SILU, true,
              hparams.expert_weights_scale,
-@@ -511,7 +540,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+@@ -511,7 +542,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
              nullptr, model.layers[il].ffn_gate_up_exps,
              model.layers[il].ffn_up_exps_s,
              model.layers[il].ffn_gate_exps_s,
@@ -3780,7 +3789,7 @@ index 7b0876cbb..991dab103 100644
      cb(moe_out, "ffn_moe_out", il);
  
      // Add shared experts if present - following Qwen3Next reference implementation
-@@ -675,12 +706,14 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
+@@ -675,12 +708,14 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
      cb(cur, "mtp_attn_post_norm", il);
  
      // MoE FFN — routed experts plus gated shared expert (mirrors qwen35moe).
@@ -3798,7 +3807,7 @@ index 7b0876cbb..991dab103 100644
              nullptr,
              n_expert, n_expert_used,
              LLM_FFN_SILU, true,
-@@ -689,7 +722,9 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
+@@ -689,7 +724,9 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
              nullptr, layer.ffn_gate_up_exps,
              layer.ffn_up_exps_s,
              layer.ffn_gate_exps_s,
