@@ -234,6 +234,64 @@ to do. Streaming saves memory when the model does *not* fit.
 
 ---
 
+## Lookahead prefetch, Turbo, and when MTP stops paying (2026-11-25)
+
+Qwen3.6-35B-A3B Q4_K_XL, GGUF and PGRN on the internal NVMe, M3 Pro / 36 GB. Every row is an
+interleaved A/B with two repetitions, 0 MB swap growth, raw lines in `bench/RESULTS.md`.
+
+**Lookahead prefetch (lossless).** The old prefetchers guessed the next layer's experts from
+co-activation tables and lost (−8 %): too many speculative reads, too little accuracy. Lookahead
+asks the model instead. It runs layer L+1's router on layer L's MoE input inside the graph, reads
+the top-k at the top-k sync that already exists (no extra GPU sync), and warms the cold ones on a
+background thread while layer L's experts and layer L+1's attention run. It predicts 82.9 % of the
+routed experts one layer ahead, and greedy output is byte-identical with it on or off.
+
+| Decode, llama-completion, no speculation | 4 GiB | 8 GiB | 10 GiB |
+|---|---:|---:|---:|
+| baseline | 6.30 | 11.83 | 14.67 |
+| lookahead | 8.13 (+29 %) | 15.72 (+33 %) | 17.65 (+20 %) |
+
+A probe of where the remaining time goes, at 10 GiB: waiting for the prefetch takes 6 % of decode,
+synchronous reads of experts it did not predict take 38 %. So lead time is not the limit, recall
+is. A predictor input built from the residual and the next layer's norm moved recall from 82.9
+to 83.1 %, which is noise, so it was removed.
+
+**Turbo (lossy, opt-in).** Cache-aware routing (Cache-Prior, arXiv 2412.00099; CECAR 2611.20119;
+PSR 2610.34721): while generating, the router's *selection* probabilities get a bonus of 0.02
+for experts that are resident or being prefetched by lookahead. The mixing weights stay the
+unmodified softmax. The residency mask is a snapshot taken at the start of each step, so the
+choice never depends on I/O timing, and the prompt is always routed exactly.
+
+| Quality vs exact routing, token by token | PPL ratio | mean KLD | same top-1 |
+|---|---:|---:|---:|
+| bonus 0.01, resident only | 1.012 | 0.035 | 91.2 % |
+| bonus 0.02, resident + prefetching (Turbo) | 1.001 ± 0.007 | 0.020 | 92.9 % |
+| bonus 0.05, resident only | 1.65 (prefill) | 0.64 | 67.0 % |
+
+Counting the experts lookahead is already fetching as "resident" halves the distortion. It steers
+towards experts the router was likely to pick anyway.
+
+**MTP stops paying once lookahead is on.** Same llama-server, the app's flags, greedy:
+
+| Decode, llama-server | 4 GiB | 10 GiB | MTP acceptance |
+|---|---:|---:|---:|
+| MTP, no lookahead (old app default) | 7.84 | 13.14 | 58 % |
+| MTP + lookahead | 9.23 | 15.21 | 58 % |
+| **lookahead, no MTP (new default)** | **10.04** | **17.52** | — |
+| MTP + Turbo | 9.59 | 15.25 | 47–49 % |
+| **Turbo, no MTP** | **13.68** | **19.61** | — |
+
+An MTP verify step needs the union of four or five tokens' experts, which lookahead cannot hide,
+and Turbo makes the unsteered MTP head's drafts less acceptable. The app now drops MTP for
+streamed runs when lookahead is on, and keeps it when the model fits in RAM. One cost: grammar-forced
+drafts ride the same verify path, so they are off in that mode.
+
+**A bug the simple harness hid.** The first app-regime run showed lookahead doing nothing.
+`ggml_argsort_top_k` returns a strided view; with one token per step it happens to be contiguous,
+so llama-completion worked, but speculative verify runs several tokens and the prediction was
+silently dropped. Fixed with a `ggml_cont`, and the engine now warns if a prediction is ever
+unreadable. The lesson is in `CLAUDE.md`: measure in the regime the app actually runs.
+
 ## What did *not* work (recorded honestly)
 
 - **OS page-cache instead of our bounded arena** — ~75 % faster, but 1000+ swapouts: it breaks "the Mac stays usable." Rejected.

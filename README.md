@@ -85,6 +85,26 @@ Numbers from a 36 GB Apple-Silicon Mac, raw logs in [`bench/RESULTS.md`](bench/R
 
 Prefill of a large (~30k-token) coding-agent prompt goes from 75 to 208 tok/s, a 2.7x gain, with `ubatch 2048` and parallel I/O threads.
 
+#### Lookahead prefetch and Turbo (unreleased, branch `feat/fetch-wall`)
+
+Measured in the app's own setup (llama-server, greedy, GGUF and PGRN on the internal NVMe):
+
+| Cache | Before | Lookahead (lossless, default) | + Turbo (opt-in) |
+|------:|-------:|------------------------------:|-----------------:|
+| 4 GiB | 7.8 tok/s | 10.0 tok/s (+28%) | 13.7 tok/s (+75%) |
+| 10 GiB | 13.1 tok/s | 17.5 tok/s (+33%) | 19.6 tok/s (+49%) |
+
+Lookahead runs the next layer's router on the current layer's hidden state, so the experts it
+will ask for are already being read from the SSD while the current layer computes. It predicts
+83% of them and changes no output: greedy text is byte-identical with it on or off. With it on,
+the app turns MTP speculation off for streamed models, because a multi-token verify step needs
+the union of several tokens' experts, which costs more than it saves here.
+
+Turbo nudges the router, while generating, towards experts that are already in RAM or being
+prefetched. It is lossy and off by default. In our test the next token matched the unmodified
+model 93% of the time and perplexity stayed within noise; the prompt is always read exactly.
+Method, raw numbers and the experiments that lost are in [`bench/RESULTS.md`](bench/RESULTS.md).
+
 ### Laguna S 2.1 (118B-A8B, Q4), a model that does not fit in 36 GB
 
 | Configuration | Decode | vs. baseline |
