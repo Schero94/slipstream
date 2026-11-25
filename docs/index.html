@@ -32,7 +32,7 @@
   "@type": "SoftwareApplication",
   "name": "Slipstream",
   "url": "https://schero94.github.io/slipstream/",
-  "softwareVersion": "0.3.4",
+  "softwareVersion": "0.4.0",
   "downloadUrl": "https://github.com/Schero94/slipstream/releases/latest",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS 11+ (Apple Silicon), Linux (headless node)",
@@ -241,10 +241,10 @@
 
 <section style="padding-top:44px;padding-bottom:44px">
   <div class="wrap rv" style="padding:24px;border:1px solid var(--line2);border-radius:16px;background:linear-gradient(135deg,rgba(57,192,255,.08),rgba(255,157,47,.05))">
-    <div class="eyebrow">New in v0.3.4</div>
-    <h2 style="font-size:clamp(24px,3vw,34px);margin-top:10px">Every click lands, and the app says what it is doing.</h2>
-    <p class="muted" style="margin:14px 0 0;max-width:72ch">The four first-run path fields now focus when you click their label, the tab strip reports which tab is current, and every message — including the first-run &ldquo;choose a model folder&rdquo; error — is announced instead of silent. Found by driving the real interface, not by reading the source.</p>
-    <p class="muted" style="margin:10px 0 0;max-width:72ch">Nothing about the engines changed in this release. The v0.3.3 ad-hoc bundle seal and the measured v0.3.2 gains remain: llama.cpp caps prompt cache RAM at 512 MiB and warms the exact tool schema only when enabled, cutting first visible tool TTFT from 23.36 s to 4.73 s without swap growth. Slipstream remains pure llama.cpp/PGRN + oMLX/PGRN with no Ollama runtime.</p>
+    <div class="eyebrow">New in v0.4.0</div>
+    <h2 style="font-size:clamp(24px,3vw,34px);margin-top:10px">A third faster, with every output token unchanged.</h2>
+    <p class="muted" style="margin:14px 0 0;max-width:72ch">Lookahead prefetch runs the next layer's router on the current layer's hidden state, so the experts it will ask for are already coming off the SSD while the current layer computes. It predicts 83% of them, and greedy output is byte-identical with it on or off: 7.8 → 10.3 tok/s at a 4 GiB cache, 13.1 → 17.5 at 10 GiB.</p>
+    <p class="muted" style="margin:10px 0 0;max-width:72ch">Turbo is opt-in: while generating, it nudges the router towards experts already in RAM or being prefetched. 14.5 tok/s at 4 GiB (+86%); the next token matches the unmodified model 93% of the time, and your prompt is always read exactly. The engine now sits on current upstream llama.cpp, and the app gets a live cockpit and a four-click first run. <a href="https://github.com/Schero94/slipstream/blob/main/docs/RELEASE_0.4.0.md" target="_blank" rel="noopener" style="color:var(--cyan)">Release notes →</a></p>
   </div>
 </section>
 
@@ -290,6 +290,14 @@
           <tr><td>2 GiB</td><td class="num">5.5 tok/s</td><td class="num">21%</td><td>16 GB Mac</td></tr>
           <tr><td>10 GiB</td><td class="num win">~13 tok/s</td><td class="num">78%</td><td>36 GB, interactive</td></tr>
           <tr><td>14 GiB</td><td class="num win">~19 tok/s</td><td class="num">86%</td><td>mostly-idle Mac</td></tr>
+        </tbody>
+      </table></div>
+      <div class="tbl-cap">v0.3.x numbers. v0.4.0, same model, the app's own server setup:</div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>RAM cache</th><th class="num">v0.3.5</th><th class="num">v0.4.0 lookahead (lossless)</th><th class="num">+ Turbo (opt-in)</th></tr></thead>
+        <tbody>
+          <tr><td>4 GiB</td><td class="num">7.8 tok/s</td><td class="num win">10.3 tok/s</td><td class="num win">14.5 tok/s</td></tr>
+          <tr><td>10 GiB</td><td class="num">13.1 tok/s</td><td class="num win">17.5 tok/s</td><td class="num win">19.6 tok/s</td></tr>
         </tbody>
       </table></div>
       <div class="tbl-cap">Prefill of a ~30k-token agent prompt: 75 → 208 tok/s (2.7×) with ubatch 2048 + parallel I/O threads.</div>

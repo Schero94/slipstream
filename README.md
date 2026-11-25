@@ -12,13 +12,15 @@ Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that 
 
 It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
-**New in v0.3.4:** the app shell is properly clickable and properly announced.
-The four first-run path fields had labels that were never associated with them,
-so they had no accessible name and clicking the visible label text did not focus
-the field. The tab strip had no tablist semantics, so eight tabs read as plain
-buttons with no current item. Every toast — including the first-run "choose a
-model folder" error — was silent for screen readers. All fixed. This is a
-usability and accessibility release; no engine or performance behaviour changed.
+**New in v0.4.0:** the streamed 35B decodes about a third faster without changing a single
+output token, and up to 86% faster with an opt-in Turbo mode. Lookahead prefetch reads the
+experts the next layer will need while the current layer computes; Turbo nudges the router,
+while generating, towards experts already in RAM. The engine is ported to current upstream
+llama.cpp (2677 commits newer), and the app gets a live engine cockpit and a four-click first
+run. Numbers below and in [`docs/RELEASE_0.4.0.md`](docs/RELEASE_0.4.0.md).
+
+In v0.3.4 the app shell became properly clickable and announced: labelled path fields,
+tablist semantics and spoken toasts.
 
 Since v0.3.3, the macOS app carries a complete ad-hoc bundle seal. This adds
 verifiable resource integrity while keeping the honest boundary: it is not an
@@ -56,7 +58,7 @@ Models that won't fit in your RAM become runnable. That's the entire pitch.
 
 ## Get started
 
-1. Download the latest `Slipstream_x.y.z_aarch64.dmg` from [Releases](https://github.com/Schero94/slipstream/releases/latest).
+1. Download the newest `Slipstream_x.y.z_aarch64.dmg` from [Releases](https://github.com/Schero94/slipstream/releases) (v0.4.0 is a source release for now; the newest bundle is 0.3.4, or build from source below).
 2. Drag `Slipstream.app` into Applications. The first launch needs right-click → Open, once, because the app isn't notarized yet.
 3. Open it. Slipstream detects your Mac and proposes settings for it: cache size, context and I/O threads derived from your RAM and core count. Click "Apply best".
 4. Pick a model from the dropdown and download it (with progress), then generate its PGRN sidecar. See *Compatible models* below.
@@ -85,14 +87,16 @@ Numbers from a 36 GB Apple-Silicon Mac, raw logs in [`bench/RESULTS.md`](bench/R
 
 Prefill of a large (~30k-token) coding-agent prompt goes from 75 to 208 tok/s, a 2.7x gain, with `ubatch 2048` and parallel I/O threads.
 
-#### Lookahead prefetch and Turbo (unreleased, branch `feat/fetch-wall`)
+#### Lookahead prefetch and Turbo (v0.4.0)
 
 Measured in the app's own setup (llama-server, greedy, GGUF and PGRN on the internal NVMe):
 
 | Cache | Before | Lookahead (lossless, default) | + Turbo (opt-in) |
 |------:|-------:|------------------------------:|-----------------:|
-| 4 GiB | 7.8 tok/s | 10.0 tok/s (+28%) | 13.7 tok/s (+75%) |
-| 10 GiB | 13.1 tok/s | 17.5 tok/s (+33%) | 19.6 tok/s (+49%) |
+| 4 GiB | 7.8 tok/s | 10.3 tok/s (+32%) | 14.5 tok/s (+86%) |
+| 10 GiB | 13.1 tok/s | 17.5 tok/s (+33%)\* | 19.6 tok/s (+49%)\* |
+
+\* measured on the previous llama.cpp base; v0.4.0's base adds another 3–7%.
 
 Lookahead runs the next layer's router on the current layer's hidden state, so the experts it
 will ask for are already being read from the SSD while the current layer computes. It predicts

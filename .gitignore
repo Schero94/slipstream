@@ -23,3 +23,5 @@ bench/fetchwall/results/*.log
 bench/fetchwall/results/*.log.out
 bench/fetchwall/results/*.bin
 bench/fetchwall/results/*.txt
+bench/fetchwall/results/*.json
+bench/fetchwall/results/oldpin/
