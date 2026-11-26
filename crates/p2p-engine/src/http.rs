@@ -139,31 +139,31 @@ pub fn http_chat_completions(
 ) -> JobResult {
     let url = chat_completions_url(endpoint);
     let body = build_chat_body(job);
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(connect_timeout)
-        .timeout_read(read_timeout)
-        .timeout_write(connect_timeout)
+    // ureq 3: `timeout_recv_response` covers time-to-headers, which for a
+    // non-streaming completion is the whole generation, so it takes the read
+    // budget (ureq 2's per-read `timeout_read`). Non-2xx statuses are returned
+    // as responses so the error body can be reported below.
+    let config = ureq::Agent::config_builder()
+        .timeout_connect(Some(connect_timeout))
+        .timeout_send_request(Some(connect_timeout))
+        .timeout_send_body(Some(connect_timeout))
+        .timeout_recv_response(Some(read_timeout))
+        .timeout_recv_body(Some(read_timeout))
+        .http_status_as_error(false)
         .build();
+    let agent: ureq::Agent = config.into();
 
     let mut req = agent
         .post(&url)
-        .set("Content-Type", "application/json")
-        .set("Accept", "application/json");
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json");
     if let Some(key) = api_key.filter(|k| !k.is_empty()) {
-        req = req.set("Authorization", &format!("Bearer {key}"));
+        req = req.header("Authorization", &format!("Bearer {key}"));
     }
 
-    let response = match req.send_json(body) {
+    let mut response = match req.send_json(body) {
         Ok(r) => r,
-        Err(ureq::Error::Status(code, r)) => {
-            let detail = r.into_string().unwrap_or_default();
-            let detail = truncate(&detail, 512);
-            return JobResult::failure(
-                &job.job_id,
-                format!("HTTP {code} from {url}: {detail}"),
-            );
-        }
-        Err(ureq::Error::Transport(t)) => {
+        Err(t) => {
             return JobResult::failure(
                 &job.job_id,
                 format!("HTTP transport error talking to {url}: {t}"),
@@ -171,9 +171,11 @@ pub fn http_chat_completions(
         }
     };
 
-    let status = response.status();
-    let text = match response.into_string() {
+    let status = response.status().as_u16();
+    let text = match response.body_mut().read_to_string() {
         Ok(t) => t,
+        // An unreadable error body still reports the HTTP status below.
+        Err(_) if !(200..300).contains(&status) => String::new(),
         Err(e) => {
             return JobResult::failure(
                 &job.job_id,
@@ -325,8 +327,10 @@ mod tests {
             );
             assert!(request.contains("\"stream\":false") || request.contains("\"stream\": false"));
             if let Some(ref auth) = expect_auth {
+                // Header names are case-insensitive (RFC 9110); ureq 3 sends them lowercase.
+                let wanted = format!("authorization: bearer {auth}").to_ascii_lowercase();
                 assert!(
-                    request.contains(&format!("Authorization: Bearer {auth}")),
+                    request.to_ascii_lowercase().contains(&wanted),
                     "missing auth in:\n{request}"
                 );
             }
