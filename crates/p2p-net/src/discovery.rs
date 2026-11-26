@@ -107,7 +107,7 @@ pub mod mdns {
     pub fn announce(instance: &str, port: u16, host_ipv4: &str) -> Result<ServiceDaemon, NetError> {
         let daemon = ServiceDaemon::new()
             .map_err(|e| NetError::protocol(format!("mdns daemon: {e}")))?;
-        let props = HashMap::new();
+        let props: HashMap<String, String> = HashMap::new();
         let info = ServiceInfo::new(
             SERVICE_TYPE,
             instance,
@@ -138,10 +138,10 @@ pub mod mdns {
                 Ok(event) => {
                     if let mdns_sd::ServiceEvent::ServiceResolved(info) = event {
                         let port = info.get_port();
+                        // mdns-sd 0.22 yields scoped IPs; drop the interface scope.
                         for ip in info.get_addresses() {
-                            if let Ok(addr) = format!("{ip}:{port}").parse::<SocketAddr>() {
-                                found.push(PeerAddr::with_label(addr, info.get_fullname()));
-                            }
+                            let addr = SocketAddr::new(ip.to_ip_addr(), port);
+                            found.push(PeerAddr::with_label(addr, info.get_fullname()));
                         }
                     }
                 }
