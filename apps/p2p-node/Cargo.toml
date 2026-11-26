@@ -44,7 +44,7 @@ tokio = { workspace = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
-libp2p = { version = "0.56", default-features = false, features = ["tokio", "quic", "request-response", "macros", "ed25519"] }
+libp2p = { version = "0.57", default-features = false, features = ["tokio", "quic", "request-response", "macros", "ed25519"] }
 
 [dev-dependencies]
 tempfile = "3"

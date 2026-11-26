@@ -6,9 +6,8 @@ license.workspace = true
 description = "Authenticated QUIC transport for the Slipstream community inference mesh"
 
 [dependencies]
-async-trait = "0.1"
 futures = "0.3"
-libp2p = { version = "0.56", default-features = false, features = ["tokio", "quic", "request-response", "macros", "ed25519"] }
+libp2p = { version = "0.57", default-features = false, features = ["tokio", "quic", "request-response", "macros", "ed25519"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]

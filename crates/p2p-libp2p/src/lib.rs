@@ -6,7 +6,6 @@ use std::convert::Infallible;
 use std::io;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{self, ProtocolSupport};
 use libp2p::swarm::NetworkBehaviour;
@@ -18,7 +17,6 @@ pub const MAX_MESH_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Debug, Clone, Default)]
 pub struct BoundedBytesCodec;
 
-#[async_trait]
 impl request_response::Codec for BoundedBytesCodec {
     type Protocol = StreamProtocol;
     type Request = Vec<u8>;
