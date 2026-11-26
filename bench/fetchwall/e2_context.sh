@@ -19,14 +19,28 @@ import json, sys, urllib.request
 pf, port, label, cram, stamp = sys.argv[1:6]
 A = open(pf).read()
 B = "<|im_start|>user\nWrite a five-word title for a chat about caching.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
-A2 = A.replace("<|im_end|>\n<|im_start|>assistant", "\nAlso list the three files you would change first.<|im_end|>\n<|im_start|>assistant", 1)
+import os
+if os.environ.get("E1_APPEND"):
+    # realistic agent turn: previous prompt + its answer + a new user message (append-only)
+    A2 = None
+else:
+    A2 = A.replace("<|im_end|>\n<|im_start|>assistant", "\nAlso list the three files you would change first.<|im_end|>\n<|im_start|>assistant", 1)
 def req(p, n):
     r = urllib.request.Request(f"http://127.0.0.1:{port}/completion", data=json.dumps(
         {"prompt": p, "n_predict": n, "temperature": 0, "seed": 1, "cache_prompt": True}).encode(),
         headers={"Content-Type": "application/json"})
     t = json.load(urllib.request.urlopen(r, timeout=3600))["timings"]
     return t["prompt_n"], t["prompt_ms"] / 1000, t.get("cache_n", 0)
-a = req(A, 8); b = req(B, 8); c = req(A2, 8)
+def req_full(p, n):
+    r = urllib.request.Request(f"http://127.0.0.1:{port}/completion", data=json.dumps(
+        {"prompt": p, "n_predict": n, "temperature": 0, "seed": 1, "cache_prompt": True}).encode(),
+        headers={"Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(r, timeout=3600))
+ra = req_full(A, 48); t = ra["timings"]; a = (t["prompt_n"], t["prompt_ms"] / 1000, t.get("cache_n", 0))
+b = req(B, 8)
+if A2 is None:
+    A2 = A + ra["content"] + "<|im_end|>\n<|im_start|>user\nGood. Now show the exact diff for the first file.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+c = req(A2, 8)
 print(f"{stamp}\te2\tlabel={label}\tcache_ram={cram}\tA_prompt_n={a[0]}\tA_ttft_s={a[1]:.1f}\tB_prompt_n={b[0]}\t"
       f"A2_prompt_n={c[0]}\tA2_cache_n={c[2]}\tA2_ttft_s={c[1]:.1f}")
 PY
