@@ -28,6 +28,9 @@ number on `bench/SCOREBOARD.md` without making another one worse.
    opt-in until the user decides), revert everything else. Record winners *and* losers in
    `bench/RESULTS.md`, update `bench/SCOREBOARD.md`, run `scripts/engine_sync.sh --verify`,
    commit locally on `feat/fetch-wall`.
+   If the win changes what a user notices, update the website (`docs/index.html`), README and
+   BENCHMARKS.md in plain language in the same change (rule in CLAUDE.md "Public docs in plain
+   language").
 9. **Learn** — add new ideas discovered along the way to the backlog with scores; put any
    lesson that should change future behaviour into `CLAUDE.md` (Lessons) or memory.
 10. **Report** in two or three German sentences: what was tried, the number, the verdict.

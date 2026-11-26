@@ -71,6 +71,25 @@ Annahme → Recherche (alphaxiv MCP, Colibrì-first per docs/COLIBRI_REFERENCE.m
 Plan → Umsetzung → Test → validate: keep only what wins under the rules above;
 revert the rest and record it as a negative.
 
+## Public docs in plain language (user rule, 2026-11-26)
+
+The website (`docs/index.html`, GitHub Pages), README.md and BENCHMARKS.md must always show
+the current state, understandable for a non-expert. A change is not done until they match.
+
+- **When:** every release, and every win kept on the scoreboard that changes what a user
+  feels (speed, first-answer time, RAM, new model, new setting). Update the page in the same
+  change, then merge to `main` so Pages redeploys, and check the live page.
+- **How to write it:** say what the user notices first ("the next answer starts in under a
+  second"), then the number, then the technical name in passing. Short sentences, no unexplained
+  jargon (explain "decode", "prefill", "cache", "MoE" in a few words or avoid them). Use
+  before → after tables with units, the machine and the model named.
+- **Honest:** only numbers recorded in `bench/RESULTS.md`, in the app regime; say what is
+  opt-in or lossy; keep losses and limits visible; remove or date stale claims (old cards,
+  "active research" text that is no longer true).
+- **Check:** after each release, read the whole page top to bottom as a newcomer: version in
+  the metadata, the "New in" box, the benchmark tables, the feature cards and the download link
+  all match the release notes.
+
 ## Repo hygiene
 
 - Work on `feat/fetch-wall`; merge to `main`, push and release autonomously only for verified
