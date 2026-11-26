@@ -182,3 +182,42 @@ e2 cram4096 rss_mb=16543 swap_delta_mb=0
 e2 e1-append-cram2048 rss_mb=16611 swap_delta_mb=0
 20261126-030159	e2	label=e1-append-cram512	cache_ram=512	A_prompt_n=39515	A_ttft_s=229.6	B_prompt_n=23	A2_prompt_n=39589	A2_cache_n=0	A2_ttft_s=229.0
 e2 e1-append-cram512 rss_mb=15645 swap_delta_mb=0
+20261126-032517	label=qwen-la0	cache=4	decode_tps=10.52	prefill_tps=20.57	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261126-032646	label=qwen-laoff	cache=4	decode_tps=6.70	prefill_tps=20.93	hit=68.89	la_recall=NA	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=-1
+20261126-032823	label=lfm25-laoff	cache=4	decode_tps=4.79	prefill_tps=15.72	hit=54.84	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=PGRN_LOOKAHEAD=-1
+20261126-033002	label=lfm25-la	cache=4	decode_tps=5.13	prefill_tps=16.31	hit=58.59	la_recall=80.26	swap_delta_mb=0	out=6020708e313f	env=
+20261126-033135	label=lfm25-laoff	cache=4	decode_tps=4.79	prefill_tps=16.33	hit=54.84	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=PGRN_LOOKAHEAD=-1
+20261126-033307	label=lfm25-la	cache=4	decode_tps=5.14	prefill_tps=16.26	hit=58.59	la_recall=80.26	swap_delta_mb=0	out=6020708e313f	env=
+20261126-033437	label=lfm25-laoff	cache=8	decode_tps=6.82	prefill_tps=16.25	hit=76.37	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=PGRN_LOOKAHEAD=-1
+20261126-033600	label=lfm25-la	cache=8	decode_tps=8.18	prefill_tps=16.22	hit=74.72	la_recall=80.26	swap_delta_mb=0	out=6020708e313f	env=
+20261126-033719	label=lfm25-laoff	cache=8	decode_tps=6.66	prefill_tps=16.26	hit=76.37	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=PGRN_LOOKAHEAD=-1
+20261126-033842	label=lfm25-la	cache=8	decode_tps=8.07	prefill_tps=16.26	hit=74.72	la_recall=80.26	swap_delta_mb=0	out=6020708e313f	env=
+20261126-041737	label=mellum-la	cache=1	decode_tps=7.42	prefill_tps=29.62	hit=51.23	la_recall=85.46	swap_delta_mb=0	out=510cfeccf6b9	env=
+20261126-041840	label=mellum-laoff	cache=1	decode_tps=10.15	prefill_tps=71.62	hit=53.55	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=PGRN_LOOKAHEAD=-1
+20261126-041933	label=mellum-la	cache=2	decode_tps=11.56	prefill_tps=70.78	hit=71.93	la_recall=85.46	swap_delta_mb=0	out=510cfeccf6b9	env=
+20261126-042024	label=mellum-laoff	cache=2	decode_tps=14.33	prefill_tps=72.07	hit=75.54	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=PGRN_LOOKAHEAD=-1
+20261126-042113	label=mellum-la	cache=8	decode_tps=23.36	prefill_tps=69.84	hit=95.52	la_recall=85.46	swap_delta_mb=0	out=510cfeccf6b9	env=
+20261126-042158	label=mellum-laoff	cache=8	decode_tps=24.32	prefill_tps=72.95	hit=95.74	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=PGRN_LOOKAHEAD=-1
+20261126-052234	e2	label=ship-ub2048-cram2048	cache_ram=2048	A_prompt_n=39515	A_ttft_s=229.8	B_prompt_n=23	A2_prompt_n=27	A2_cache_n=39562	A2_ttft_s=0.8	A2_out=9d136a64283d
+e2 ship-ub2048-cram2048 peak_rss_mb=16612 swap_delta_mb=0
+20261126-052754	e2	label=ship-ub4096-cram2048	cache_ram=2048	A_prompt_n=39515	A_ttft_s=181.3	B_prompt_n=23	A2_prompt_n=27	A2_cache_n=39562	A2_ttft_s=0.8	A2_out=9d136a64283d
+e2 ship-ub4096-cram2048 peak_rss_mb=16953 swap_delta_mb=0
+20261126-053226	e2	label=ship-ub2048-cram2048	cache_ram=2048	A_prompt_n=39515	A_ttft_s=229.4	B_prompt_n=23	A2_prompt_n=27	A2_cache_n=39562	A2_ttft_s=0.8	A2_out=9d136a64283d
+e2 ship-ub2048-cram2048 peak_rss_mb=16608 swap_delta_mb=0
+20261126-053746	e2	label=ship-ub4096-cram2048	cache_ram=2048	A_prompt_n=39515	A_ttft_s=181.6	B_prompt_n=23	A2_prompt_n=27	A2_cache_n=39562	A2_ttft_s=0.8	A2_out=9d136a64283d
+e2 ship-ub4096-cram2048 peak_rss_mb=16954 swap_delta_mb=0
+20261126-055003	label=qwen-la0	cache=4	decode_tps=10.59	prefill_tps=20.95	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261126-055134	label=mellum-laoff	cache=1	decode_tps=9.00	prefill_tps=38.31	hit=53.55	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=PGRN_LOOKAHEAD=-1
+20261126-055232	label=mellum-la	cache=1	decode_tps=10.20	prefill_tps=69.64	hit=53.55	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=
+20261126-055324	label=mellum-laoff	cache=1	decode_tps=10.13	prefill_tps=70.77	hit=53.55	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=PGRN_LOOKAHEAD=-1
+20261126-055416	label=mellum-la	cache=1	decode_tps=10.15	prefill_tps=69.53	hit=53.55	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=
+20261126-055509	label=mellum-laoff	cache=2	decode_tps=13.29	prefill_tps=71.04	hit=75.54	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=PGRN_LOOKAHEAD=-1
+20261126-055559	label=mellum-la	cache=2	decode_tps=13.57	prefill_tps=71.39	hit=75.54	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=
+20261126-055648	label=mellum-laoff	cache=2	decode_tps=13.41	prefill_tps=71.05	hit=75.54	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=PGRN_LOOKAHEAD=-1
+20261126-055736	label=mellum-la	cache=2	decode_tps=13.57	prefill_tps=73.04	hit=75.54	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=
+20261126-055825	label=mellum-laoff	cache=8	decode_tps=24.15	prefill_tps=65.85	hit=95.74	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=PGRN_LOOKAHEAD=-1
+20261126-055908	label=mellum-la	cache=8	decode_tps=22.39	prefill_tps=69.89	hit=95.52	la_recall=85.46	swap_delta_mb=0	out=510cfeccf6b9	env=
+20261126-055953	label=mellum-laoff	cache=8	decode_tps=24.23	prefill_tps=68.25	hit=95.74	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=PGRN_LOOKAHEAD=-1
+20261126-060036	label=mellum-la	cache=8	decode_tps=23.84	prefill_tps=70.09	hit=95.52	la_recall=85.46	swap_delta_mb=0	out=510cfeccf6b9	env=
+20261126-060127	srv	label=lm-off-ub2048	cache=4	decode_tps=7.67	prompt_n=39515	ttft_s=235.2	prefill_tps=168.0	draft_acc=None/None	swap_delta_mb=0	out=54edf738c5a8	env=
+20261126-061042	srv	label=lm-on-ub2048	cache=4	decode_tps=7.72	prompt_n=39515	ttft_s=236.3	prefill_tps=167.2	draft_acc=None/None	swap_delta_mb=0	out=54edf738c5a8	env=PGRN_LAYER_MAJOR=1

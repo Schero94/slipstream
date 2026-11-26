@@ -586,8 +586,12 @@ int main(int argc, char ** argv) {
                 return fail("tensor %s is not stacked by expert_count=%" PRIu64, name, expert_count);
             }
             const uint32_t type = (uint32_t)t->type;
-            // F32, F16, Q4_K, Q5_K, Q6_K — byte-preserving, never transcoded
-            if (!(type == 0 || type == 1 || type == 12 || type == 13 || type == 14)) {
+            // byte-preserving, never transcoded: F32, F16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q4_K, Q5_K, Q6_K.
+            // Legacy quants appear for down_exps when n_ff_exp is not a multiple of 256 (K-quant
+            // block size), e.g. Mellum2.1, Gemma-4, Inkling-2; the runtime only requires that PGRN
+            // and GGUF expert types match.
+            if (!(type == 0 || type == 1 || type == 2 || type == 3 || type == 6 || type == 7 || type == 8 ||
+                  type == 12 || type == 13 || type == 14)) {
                 return fail("unsupported expert GGML type %u in %s", type, name);
             }
             const uint64_t nbytes = (uint64_t)ggml_nbytes(t);

@@ -17,6 +17,11 @@ struct pgr_scratch {
     ggml_backend_buffer_t buffer = nullptr;
     size_t bytes = 0;
     std::vector<pgr_scratch_layer> layers;
+    // layer-major hold
+    int32_t held_layer = -1;
+    std::vector<uint8_t> held;          // [expert] = 1 once uploaded in this hold epoch
+    std::vector<int32_t> held_pending;  // reusable list of the experts still to upload
+    size_t skips = 0;
 };
 
 static int pgr_scratch_fail(char * error, size_t capacity, const char * message) {
@@ -180,10 +185,55 @@ int pgr_scratch_stage(
         size_t error_capacity) {
     pgr_scratch_layer * found = pgr_scratch_find(scratch, layer);
     if (!found) return pgr_scratch_fail(error, error_capacity, "selected layer is absent from scratch directory");
-    return pgr_stage_selected(runtime, layer, expert_ids, expert_id_count,
-            found->tensor[PGR_SCRATCH_GATE], found->tensor[PGR_SCRATCH_UP], found->tensor[PGR_SCRATCH_DOWN],
-            stats, error, error_capacity);
+    if (scratch->held_layer >= 0 && scratch->held_layer != (int32_t) layer) {
+        // another layer overwrites the shared regions: whatever was held is gone
+        scratch->held_layer = -1;
+        scratch->held.clear();
+    }
+    if (scratch->held_layer < 0 || !expert_ids) {
+        return pgr_stage_selected(runtime, layer, expert_ids, expert_id_count,
+                found->tensor[PGR_SCRATCH_GATE], found->tensor[PGR_SCRATCH_UP], found->tensor[PGR_SCRATCH_DOWN],
+                stats, error, error_capacity);
+    }
+    const int64_t n_expert = found->tensor[PGR_SCRATCH_GATE]->ne[2];
+    if ((int64_t) scratch->held.size() != n_expert) scratch->held.assign((size_t) n_expert, 0);
+    auto & pending = scratch->held_pending;
+    pending.clear();
+    size_t skipped = 0;
+    for (size_t i = 0; i < expert_id_count; ++i) {
+        const int32_t id = expert_ids[i];
+        if (id < 0 || (int64_t) id >= n_expert) {
+            pending.push_back(id);   // let pgr_stage_selected report the invalid id
+            continue;
+        }
+        if (scratch->held[(size_t) id] == 1) { ++skipped; continue; }   // held, or already queued below
+        scratch->held[(size_t) id] = 1;
+        pending.push_back(id);
+    }
+    if (stats) *stats = pgr_stage_stats{};
+    int result = 0;
+    if (!pending.empty()) {
+        result = pgr_stage_selected(runtime, layer, pending.data(), pending.size(),
+                found->tensor[PGR_SCRATCH_GATE], found->tensor[PGR_SCRATCH_UP], found->tensor[PGR_SCRATCH_DOWN],
+                stats, error, error_capacity);
+    }
+    if (result != 0) {
+        // nothing staged in this call can be trusted: drop the hold
+        scratch->held_layer = -1;
+        scratch->held.clear();
+        return result;
+    }
+    scratch->skips += skipped;
+    return 0;
 }
+
+void pgr_scratch_hold(pgr_scratch * scratch, int32_t layer) {
+    if (!scratch) return;
+    scratch->held_layer = layer;   // a new epoch, also for the same layer
+    scratch->held.clear();
+}
+
+size_t pgr_scratch_held_skips(const pgr_scratch * scratch) { return scratch ? scratch->skips : 0; }
 
 size_t pgr_scratch_bytes(const pgr_scratch * scratch) { return scratch ? scratch->bytes : 0; }
 size_t pgr_scratch_layers(const pgr_scratch * scratch) { return scratch ? scratch->layers.size() : 0; }

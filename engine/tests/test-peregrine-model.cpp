@@ -1,9 +1,17 @@
 #include "common.h"
 #include "llama.h"
 #include "llama-model.h"
+#include "llama-context.h"
+#include "llama-batch.h"
+#include "llama-kv-cache.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-recurrent.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
+#include <fstream>
+#include <sstream>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -206,6 +214,279 @@ static decode_result decode(const char * gguf, const char * pgrn, bool mtp, bool
     return result;
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Slipstream layer-major prefill tests
+// ---------------------------------------------------------------------------------------------------------
+
+static std::vector<llama_token> lm_fixture_tokens(int n, int n_vocab) {
+    std::vector<llama_token> tokens((size_t) n);
+    for (int i = 0; i < n; ++i) tokens[(size_t) i] = 1 + (i * 7 + 3) % (n_vocab - 1);
+    return tokens;
+}
+
+static std::vector<uint8_t> lm_state(llama_context * ctx) {
+    std::vector<uint8_t> state(llama_state_get_size(ctx));
+    const size_t n = llama_state_get_data(ctx, state.data(), state.size());
+    state.resize(n);
+    return state;
+}
+
+// M1: init a multi-ubatch batch, apply all, rewind, apply all again. The memory metadata (serialized with the
+// state; apply() never touches tensor data) and the per-ubatch memory inputs must be identical in both rounds,
+// and a final rewind must restore the pre-batch state.
+static void lm_rewind_test(llama_context * ctx, const llama_model * model, int n_prompt, uint32_t n_ubatch) {
+    llama_memory_clear(llama_get_memory(ctx), true);
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+
+    // a short prefix first, so the batch starts on a non-empty memory (recurrent src cells, KV head)
+    {
+        common_batch prefix(ctx);
+        for (int i = 0; i < 3; ++i) prefix.add(1 + i, i, 0, i == 2);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, prefix.get()) != 0) throw std::runtime_error("prefix decode failed");
+    }
+    const std::vector<uint8_t> state0 = lm_state(ctx);
+
+    common_batch batch(ctx);
+    const auto tokens = lm_fixture_tokens(n_prompt, n_vocab);
+    for (int i = 0; i < n_prompt; ++i) batch.add(tokens[(size_t) i], 3 + i, 0, true);
+
+    llama_batch_allocr balloc(model->hparams.n_pos_per_embd());
+    if (!balloc.init(*batch.get(), model->vocab, false)) throw std::runtime_error("balloc init failed");
+    llama_memory_i * mem = llama_get_memory(ctx);
+    auto mctx = mem->init_batch(balloc, n_ubatch, false);
+    if (!mctx || mctx->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) throw std::runtime_error("init_batch failed");
+    if (!mctx->lm_supported()) throw std::runtime_error("memory context does not support layer-major rewind");
+    auto * hctx = dynamic_cast<llama_memory_hybrid_context *>(mctx.get());
+    if (!hctx) throw std::runtime_error("expected a hybrid memory context");
+
+    struct inputs { uint32_t n_kv, n_kv_rows, n_rs, head; int32_t rs_z; std::vector<int32_t> s_copy; };
+    auto round = [&](std::vector<inputs> & out) {
+        do {
+            if (!mctx->apply()) throw std::runtime_error("apply failed");
+            inputs in{};
+            in.n_kv      = hctx->get_attn()->get_n_kv();
+            in.n_kv_rows = hctx->get_attn()->get_n_kv_rows();
+            in.n_rs      = hctx->get_recr()->get_n_rs();
+            in.head      = hctx->get_recr()->get_head();
+            in.rs_z      = hctx->get_recr()->get_rs_z();
+            for (uint32_t i = 0; i < in.n_rs; ++i) in.s_copy.push_back(hctx->get_recr()->s_copy((int) i));
+            out.push_back(std::move(in));
+        } while (mctx->next());
+    };
+
+    mctx->lm_snapshot();
+    std::vector<inputs> r1, r2, r3;
+    round(r1);
+    const std::vector<uint8_t> state1 = lm_state(ctx);
+    mctx->lm_rewind();
+    const std::vector<uint8_t> state_rw = lm_state(ctx);
+    round(r2);
+    const std::vector<uint8_t> state2 = lm_state(ctx);
+    mctx->lm_rewind();
+    round(r3);
+    const std::vector<uint8_t> state3 = lm_state(ctx);
+
+    if (r1.size() < 2) throw std::runtime_error("rewind test needs at least two ubatches");
+    auto same = [](const std::vector<inputs> & a, const std::vector<inputs> & b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (a[i].n_kv != b[i].n_kv || a[i].n_kv_rows != b[i].n_kv_rows || a[i].n_rs != b[i].n_rs ||
+                    a[i].head != b[i].head || a[i].rs_z != b[i].rs_z || a[i].s_copy != b[i].s_copy) return false;
+        }
+        return true;
+    };
+    if (!same(r1, r2) || !same(r1, r3)) throw std::runtime_error("per-ubatch memory inputs differ after rewind");
+    if (state1 != state2 || state1 != state3) throw std::runtime_error("memory metadata differs after rewind + re-apply");
+    if (state_rw != state0) throw std::runtime_error("rewind did not restore the pre-batch memory metadata");
+    if (state1 == state0) throw std::runtime_error("apply did not change the memory metadata (test is vacuous)");
+    std::printf("PGR_LM_REWIND_OK ubatches=%zu n_kv_first=%u n_kv_last=%u state_bytes=%zu\n",
+            r1.size(), r1.front().n_kv, r1.back().n_kv, state1.size());
+    mctx.reset();
+    llama_memory_clear(llama_get_memory(ctx), true);
+}
+
+struct lm_run {
+    std::vector<float> prompt_logits;
+    std::vector<float> follow_logits;
+    std::vector<uint8_t> state;
+    uint64_t staged = 0, uploaded = 0, lm_decodes = 0, lm_passes = 0, skips = 0;
+};
+
+static lm_run lm_decode(llama_context * ctx, const llama_model * model, bool layer_major, int n_prompt) {
+    llama_memory_clear(llama_get_memory(ctx), true);
+    if (!ctx->set_layer_major(layer_major)) throw std::runtime_error("set_layer_major failed");
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const auto tokens = lm_fixture_tokens(n_prompt, n_vocab);
+    lm_run run;
+    const llama_perf_context_data p0 = llama_perf_context(ctx);
+    {
+        common_batch prompt(ctx);
+        for (int i = 0; i < n_prompt; ++i) prompt.add(tokens[(size_t) i], i, 0, true);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, prompt.get()) != 0) throw std::runtime_error("prompt decode failed");
+    }
+    const llama_perf_context_data p1 = llama_perf_context(ctx);
+    for (int i = 0; i < n_prompt; ++i) {
+        const float * logits = llama_get_logits_ith(ctx, i);
+        run.prompt_logits.insert(run.prompt_logits.end(), logits, logits + n_vocab);
+    }
+    run.state = lm_state(ctx);
+    {
+        common_batch next(ctx);
+        next.add(5, n_prompt, 0, true);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, next.get()) != 0) throw std::runtime_error("follow-up decode failed");
+        const float * logits = llama_get_logits_ith(ctx, 0);
+        run.follow_logits.assign(logits, logits + n_vocab);
+    }
+    run.staged     = p1.pgrn_experts_staged - p0.pgrn_experts_staged;
+    run.uploaded   = p1.pgrn_bytes_uploaded - p0.pgrn_bytes_uploaded;
+    run.lm_decodes = p1.pgrn_lm_decodes - p0.pgrn_lm_decodes;
+    run.lm_passes  = p1.pgrn_lm_passes - p0.pgrn_lm_passes;
+    run.skips      = p1.pgrn_lm_held_skips - p0.pgrn_lm_held_skips;
+    return run;
+}
+
+static bool lm_bitwise(const std::vector<float> & a, const std::vector<float> & b) {
+    return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
+}
+
+static double lm_max_abs(const std::vector<float> & a, const std::vector<float> & b) {
+    double m = a.size() == b.size() ? 0.0 : INFINITY;
+    for (size_t i = 0; i < a.size() && i < b.size(); ++i) m = std::max(m, std::fabs((double) a[i] - b[i]));
+    return m;
+}
+
+// T1: normal vs layer-major prefill on the fixture, resident and streamed, every token an output
+static int layer_major_fixture(const char * gguf, const char * pgrn, bool gpu) {
+    const int n_prompt = 23;          // n_ubatch 4 -> 6 ubatches, ragged last one
+    const uint32_t n_ubatch = 4;
+    lm_run res_n, res_l, str_n, str_l;
+    int n_attn = 0, n_recr = 0;
+    for (int streamed = 0; streamed < 2; ++streamed) {
+        llama_model_params mp = llama_model_default_params();
+        mp.load_mode = streamed ? LLAMA_LOAD_MODE_NONE : LLAMA_LOAD_MODE_MMAP;
+        mp.load_mtp = true;
+        if (gpu) mp.n_gpu_layers = 99;
+        if (streamed) {
+            mp.pgrn_path = pgrn;
+            mp.pgrn_cache_bytes = 3ULL * 1179648ULL;
+            mp.pgrn_headroom_bytes = 1ULL * 1024ULL * 1024ULL * 1024ULL;
+        }
+        llama_model_ptr model(llama_model_load_from_file(gguf, mp));
+        if (!model) throw std::runtime_error("model load failed");
+        if (streamed && !model->pgrn_enabled()) throw std::runtime_error("PGRN runtime was not enabled");
+        if (!model->supports_layer_range()) throw std::runtime_error("arch has no layer-range graph");
+        n_attn = n_recr = 0;
+        for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) (model->hparams.is_recr(il) ? n_recr : n_attn)++;
+        if (n_attn == 0 || n_recr == 0) throw std::runtime_error("fixture must cover attention and recurrent layers");
+        llama_context_params cp = llama_context_default_params();
+        cp.n_ctx = 64;
+        cp.n_batch = 32;
+        cp.n_ubatch = n_ubatch;
+        cp.n_threads = 4;
+        cp.n_threads_batch = 4;
+        llama_context_ptr ctx(llama_init_from_model(model.get(), cp));
+        if (!ctx) throw std::runtime_error("context creation failed");
+        if (!streamed) lm_rewind_test(ctx.get(), model.get(), n_prompt, n_ubatch);
+        lm_run & n = streamed ? str_n : res_n;
+        lm_run & l = streamed ? str_l : res_l;
+        n = lm_decode(ctx.get(), model.get(), false, n_prompt);
+        l = lm_decode(ctx.get(), model.get(), true, n_prompt);
+        if (n.lm_decodes != 0 || l.lm_decodes != 1) throw std::runtime_error("layer-major path did not run exactly once");
+        if (l.lm_passes != model->hparams.n_layer() - 1) throw std::runtime_error("unexpected number of layer passes");
+    }
+    struct check { const char * what; bool ok; };
+    const check checks[] = {
+        { "resident prompt logits",  lm_bitwise(res_n.prompt_logits, res_l.prompt_logits) },
+        { "resident follow logits",  lm_bitwise(res_n.follow_logits, res_l.follow_logits) },
+        { "resident memory state",   res_n.state == res_l.state },
+        { "streamed prompt logits",  lm_bitwise(str_n.prompt_logits, str_l.prompt_logits) },
+        { "streamed follow logits",  lm_bitwise(str_n.follow_logits, str_l.follow_logits) },
+        { "streamed memory state",   str_n.state == str_l.state },
+        { "staged(LM) <= staged(normal)", str_l.staged <= str_n.staged },
+        { "held skips > 0",          str_l.skips > 0 },
+    };
+    bool ok = true;
+    for (const auto & c : checks) {
+        if (!c.ok) { std::fprintf(stderr, "PGR_LM_CHECK_FAIL: %s\n", c.what); ok = false; }
+    }
+    const double res_vs_str = lm_max_abs(res_l.prompt_logits, str_l.prompt_logits);
+    std::printf("PGR_MODEL_PARITY_OK mode=layer_major device=%s layers=%d attn=%d recr=%d prompt=%d ubatch=%u "
+                "max_abs=%.9g max_abs_follow=%.9g resident_vs_streamed=%.9g staged_normal=%llu staged_lm=%llu "
+                "held_skips=%llu bitwise=%s\n",
+        gpu ? "gpu" : "default", n_attn + n_recr, n_attn, n_recr, n_prompt, n_ubatch,
+        std::max(lm_max_abs(res_n.prompt_logits, res_l.prompt_logits), lm_max_abs(str_n.prompt_logits, str_l.prompt_logits)),
+        std::max(lm_max_abs(res_n.follow_logits, res_l.follow_logits), lm_max_abs(str_n.follow_logits, str_l.follow_logits)),
+        res_vs_str, (unsigned long long) str_n.staged, (unsigned long long) str_l.staged,
+        (unsigned long long) str_l.skips, ok ? "yes" : "no");
+    return ok && res_vs_str == 0.0 ? 0 : 1;
+}
+
+// T3: the real model, one long prompt decoded in ONE decode call with layer-major off, then on, in the same
+// context; last-token logits compared bitwise plus a greedy continuation
+static int layer_major_file(const char * gguf, const char * pgrn, const char * prompt_file, int n_ctx, int n_ubatch,
+        uint64_t cache_bytes, int n_gen) {
+    using clock = std::chrono::steady_clock;
+    llama_model_params mp = llama_model_default_params();
+    mp.load_mode = LLAMA_LOAD_MODE_NONE;
+    mp.n_gpu_layers = 99;
+    mp.pgrn_path = pgrn;
+    mp.pgrn_cache_bytes = cache_bytes;
+    mp.pgrn_io_threads = 8;
+    llama_model_ptr model(llama_model_load_from_file(gguf, mp));
+    if (!model || !model->pgrn_enabled()) throw std::runtime_error("PGRN model load failed");
+    std::ifstream in(prompt_file);
+    if (!in) throw std::runtime_error("cannot read the prompt file");
+    std::stringstream ss; ss << in.rdbuf();
+    const auto tokens = common_tokenize(llama_model_get_vocab(model.get()), ss.str(), true, true);
+    if ((int) tokens.size() + n_gen > n_ctx) throw std::runtime_error("prompt does not fit the context");
+    llama_context_params cp = llama_context_default_params();
+    cp.n_ctx = n_ctx;
+    cp.n_batch = n_ctx;
+    cp.n_ubatch = n_ubatch;
+    llama_context_ptr ctx(llama_init_from_model(model.get(), cp));
+    if (!ctx) throw std::runtime_error("context creation failed");
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
+    struct out { std::vector<float> last; std::vector<llama_token> gen; double prompt_s; uint64_t staged, uploaded, skips; };
+    auto run = [&](bool lm) {
+        llama_memory_clear(llama_get_memory(ctx.get()), true);
+        if (!ctx->set_layer_major(lm)) throw std::runtime_error("set_layer_major failed");
+        out o{};
+        const auto p0 = llama_perf_context(ctx.get());
+        common_batch batch(ctx.get());
+        for (size_t i = 0; i < tokens.size(); ++i) batch.add(tokens[i], (llama_pos) i, 0, i + 1 == tokens.size());
+        const auto t0 = clock::now();
+        if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) throw std::runtime_error("prompt decode failed");
+        const float * logits = llama_get_logits_ith(ctx.get(), -1);
+        o.last.assign(logits, logits + n_vocab);
+        o.prompt_s = std::chrono::duration<double>(clock::now() - t0).count();
+        const auto p1 = llama_perf_context(ctx.get());
+        if (lm && p1.pgrn_lm_decodes != p0.pgrn_lm_decodes + 1) throw std::runtime_error("layer-major path did not run");
+        o.staged = p1.pgrn_experts_staged - p0.pgrn_experts_staged;
+        o.uploaded = p1.pgrn_bytes_uploaded - p0.pgrn_bytes_uploaded;
+        o.skips = p1.pgrn_lm_held_skips - p0.pgrn_lm_held_skips;
+        llama_token tok = (llama_token) (std::max_element(o.last.begin(), o.last.end()) - o.last.begin());
+        for (int g = 0; g < n_gen; ++g) {
+            o.gen.push_back(tok);
+            common_batch next(ctx.get());
+            next.add(tok, (llama_pos) (tokens.size() + g), 0, true);
+            if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, next.get()) != 0) throw std::runtime_error("generation failed");
+            const float * l = llama_get_logits_ith(ctx.get(), -1);
+            tok = (llama_token) (std::max_element(l, l + n_vocab) - l);
+        }
+        return o;
+    };
+    const out a = run(false);
+    const out b = run(true);
+    const bool bitwise = lm_bitwise(a.last, b.last);
+    const bool same_gen = a.gen == b.gen;
+    std::printf("PGR_LM_FILE tokens=%zu ubatch=%d cache_gib=%.2f bitwise_last_logits=%s max_abs=%.9g greedy_%d_equal=%s "
+                "normal_prompt_s=%.2f lm_prompt_s=%.2f normal_staged=%llu lm_staged=%llu normal_mib=%.0f lm_mib=%.0f held_skips=%llu\n",
+        tokens.size(), n_ubatch, cache_bytes / 1073741824.0, bitwise ? "yes" : "no", lm_max_abs(a.last, b.last), n_gen,
+        same_gen ? "yes" : "no", a.prompt_s, b.prompt_s, (unsigned long long) a.staged, (unsigned long long) b.staged,
+        a.uploaded / 1048576.0, b.uploaded / 1048576.0, (unsigned long long) b.skips);
+    return bitwise && same_gen ? 0 : 1;
+}
+
 int main(int argc, char ** argv) {
     if (argc == 7 && std::string(argv[3]) == "--stream-only") {
         common_init();
@@ -216,6 +497,27 @@ int main(int argc, char ** argv) {
             return 0;
         } catch (const std::exception & error) {
             std::fprintf(stderr, "PGR_REAL_STREAM_FAIL: %s\n", error.what());
+            return 1;
+        }
+    }
+    if (argc >= 4 && std::string(argv[3]) == "--layer-major") {
+        common_init();
+        try {
+            const bool gpu = argc >= 5 && std::string(argv[4]) == "--gpu";
+            return layer_major_fixture(argv[1], argv[2], gpu);
+        } catch (const std::exception & error) {
+            std::fprintf(stderr, "PGR_MODEL_PARITY_FAIL: %s\n", error.what());
+            return 1;
+        }
+    }
+    if (argc >= 9 && std::string(argv[3]) == "--layer-major-file") {
+        // MODEL.gguf MODEL.pgrn --layer-major-file PROMPT CTX UBATCH CACHE_GIB NGEN
+        common_init();
+        try {
+            return layer_major_file(argv[1], argv[2], argv[4], std::atoi(argv[5]), std::atoi(argv[6]),
+                    gibibytes(argv[7]), std::atoi(argv[8]));
+        } catch (const std::exception & error) {
+            std::fprintf(stderr, "PGR_LM_FILE_FAIL: %s\n", error.what());
             return 1;
         }
     }

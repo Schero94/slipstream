@@ -31,6 +31,12 @@ int pgr_scratch_stage(
         char * error,
         size_t error_capacity);
 
+/* Layer-major hold: while the held layer is L, the scratch remembers which experts of L it holds and
+ * pgr_scratch_stage uploads only the missing ones (the others are counted as held skips). Staging any
+ * other layer, or hold(-1), clears the hold, which keeps the normal path unchanged. */
+void pgr_scratch_hold(pgr_scratch * scratch, int32_t layer);
+size_t pgr_scratch_held_skips(const pgr_scratch * scratch);
+
 size_t pgr_scratch_bytes(const pgr_scratch * scratch);
 size_t pgr_scratch_layers(const pgr_scratch * scratch);
 struct ggml_tensor * pgr_scratch_tensor(const pgr_scratch * scratch, uint16_t layer, int role);

@@ -98,6 +98,21 @@ def main() -> int:
                 )
             proofs.append(compact_parity.stdout.strip())
 
+        # layer-major prefill: normal vs layer-major bitwise, resident and streamed, CPU and Metal
+        for lm_args, expected_device in ((["--layer-major"], "default"), (["--layer-major", "--gpu"], "gpu")):
+            lm_parity = run([str(args.driver), str(q35_gguf), str(q35_pgrn), *lm_args], cwd=args.repo_root)
+            if (
+                "PGR_LM_REWIND_OK" not in lm_parity.stdout
+                or "mode=layer_major" not in lm_parity.stdout
+                or f"device={expected_device}" not in lm_parity.stdout
+                or "bitwise=yes" not in lm_parity.stdout
+                or "max_abs=0 " not in lm_parity.stdout
+            ):
+                raise RuntimeError(
+                    f"layer-major parity proof missing:\n{lm_parity.stdout}\n{lm_parity.stderr}"
+                )
+            proofs.append(lm_parity.stdout.strip())
+
         mtp_parity = run([str(args.driver), str(q35_gguf), str(q35_pgrn), "--mtp"], cwd=args.repo_root)
         if "mode=mtp" not in mtp_parity.stdout or "nmse=0" not in mtp_parity.stdout:
             raise RuntimeError(f"MTP parity proof missing:\n{mtp_parity.stdout}\n{mtp_parity.stderr}")

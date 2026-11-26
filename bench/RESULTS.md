@@ -3655,3 +3655,37 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   decode after the prompt 4 GiB 7.74/7.?? warm vs 7.87/7.86 cold (+~1.6 %); 10 GiB 12.47 vs
   12.56 (+0.7 %). Hypothesis (≥ 10 %) not met → code removed. The slower decode after a 40k
   prompt (12.5 vs 17.5 tok/s @10 GiB) is attention over the long context, not cache pollution.
+
+## Ship check of the new app defaults (critic follow-up) — PASS — 2026-11-26
+
+- llama-server, cache 10 GiB, ctx 40960, -fa on, --jinja, --cache-ram 2048, append-only
+  follow-up (E1), 2 interleaved reps per ubatch, peak RSS sampled every 1 s:
+
+  | ubatch | A TTFT (39.5k) | follow-up recomputed | follow-up TTFT | peak RSS | swap |
+  |---|---|---|---|---|---|
+  | 2048 | 229.8 / 229.4 s | 27 tokens | 0.8 / 0.8 s | 16.61 GB | 0 MB |
+  | 4096 | 181.3 / 181.6 s | 27 tokens | 0.8 / 0.8 s | 16.95 GB | 0 MB |
+
+- Output identity: the reused follow-up (64 tokens) hashes `9d136a64283d` in all four runs and
+  equals a fresh prefill of the same prompt with --cache-ram 0 (`9d136a64283d`).
+- ubatch 4096 costs +340 MB peak RSS here (not ~2 GiB as feared); the app also budgets it.
+
+## Engine: lookahead + Turbo for all MoE archs, capacity guard, whitelist, layer-major — 2026-11-26
+
+- ctest peregrine 14/14 (incl. the new layer-major parity fixture). Qwen3.6 lossless path
+  unchanged (e6c6a36552db, 10.59 tok/s, recall 82.9 %).
+- LFM2.5-24B-A2B (lfm2moe, first non-Qwen MoE): lookahead active after the ordering fix
+  (router depends on the lookahead node, +0 exact), recall 80 %: 4 GiB 4.79 → 5.13 tok/s
+  (+7 %), 8 GiB 6.74 → 8.12 (+20 %), identical output.
+- Mellum2.1-12B-A2.5B (JetBrains; needs the widened converter whitelist — down_exps Q8_0/Q5_0):
+  converts (1792 experts, 7.4 GB) and streams losslessly. Lookahead hurt small caches
+  (−27 / −19 % at 1 / 2 GiB) → guard: lookahead only if the next layer's partition holds
+  ≥ 4× top-k. With the guard: 1 GiB 10.13 → 10.18, 2 GiB 13.35 → 13.57 (neutral);
+  8 GiB 24.19 → 23.12 (−4 %, nearly fully cached; a "layer fully resident" guard follows).
+- Layer-major prefill (feat/layer-major, docs/plans/2026-11-26-layer-major-prefill.md):
+  server 39.5k prompt, ub 2048, -b 40960, interleaved: 235.0/234.7 → 134.0/134.4 s @4 GiB
+  (−43 %), 228.9/228.6 → 132.8/132.8 s @10 GiB; fetch 102 → 6 s; experts staged 188,819 →
+  9,967; logits/state bit-identical on the fixture, last-token logits + hashes on the real
+  model. Critic: holds with caveats (fixture lacks a middle-layer graph, non-empty-memory
+  parity untested, Turbo must be off in lm mode, lm_resid unbudgeted, not cancellable) →
+  shipped OPT-IN (PGRN_LAYER_MAJOR=1), default after those follow-ups.
