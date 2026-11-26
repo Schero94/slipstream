@@ -3620,3 +3620,32 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   (backlog E1). Prompt reuse is exact KV/state reuse (lossless by construction); an explicit
   output-identity check is queued.
 - App default changed to `--cache-ram 2048`.
+
+## E1: realistic agent follow-up turn — 0.8 s with `--cache-ram 2048` — 2026-11-26
+
+- Same server/settings as E2, but the follow-up is append-only like a real agent turn:
+  A (39,515 tokens) + its answer + a new user message, after an interleaved 23-token request.
+
+  | --cache-ram | A2 tokens recomputed | A2 from cache | **A2 TTFT** |
+  |---|---|---|---|
+  | 512 MiB (old default) | 39,589 | 0 | 229.0 s |
+  | **2048 MiB (new default)** | **27** | 39,562 | **0.8 s** |
+
+- Scoreboard target 1b (< 3 s) met. Prompt reuse is exact KV/state reuse.
+
+## Shared lookahead/Turbo move — check — 2026-11-26
+
+- ctest 14/14. Qwen3.6: lossless path unchanged (hash e6c6a36552db, 10.55 tok/s, recall 82.9 %).
+  Turbo via the shared build_moe_ffn: decode KLD 0.0199 / same top-1 92.5 % / PPL 0.998 —
+  identical quality to the qwen35moe-specific version (output hash differs on a near tie).
+- LFM2.5 (lfm2moe): the lookahead node is built (PGRN_DEBUG), but recall stays NA — without
+  compact slots the top-k callback can come before the (independent) lookahead node in the
+  Metal-optimized node order, so the prediction is never read. Fix in progress: data
+  dependency so the lookahead node always precedes the router.
+
+## E3: cold insertion of prompt reads (PGRN_COLD_PREFILL) — REJECT (neutral) — 2026-11-26
+
+- llama-completion, 39.5k prompt then 160 decode tokens, 2 reps, identical hash 1c651d8b8a82:
+  decode after the prompt 4 GiB 7.74/7.?? warm vs 7.87/7.86 cold (+~1.6 %); 10 GiB 12.47 vs
+  12.56 (+0.7 %). Hypothesis (≥ 10 %) not met → code removed. The slower decode after a 40k
+  prompt (12.5 vs 17.5 tok/s @10 GiB) is attention over the long context, not cache pollution.

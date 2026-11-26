@@ -178,3 +178,7 @@ e2 cram4096 rss_mb=16543 swap_delta_mb=0
 20261126-023836	label=e3-cold	cache=10	decode_tps=12.58	prefill_tps=171.62	hit=24.02	la_recall=75.90	swap_delta_mb=0	out=1c651d8b8a82	env=PGRN_COLD_PREFILL=1
 20261126-024357	label=e3-warm	cache=10	decode_tps=12.53	prefill_tps=171.37	hit=24.12	la_recall=75.90	swap_delta_mb=0	out=1c651d8b8a82	env=
 20261126-024918	label=e3-cold	cache=10	decode_tps=12.54	prefill_tps=171.55	hit=24.02	la_recall=75.90	swap_delta_mb=0	out=1c651d8b8a82	env=PGRN_COLD_PREFILL=1
+20261126-025642	e2	label=e1-append-cram2048	cache_ram=2048	A_prompt_n=39515	A_ttft_s=230.1	B_prompt_n=23	A2_prompt_n=27	A2_cache_n=39562	A2_ttft_s=0.8
+e2 e1-append-cram2048 rss_mb=16611 swap_delta_mb=0
+20261126-030159	e2	label=e1-append-cram512	cache_ram=512	A_prompt_n=39515	A_ttft_s=229.6	B_prompt_n=23	A2_prompt_n=39589	A2_cache_n=0	A2_ttft_s=229.0
+e2 e1-append-cram512 rss_mb=15645 swap_delta_mb=0
