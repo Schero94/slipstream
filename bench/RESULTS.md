@@ -3599,3 +3599,24 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   sweeps every expert). Layer-major prefill (read each expert once per prompt) can remove most
   of the staging → estimated first-turn TTFT ~130 s, then compute-bound (~310 tok/s). Getting
   the follow-up turns fast needs prefix reuse (E2), not I/O work.
+
+## E2: agent context survives an interleaved request — `--cache-ram 2048` — KEEP — 2026-11-26
+
+- llama-server (app flags, cache 10 GiB, ctx 40960, ub 2048, no MTP), `cache_prompt: true`:
+  A = 39,515-token agent prompt → B = 23-token unrelated request (like a title/commit request)
+  → A2 = A + a short follow-up question.
+
+  | --cache-ram | A TTFT | A2 tokens recomputed | A2 from cache | **A2 TTFT** | RSS | swap |
+  |---|---|---|---|---|---|---|
+  | 512 MiB (app default until now) | 232.7 s | 39,526 | 0 | **229.1 s** | 15.6 GB | 0 MB |
+  | 2048 MiB | 229.9 s | 2,059 | 37,467 | **15.1 s** | 16.5 GB | 0 MB |
+  | 4096 MiB | 229.6 s | 2,059 | 37,467 | 14.6 s | 16.5 GB | 0 MB |
+
+- Cause: a Qwen3.6 prompt state is ~20 KiB/token + recurrent state; 512 MiB cannot stash
+  any context above ~22k tokens, so the interleaved request evicted it. 2048 MiB is enough
+  for ~40k; 4096 adds nothing here.
+- The remaining 2,059 tokens are the server's hybrid checkpoint offset (n_ubatch + 4 before
+  the end); a checkpoint at the end of the last message would make the follow-up turn ~1 s
+  (backlog E1). Prompt reuse is exact KV/state reuse (lossless by construction); an explicit
+  output-identity check is queued.
+- App default changed to `--cache-ram 2048`.

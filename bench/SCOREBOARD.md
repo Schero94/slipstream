@@ -7,7 +7,7 @@ recorded result in `bench/RESULTS.md`.
 | # | Metric | Target | Current | Since | Source |
 |---|---|---|---|---|---|
 | 1a | TTFT cold first turn, 39.5k-token agent prompt (server, ub 2048) | ≤ 150 s | 259 s @4 GiB · 231 s @10 GiB (ub 4096: 207 s @4 GiB) | v0.4.0 | RESULTS 2026-11-26 |
-| 1b | TTFT follow-up agent turn on the same context (prefix reuse) | < 3 s | measuring (E2) | — | e2 pending |
+| 1b | TTFT follow-up agent turn on the same context after an interleaved request | < 3 s | 15.1 s (was 229 s) | v0.4.1-dev | RESULTS E2 2026-11-26 |
 | 2 | Decode, lossless default, 4 / 10 GiB | ≥ 12 / ≥ 20 tok/s | 10.3 / 17.5 | v0.4.0 | RESULTS 2026-11-25 |
 | 3 | Decode, Turbo, 4 / 10 GiB | ≥ 16 / ≥ 22 tok/s | 14.5 / 19.6 | v0.4.0 | RESULTS 2026-11-25 |
 | 4 | Turbo quality (decode KLD / same top-1) | ≤ 0.02 / ≥ 93 % | 0.020 / 92.5 % | v0.4.0 | RESULTS 2026-11-25 |

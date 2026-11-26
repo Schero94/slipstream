@@ -149,3 +149,26 @@
 20261126-003354	srv	label=pf-ub2048-io16	cache=10	decode_tps=9.87	prompt_n=39515	ttft_s=228.2	prefill_tps=173.1	draft_acc=None/None	swap_delta_mb=0	out=54edf738c5a8	env=
 20261126-004330	label=split-ub2048	cache=4	decode_tps=5.73	prefill_tps=165.59	hit=0.90	la_recall=75.11	swap_delta_mb=0	out=a67c6448ecef	env=
 20261126-004855	label=split-ub2048	cache=10	decode_tps=6.98	prefill_tps=169.41	hit=6.45	la_recall=75.11	swap_delta_mb=0	out=a67c6448ecef	env=
+20261126-011651	label=lfm25-base	cache=2	decode_tps=3.99	prefill_tps=13.02	hit=37.82	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=
+20261126-011808	label=lfm25-base	cache=4	decode_tps=5.31	prefill_tps=18.49	hit=54.84	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=
+20261126-011916	label=lfm25-base	cache=8	decode_tps=9.75	prefill_tps=18.39	hit=76.37	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=
+20261126-012355	label=qwen-la0	cache=4	decode_tps=10.55	prefill_tps=20.72	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_LOOKAHEAD=0
+20261126-012535	label=qwen-turbo	cache=4	decode_tps=13.98	prefill_tps=20.76	hit=73.92	la_recall=86.46	swap_delta_mb=0	out=befc786283b0	env=PGRN_STEER=0.02
+20261126-012709	label=lfm25-laoff	cache=4	decode_tps=5.33	prefill_tps=18.29	hit=54.84	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=PGRN_LOOKAHEAD=-1
+20261126-012845	label=lfm25-la	cache=4	decode_tps=5.23	prefill_tps=18.30	hit=54.84	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=
+20261126-013020	label=lfm25-laoff	cache=4	decode_tps=5.28	prefill_tps=18.23	hit=54.84	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=PGRN_LOOKAHEAD=-1
+20261126-013155	label=lfm25-la	cache=4	decode_tps=5.27	prefill_tps=18.23	hit=54.84	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=
+20261126-013330	label=lfm25-laoff	cache=8	decode_tps=9.67	prefill_tps=18.39	hit=76.37	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=PGRN_LOOKAHEAD=-1
+20261126-013452	label=lfm25-la	cache=8	decode_tps=9.54	prefill_tps=18.26	hit=76.37	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=
+20261126-013613	label=lfm25-laoff	cache=8	decode_tps=9.72	prefill_tps=18.26	hit=76.37	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=PGRN_LOOKAHEAD=-1
+20261126-013735	label=lfm25-la	cache=8	decode_tps=9.56	prefill_tps=18.27	hit=76.37	la_recall=NA	swap_delta_mb=0	out=6020708e313f	env=
+20261126-014100	e2	label=cram512	cache_ram=512	A_prompt_n=39515	A_ttft_s=232.7	B_prompt_n=23	A2_prompt_n=39526	A2_cache_n=0	A2_ttft_s=229.1
+e2 cram512 rss_mb=15645 swap_delta_mb=0
+20261126-015007	e2	label=cram2048	cache_ram=2048	A_prompt_n=39515	A_ttft_s=229.9	B_prompt_n=23	A2_prompt_n=2059	A2_cache_n=37467	A2_ttft_s=15.1
+e2 cram2048 rss_mb=16544 swap_delta_mb=-8.00
+20261126-015532	e2	label=cram4096	cache_ram=4096	A_prompt_n=39515	A_ttft_s=229.6	B_prompt_n=23	A2_prompt_n=2059	A2_cache_n=37467	A2_ttft_s=14.6
+e2 cram4096 rss_mb=16543 swap_delta_mb=0
+20261126-021023	kld ub=1	label=turbo-shared	cache=4	mean_kld=0.019900 ± 0.001095	same_top=92.451 ± 0.828	ppl_ratio=0.997952 ± 0.007237	hit=NA	env=PGRN_LOOKAHEAD=0 PGRN_STEER=0.02
+20261126-021023	label=lfm25-debug	cache=4	decode_tps=4.99	prefill_tps=18.39	hit=30.47	la_recall=NA	swap_delta_mb=0	out=645e4b35490b	env=PGRN_DEBUG=1
+20261126-021108	label=e3-warm	cache=4	decode_tps=7.67	prefill_tps=168.20	hit=17.55	la_recall=75.90	swap_delta_mb=0	out=1c651d8b8a82	env=
+20261126-021639	label=e3-cold	cache=4	decode_tps=7.87	prefill_tps=168.21	hit=17.55	la_recall=75.90	swap_delta_mb=0	out=1c651d8b8a82	env=PGRN_COLD_PREFILL=1

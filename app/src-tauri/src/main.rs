@@ -424,7 +424,12 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         // Real Qwen3.6 tool-schema A/B: add=260 MiB, multiply=197 MiB; 512 MiB
         // retained both warm prefixes (271 cached tokens, 3.7-3.9 s TTFT) while
         // bounding long-running multi-client growth and preserving the RAM gate.
-        "--cache-ram", "512",
+        // 512 MiB cannot hold an agent context above ~22k tokens (Qwen3.6 ~20 KiB/token), so
+        // any interleaved request (title, commit message, warm-up) threw the context away.
+        // 2048 MiB: 39.5k-token agent context, interleaved request, follow-up turn TTFT
+        // 229 s -> 15 s (37,467 of 39,526 tokens from cache), +0.9 GB RSS, 0 MB swap
+        // (bench/RESULTS.md E2, 2026-11-26).
+        "--cache-ram", "2048",
         // Serving counters for the menubar's Serving Stats submenu.
         "--metrics",
     ]);
