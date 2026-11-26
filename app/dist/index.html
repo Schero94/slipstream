@@ -736,6 +736,12 @@
                     <label class="chk" for="pgrnLookahead"><input type="checkbox" id="pgrnLookahead" checked aria-describedby="pgrnLookaheadHint" /> <span data-i18n="adv.lookahead">Lookahead prefetch</span> <span class="tag tag-lossless" data-i18n="adv.lossless">lossless</span> <span class="info" data-i18n-tip="tip.lookahead">ⓘ</span></label>
                     <p class="hint" id="pgrnLookaheadHint" data-i18n="hint.lookahead">Reads the experts the next layer is predicted to need before it asks for them.</p>
                   </div>
+                  <!-- Layer-major prefill: sent as cfg.pgrn_layer_major (bool); main.rs sets
+                       --batch-size = ctx (<= 40960) + PGRN_LAYER_MAJOR=1 for streamed runs only. -->
+                  <div class="adv-opt">
+                    <label class="chk" for="pgrnLayerMajor"><input type="checkbox" id="pgrnLayerMajor" aria-describedby="pgrnLayerMajorHint" /> <span data-i18n="adv.layermajor">Fast prompt reading (layer-major)</span> <span class="tag" data-i18n="adv.experimental">experimental</span> <span class="info" data-i18n-tip="tip.layermajor">ⓘ</span></label>
+                    <p class="hint" id="pgrnLayerMajorHint" data-i18n="hint.layermajor">Reads each expert once per long prompt instead of once per batch.</p>
+                  </div>
                   <!-- superseded by lookahead prefetch (old co-activation prefetch measured -8 %, bench/RESULTS.md); kept hidden for the id contract --><label class="chk" hidden><input type="checkbox" id="onlinePredict" /> <span data-i18n="adv.predict">Predictive Prefetch (experimentell)</span> <span class="info" data-i18n-tip="tip.predict">ⓘ</span></label>
                 </div>
               </div>

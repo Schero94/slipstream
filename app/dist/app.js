@@ -1027,6 +1027,9 @@ const COCKPIT_I18N = {
     "adv.lookahead": "Lookahead prefetch",
     "adv.lossless": "lossless",
     "hint.lookahead": "Predicts which experts the next layers will route to and reads them from the SSD before they are needed. Output stays identical; a wrong guess costs some extra SSD reads.",
+    "adv.layermajor": "Fast prompt reading (layer-major)", "adv.experimental": "experimental",
+    "hint.layermajor": "Reads each expert from the SSD once per long prompt instead of once per batch: about 40 % faster first answer on 40k-token agent prompts in our test, identical output. Experimental: a long prompt cannot be stopped while it is being read.",
+    "tip.layermajor": "Engine setting PGRN_LAYER_MAJOR=1 with a logical batch as large as the context (max 40,960 tokens). Only for models streamed from SSD. Off by default.",
     "tip.lookahead": "Engine setting PGRN_LOOKAHEAD = layers ahead (default 2). Unlike predictive prefetch, which learns co-firing experts over time, lookahead predicts the next layer’s experts from the current one. Off by default.",
     "adv.steer": "Cache-steered routing (Turbo)",
     "adv.lossy": "changes output",
@@ -1060,6 +1063,9 @@ const COCKPIT_I18N = {
     "adv.lookahead": "Lookahead-Prefetch",
     "adv.lossless": "verlustfrei",
     "hint.lookahead": "Sagt voraus, welche Experten die nächsten Layer brauchen, und liest sie vorher von der SSD. Die Ausgabe bleibt identisch; ein falscher Tipp kostet zusätzliche SSD-Reads.",
+    "adv.layermajor": "Schnelles Prompt-Lesen (Layer-Major)", "adv.experimental": "experimentell",
+    "hint.layermajor": "Liest jeden Experten pro langem Prompt nur einmal von der SSD statt einmal pro Batch: in unserem Test etwa 40 % schnellere erste Antwort bei 40k-Token-Agent-Prompts, identische Ausgabe. Experimentell: Ein langer Prompt lässt sich während des Lesens nicht abbrechen.",
+    "tip.layermajor": "Engine-Einstellung PGRN_LAYER_MAJOR=1 mit einem logischen Batch so groß wie der Kontext (max. 40.960 Tokens). Nur für Modelle, die von der SSD streamen. Standard aus.",
     "tip.lookahead": "Engine-Einstellung PGRN_LOOKAHEAD = Layer voraus (Standard 2). Anders als Predictive Prefetch, das gemeinsam feuernde Experten über die Zeit lernt, sagt Lookahead die Experten des nächsten Layers aus dem aktuellen voraus. Standard aus.",
     "adv.steer": "Cache-gesteuertes Routing (Turbo)",
     "adv.lossy": "ändert Ausgabe",
@@ -1130,6 +1136,9 @@ const JOURNEY_I18N = {
     "adv.nextTitle": "Expert prefetch & Turbo",
     "adv.steer": "Turbo (experimental)",
     "hint.lookahead": "Reads the experts the next layer is predicted to need before it asks for them. Measured lossless, 29–33 % faster decoding at 4–8 GiB cache. On by default.",
+    "adv.layermajor": "Fast prompt reading (layer-major)", "adv.experimental": "experimental",
+    "hint.layermajor": "Reads each expert from the SSD once per long prompt instead of once per batch: about 40 % faster first answer on 40k-token agent prompts in our test, identical output. Experimental: a long prompt cannot be stopped while it is being read.",
+    "tip.layermajor": "Engine setting PGRN_LAYER_MAJOR=1 with a logical batch as large as the context (max 40,960 tokens). Only for models streamed from SSD. Off by default.",
     "tip.lookahead": "Engine setting PGRN_LOOKAHEAD. Unlike predictive prefetch, which learns co-firing experts over time, lookahead predicts the next layer’s experts from the current one. Output is identical with it on or off.",
     "adv.steerWarn": "About 38 % faster with a small cache, about 12 % with a large one. Answers can differ slightly from the unmodified model (same next token 93 % of the time; perplexity unchanged within noise in our test). Your prompt is always read exactly.",
     "tip.steer": "While generating, nudges the router toward experts that are already in RAM or being prefetched (engine settings PGRN_STEER = 0.02 with the prefetch-steered mark). Prompt reading stays exact. Off by default.",
@@ -1192,6 +1201,9 @@ const JOURNEY_I18N = {
     "adv.nextTitle": "Experten-Prefetch & Turbo",
     "adv.steer": "Turbo (experimentell)",
     "hint.lookahead": "Liest die Experten, die der nächste Layer voraussichtlich braucht, bevor er sie anfragt. Gemessen verlustfrei, 29–33 % schnelleres Decoding bei 4–8 GiB Cache. Standardmäßig an.",
+    "adv.layermajor": "Schnelles Prompt-Lesen (Layer-Major)", "adv.experimental": "experimentell",
+    "hint.layermajor": "Liest jeden Experten pro langem Prompt nur einmal von der SSD statt einmal pro Batch: in unserem Test etwa 40 % schnellere erste Antwort bei 40k-Token-Agent-Prompts, identische Ausgabe. Experimentell: Ein langer Prompt lässt sich während des Lesens nicht abbrechen.",
+    "tip.layermajor": "Engine-Einstellung PGRN_LAYER_MAJOR=1 mit einem logischen Batch so groß wie der Kontext (max. 40.960 Tokens). Nur für Modelle, die von der SSD streamen. Standard aus.",
     "tip.lookahead": "Engine-Einstellung PGRN_LOOKAHEAD. Anders als Predictive Prefetch, das gemeinsam feuernde Experten über die Zeit lernt, sagt Lookahead die Experten des nächsten Layers aus dem aktuellen voraus. Die Ausgabe ist mit und ohne identisch.",
     "adv.steerWarn": "Etwa 38 % schneller bei kleinem Cache, etwa 12 % bei großem. Antworten können leicht vom unveränderten Modell abweichen (in 93 % der Fälle dasselbe nächste Token; Perplexity in unserem Test im Rauschen unverändert). Dein Prompt wird immer exakt gelesen.",
     "tip.steer": "Lenkt den Router beim Generieren leicht zu Experten, die schon im RAM liegen oder gerade vorgeladen werden (Engine-Einstellung PGRN_STEER = 0,02 mit Prefetch-Markierung). Der Prompt wird weiter exakt gelesen. Standard aus.",
@@ -2101,17 +2113,23 @@ function pgrnSteerFromUi() {
     : localStorage.getItem("slipstream.pgrn.steer") === "1";
   return on ? STEER_ON : 0;
 }
+function pgrnLayerMajorFromUi() {
+  return $("pgrnLayerMajor") ? $("pgrnLayerMajor").checked
+    : localStorage.getItem("slipstream.pgrn.layermajor") === "1";
+}
 function syncNextEngineUi() { /* both options are plain toggles now */ }
 function persistNextEngineSettings() {
   if ($("pgrnLookahead")) localStorage.setItem("slipstream.pgrn.lookahead", $("pgrnLookahead").checked ? "1" : "0");
   if ($("pgrnSteer")) localStorage.setItem("slipstream.pgrn.steer", $("pgrnSteer").checked ? "1" : "0");
+  if ($("pgrnLayerMajor")) localStorage.setItem("slipstream.pgrn.layermajor", $("pgrnLayerMajor").checked ? "1" : "0");
 }
 function loadNextEngineSettings() {
   if ($("pgrnLookahead")) $("pgrnLookahead").checked = lookaheadPreference();
   if ($("pgrnSteer")) $("pgrnSteer").checked = localStorage.getItem("slipstream.pgrn.steer") === "1";
+  if ($("pgrnLayerMajor")) $("pgrnLayerMajor").checked = localStorage.getItem("slipstream.pgrn.layermajor") === "1";
 }
 function wireNextEngineSettings() {
-  ["pgrnLookahead", "pgrnSteer"].forEach((id) => {
+  ["pgrnLookahead", "pgrnSteer", "pgrnLayerMajor"].forEach((id) => {
     if ($(id)) $(id).onchange = persistNextEngineSettings;
   });
   loadNextEngineSettings();
@@ -2132,7 +2150,7 @@ function applyBackendUi() {
   });
   if ($("mlxLeverNote")) $("mlxLeverNote").hidden = !prefMlx;
   ["cache", "io", "compactSlots", "grammarDraft", "pMirror", "bufferedReads", "onlinePredict",
-    "pgrnLookahead", "pgrnSteer"]
+    "pgrnLookahead", "pgrnSteer", "pgrnLayerMajor"]
     .forEach((id) => {
       const el = $(id);
       if (!el) return;
@@ -2210,6 +2228,7 @@ async function startServer() {
     // Expert prefetch (1 = on, default) and Turbo (0.02 when on, default 0).
     // main.rs → PGRN_LOOKAHEAD / PGRN_STEER. See wireNextEngineSettings.
     pgrn_lookahead: pgrnLookaheadFromUi(),
+    pgrn_layer_major: pgrnLayerMajorFromUi(),
     pgrn_steer: pgrnSteerFromUi(),
     pgrn_compact: $("compactSlots") ? $("compactSlots").checked : true,
     grammar_draft: $("grammarDraft") ? $("grammarDraft").checked : true,

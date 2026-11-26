@@ -280,6 +280,10 @@ struct ServerConfig {
     /// 0 = off (exact routing). -> PGRN_STEER
     #[serde(default)]
     pgrn_steer: f64,
+    /// Layer-major prefill (opt-in, lossless): each expert read once per long prompt.
+    /// Streamed runs only: --batch-size = ctx (<= 40960) + PGRN_LAYER_MAJOR=1.
+    #[serde(default)]
+    pgrn_layer_major: bool,
     #[serde(default = "default_true")]
     pgrn_compact: bool,  // default-on: zero-copy compact slots -> +13-24% decode at moderate cache, swap-safe (measured)
     #[serde(default = "default_true")]
@@ -411,7 +415,16 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         let pb = file_size(&cfg.pgrn) as f64;
         pb > 0.0 && !cfg.dense && cfg.cache_gb * 1073741824.0 < 0.9 * pb
     };
-    let ubatch = if ub_streamed { "4096" } else { "2048" };
+    // Layer-major prefill needs the whole prompt in one decode call: logical batch = ctx,
+    // capped at 40,960 tokens (its residual buffer is 8 KiB per token of batch). With it,
+    // each expert is read once per prompt, so the 4096 ubatch no longer saves reads and
+    // 2048 is faster (39.5k prompt @4 GiB: 134 s vs 138-154 s, RESULTS 2026-11-26).
+    let layer_major = ub_streamed && cfg.pgrn_layer_major;
+    let ubatch = if ub_streamed && !layer_major { "4096" } else { "2048" };
+    let lbatch = if layer_major { cfg.ctx.min(40960).max(4096).to_string() } else { ubatch.to_string() };
+    if layer_major {
+        cmd.env("PGRN_LAYER_MAJOR", "1");
+    }
     // Prompt-cache RAM: 2048 MiB holds a ~40k-token agent context (follow-up turn 229 s ->
     // 0.8 s, RESULTS E1); smaller Macs get 1024 MiB (~45k tokens of Qwen3.6 state is ~0.9 GB)
     // so the extra prompt state cannot push them into swap.
@@ -424,7 +437,7 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         "--gpu-layers", "99",
         "--ctx-size", &cfg.ctx.to_string(),
         "--parallel", "1",
-        "--batch-size", ubatch,
+        "--batch-size", &lbatch,
         "--ubatch-size", ubatch,
         "-fa", "on",
         "--jinja",
