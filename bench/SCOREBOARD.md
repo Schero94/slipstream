@@ -6,7 +6,7 @@ recorded result in `bench/RESULTS.md`.
 
 | # | Metric | Target | Current | Since | Source |
 |---|---|---|---|---|---|
-| 1a | TTFT cold first turn, 39.5k-token agent prompt (server, app ub) | ≤ 150 s | 207 s @4 GiB · 182 s @10 GiB (ub 4096; was 259 / 231 s) | v0.4.1-dev | RESULTS 2026-11-26 |
+| 1a | TTFT cold first turn, 39.5k-token agent prompt (server) | ≤ 150 s | 181.5 s @10 GiB with ub 4096 (default); **134 s @4 GiB with layer-major (opt-in)**; was 259 / 231 s | v0.4.1-dev | RESULTS 2026-11-26 |
 | 1b | TTFT follow-up agent turn (append-only) after an interleaved request | < 3 s | **0.8 s** (was 229 s) | v0.4.1-dev | RESULTS E1 2026-11-26 |
 | 2 | Decode, lossless default, 4 / 10 GiB | ≥ 12 / ≥ 20 tok/s | 10.3 / 17.5 | v0.4.0 | RESULTS 2026-11-25 |
 | 3 | Decode, Turbo, 4 / 10 GiB | ≥ 16 / ≥ 22 tok/s | 14.5 / 19.6 | v0.4.0 | RESULTS 2026-11-25 |

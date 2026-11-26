@@ -370,10 +370,10 @@ index a8e89ed2d..2c22f9e64 100644
      bool display_prompt    = true;  // print prompt before generation
      bool no_kv_offload     = false; // disable KV offloading
 diff --git a/common/sampling.cpp b/common/sampling.cpp
-index 078bfd984..9dbf99960 100644
+index 078bfd984..f2b78cc6e 100644
 --- a/common/sampling.cpp
 +++ b/common/sampling.cpp
-@@ -582,6 +582,19 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
+@@ -582,6 +582,24 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
          auto & data = data_ctx;
  
          data = llama_perf_context(ctx);
@@ -389,11 +389,16 @@ index 078bfd984..9dbf99960 100644
 +                        (unsigned long long) data.pgrn_lookahead_hits,
 +                        (unsigned long long) data.pgrn_lookahead_total);
 +            }
++            if (data.pgrn_lm_decodes > 0) {
++                LOG_INF("%s: PGRN layer-major: decodes = %llu, layer passes = %llu, held skips = %llu\n", __func__,
++                        (unsigned long long) data.pgrn_lm_decodes, (unsigned long long) data.pgrn_lm_passes,
++                        (unsigned long long) data.pgrn_lm_held_skips);
++            }
 +        }
  
          const double t_end_ms = 1e-3 * ggml_time_us();
  
-@@ -611,6 +624,31 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl) {
+@@ -611,6 +629,31 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl) {
      return gsmpl->chain;
  }
  
@@ -1901,7 +1906,7 @@ index 74ca69fe7..8d297c669 100644
      LLM_TENSOR_CLS_OUT,
      LLM_TENSOR_CLS_NORM,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 93f8a72ed..19832a7b5 100644
+index 93f8a72ed..6b1e30341 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -13,6 +13,8 @@
@@ -1928,7 +1933,7 @@ index 93f8a72ed..19832a7b5 100644
      cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
      cparams.n_outputs_max_per_seq = params.n_outputs_max_per_seq == 0 ?
              cparams.n_outputs_max : std::min(params.n_outputs_max_per_seq, cparams.n_outputs_max);
-@@ -637,6 +647,27 @@ llama_context::llama_context(
+@@ -637,6 +647,30 @@ llama_context::llama_context(
              sampling.token_ids_full_vocab[i] = i;
          }
      }
@@ -1941,6 +1946,9 @@ index 93f8a72ed..19832a7b5 100644
 +        lm_hold = PGRN_LAYER_MAJOR_HOLD ? atoi(PGRN_LAYER_MAJOR_HOLD) != 0 : true;
 +        if (PGRN_LAYER_MAJOR_MIN) {
 +            lm_min_ubatches = (uint32_t) std::max(2, atoi(PGRN_LAYER_MAJOR_MIN));
++        }
++        if (const char * PGRN_LAYER_MAJOR_MAX = getenv("PGRN_LAYER_MAJOR_MAX_TOKENS")) {
++            lm_max_tokens = (uint32_t) std::max(1, atoi(PGRN_LAYER_MAJOR_MAX));
 +        }
 +        if (PGRN_LAYER_MAJOR && atoi(PGRN_LAYER_MAJOR) != 0 && cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT) {
 +            if (!model.pgrn_enabled()) {
@@ -1956,7 +1964,7 @@ index 93f8a72ed..19832a7b5 100644
  }
  
  llama_context::~llama_context() {
-@@ -1612,6 +1643,143 @@ bool llama_context::h_nextn_dev_alloc() {
+@@ -1612,6 +1646,175 @@ bool llama_context::h_nextn_dev_alloc() {
      return true;
  }
  
@@ -1978,8 +1986,26 @@ index 93f8a72ed..19832a7b5 100644
 +    };
 +    ctx_lm_resid.reset(ggml_init(params));
 +
-+    lm_resid = ggml_new_tensor_2d(ctx_lm_resid.get(), GGML_TYPE_F32, model.hparams.n_embd, cparams.n_batch);
++    // the residual rows cap the layer-major batch: PGRN_LAYER_MAJOR_MAX_TOKENS (default 40960) bounds the buffer
++    // (n_embd * rows * 4 bytes, 320 MiB at 2048 x 40960) independently of a huge -b; larger batches run normally
++    const int64_t n_rows = std::min<int64_t>(cparams.n_batch, lm_max_tokens);
++    lm_resid = ggml_new_tensor_2d(ctx_lm_resid.get(), GGML_TYPE_F32, model.hparams.n_embd, n_rows);
 +    ggml_set_name(lm_resid, "lm_resid");
++
++    // RAM guard: the buffer must fit next to the PGRN headroom, else layer-major stays off (never fail the context)
++    if (model.pgrn_enabled()) {
++        pgr_system_memory memory{};
++        const uint64_t need = ggml_nbytes(lm_resid) + model.pgrn_headroom_bytes();
++        if (pgr_system_memory_read(&memory) == 0 && memory.available_known && memory.available_bytes < need) {
++            LLAMA_LOG_WARN("%s: layer-major prefill disabled: its %.2f MiB residual buffer does not fit the free RAM "
++                           "(available %.2f MiB, headroom %.2f MiB)\n", __func__, ggml_nbytes(lm_resid) / 1048576.0,
++                           memory.available_bytes / 1048576.0, model.pgrn_headroom_bytes() / 1048576.0);
++            lm_enabled = false;
++            lm_resid   = nullptr;
++            ctx_lm_resid.reset();
++            return false;
++        }
++    }
 +
 +    ggml_backend_dev_t dev = model.dev_output();
 +    auto * buft = dev ? ggml_backend_dev_buffer_type(dev) : ggml_backend_cpu_buffer_type();
@@ -2010,41 +2036,55 @@ index 93f8a72ed..19832a7b5 100644
 +    return lm_resid_alloc() && lm_enabled == value;
 +}
 +
-+bool llama_context::lm_eligible(const llama_batch_ext & batch_inp, llama_memory_context_i * mctx, bool has_embd_row,
++const char * llama_context::lm_ineligible(const llama_batch_ext & batch_inp, llama_memory_context_i * mctx, bool has_embd_row,
 +        bool has_state_row, bool write_h_nextn, bool has_samplers) const {
 +    if (!lm_enabled || lm_resid == nullptr || !model.supports_layer_range()) {
-+        return false;
++        return "disabled";
 +    }
-+    if (cparams.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT || !cparams.causal_attn || cparams.embeddings ||
-+            cparams.embeddings_nextn || cparams.embeddings_layer_inp_dev || layer_inp_dev != nullptr) {
-+        return false;
++    const uint32_t n_tokens = balloc->get_n_tokens();
++    if (n_tokens <= (lm_min_ubatches - 1) * cparams.n_ubatch) {
++        return "fewer than PGRN_LAYER_MAJOR_MIN_UBATCHES ubatches";
++    }
++    if ((int64_t) n_tokens > lm_resid->ne[1]) {
++        return "batch larger than the residual buffer (PGRN_LAYER_MAJOR_MAX_TOKENS)";
++    }
++    if (cparams.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT || !cparams.causal_attn || cparams.embeddings) {
++        return "not a causal decoder context without embeddings";
++    }
++    if (cparams.embeddings_nextn || write_h_nextn || has_state_row) {
++        return "MTP hidden-state extraction (embeddings_nextn)";
++    }
++    if (cparams.embeddings_layer_inp_dev || layer_inp_dev != nullptr || has_embd_row) {
++        return "layer input extraction / injection";
 +    }
 +    for (bool v : cparams.embeddings_layer_inp) {
 +        if (v) {
-+            return false;
++            return "layer input extraction";
 +        }
 +    }
-+    if (has_embd_row || has_state_row || write_h_nextn || has_samplers || batch_inp.n_embd > 0) {
-+        return false;
++    if (has_samplers) {
++        return "backend samplers";
 +    }
-+    const uint32_t n_tokens = balloc->get_n_tokens();
-+    if (n_tokens <= (lm_min_ubatches - 1) * cparams.n_ubatch || (int64_t) n_tokens > lm_resid->ne[1]) {
-+        return false;
++    if (batch_inp.n_embd > 0) {
++        return "embedding input";
 +    }
 +    // one sequence: every token belongs to exactly the same single sequence
 +    llama_seq_id seq = -1;
 +    for (const auto & tok : batch_inp.tokens) {
 +        if (tok.seq_ids.size() != 1 || tok.has_embd || tok.has_state) {
-+            return false;
++            return "a token with several sequences or an embedding";
 +        }
 +        const llama_seq_id s = *tok.seq_ids.begin();
 +        if (seq < 0) {
 +            seq = s;
 +        } else if (s != seq) {
-+            return false;
++            return "more than one sequence in the batch";
 +        }
 +    }
-+    return mctx->lm_supported();
++    if (!mctx->lm_supported()) {
++        return "memory cannot rewind (n_rs_seq > 0, rs_replay or shared cells)";
++    }
++    return nullptr;
 +}
 +
 +int llama_context::lm_fail(llama_memory_context_i * mctx, ggml_status status) {
@@ -2100,7 +2140,7 @@ index 93f8a72ed..19832a7b5 100644
  bool llama_context::set_embeddings_nextn_dev(bool value) {
      LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
  
-@@ -1847,7 +2015,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+@@ -1847,7 +2050,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
          res->reset();
  
          ggml_backend_sched_reset(sched.get());
@@ -2113,7 +2153,7 @@ index 93f8a72ed..19832a7b5 100644
  
          //const auto t_start_us = ggml_time_us();
  
-@@ -1880,7 +2052,22 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+@@ -1880,7 +2087,22 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
          //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
      }
  
@@ -2136,14 +2176,19 @@ index 93f8a72ed..19832a7b5 100644
      if (status != GGML_STATUS_SUCCESS) {
          LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
          ret = status;
-@@ -2350,6 +2537,24 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2350,6 +2572,29 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
          ggml_backend_event_wait(h_nextn_backend, ev_h_nextn_read.get());
      }
  
 +    // Slipstream layer-major prefill: run every ubatch through layer il, then il+1. The pre-passes cover
 +    // layers [0, n_layer-1); the ubatch loop below then runs the last layer plus the output head with all
 +    // its output/logits logic unchanged.
-+    if (lm_eligible(batch_inp, mctx.get(), has_embd_row, has_state_row, write_h_nextn, has_samplers)) {
++    const char * lm_why_not = lm_enabled ? lm_ineligible(batch_inp, mctx.get(), has_embd_row, has_state_row, write_h_nextn, has_samplers) : "disabled";
++    if (lm_enabled && lm_why_not != nullptr && n_tokens_all > (lm_min_ubatches - 1) * cparams.n_ubatch) {
++        // a batch of layer-major size that falls back: say why, once per decode call
++        LLAMA_LOG_WARN("%s: layer-major prefill skipped for %u tokens: %s\n", __func__, n_tokens_all, lm_why_not);
++    }
++    if (lm_why_not == nullptr) {
 +        lm_active = true;
 +        lm_seq    = *batch_inp.tokens[0].seq_ids.begin();
 +        ++pgrn_lm_decodes;
@@ -2161,7 +2206,7 @@ index 93f8a72ed..19832a7b5 100644
      do {
          const auto & ubatch = mctx->get_ubatch();
  
-@@ -2373,6 +2578,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2373,6 +2618,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
  
          const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
  
@@ -2172,7 +2217,7 @@ index 93f8a72ed..19832a7b5 100644
          if (!res) {
              // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
              llama_pos pos_min[LLAMA_MAX_SEQ];
-@@ -2537,6 +2746,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2537,6 +2786,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
          n_tokens_prev  += ubatch.n_tokens;
      } while (mctx->next());
  
@@ -2183,7 +2228,7 @@ index 93f8a72ed..19832a7b5 100644
      if (layer_inp_dev && ev_layer_inp_written) {
          ggml_backend_event_record(ev_layer_inp_written.get(), layer_inp_backend);
      }
-@@ -3076,6 +3289,9 @@ llm_graph_params llama_context::graph_params(
+@@ -3076,6 +3329,9 @@ llm_graph_params llama_context::graph_params(
          /*.layer_inp_src =*/ supports_embd_row() ? cparams.ctx_other->get_layer_inp_dev() : nullptr,
          /*.h_nextn_dev   =*/ cparams.embeddings_nextn_dev ? h_nextn_dev : nullptr,
          /*.h_nextn_src   =*/ supports_state_row() ? cparams.ctx_state_src->get_h_nextn_dev() : nullptr,
@@ -2193,7 +2238,7 @@ index 93f8a72ed..19832a7b5 100644
          /*.samplers    =*/ sampling.samplers,
          /*.n_outputs   =*/ n_outputs,
          /*.cb          =*/ graph_get_cb(),
-@@ -3231,6 +3447,177 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -3231,6 +3487,177 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
      return true;
  }
  
@@ -2371,7 +2416,7 @@ index 93f8a72ed..19832a7b5 100644
  llm_graph_cb llama_context::graph_get_cb() const {
      return [&](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
          if (il >= 0) {
-@@ -4116,6 +4503,30 @@ llama_perf_context_data llama_context::perf_get_data() const {
+@@ -4116,6 +4543,30 @@ llama_perf_context_data llama_context::perf_get_data() const {
      data.n_p_eval    = std::max(1, n_p_eval);
      data.n_eval      = std::max(1, n_eval);
      data.n_reused    = std::max(0, n_reused);
@@ -2402,7 +2447,7 @@ index 93f8a72ed..19832a7b5 100644
  
      data.n_reallocs_same = n_reallocs_same;
      data.n_reallocs_diff = n_reallocs_diff;
-@@ -4130,6 +4541,11 @@ void llama_context::perf_reset() {
+@@ -4130,6 +4581,11 @@ void llama_context::perf_reset() {
      n_reused    = 0;
  
      // note: the reallocation counters are not reset - they track the lifetime totals for this context
@@ -2414,7 +2459,7 @@ index 93f8a72ed..19832a7b5 100644
  }
  
  llama_memory_breakdown llama_context::memory_breakdown() const {
-@@ -4588,6 +5004,22 @@ llama_context * llama_init_from_model(
+@@ -4588,6 +5044,22 @@ llama_context * llama_init_from_model(
              LLAMA_LOG_INFO("%s: n_ctx_train adjusted to %u\n", __func__, model->hparams.n_ctx_train);
          }
  
@@ -2437,7 +2482,7 @@ index 93f8a72ed..19832a7b5 100644
          return ctx;
      } catch (const std::exception & err) {
          LLAMA_LOG_ERROR("%s: failed to initialize the context: %s\n", __func__, err.what());
-@@ -5120,6 +5552,37 @@ void llama_perf_context_print(const llama_context * ctx) {
+@@ -5120,6 +5592,37 @@ void llama_perf_context_print(const llama_context * ctx) {
      LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
      LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
      LLAMA_LOG_INFO("%s:   graph reallocs = %10d    / %5d        (same size) / (changed size)\n", __func__, data.n_reallocs_same, data.n_reallocs_diff);
@@ -2476,17 +2521,18 @@ index 93f8a72ed..19832a7b5 100644
  
  void llama_perf_context_reset(llama_context * ctx) {
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 3e3921c7d..5ff04b3dc 100644
+index 3e3921c7d..656d1692c 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -264,6 +264,14 @@ private:
+@@ -264,6 +264,15 @@ private:
      // (re)allocate the device buffer for cparams.embeddings_nextn_dev, false if it does not fit
      bool h_nextn_dev_alloc();
  
 +    // Slipstream layer-major prefill
 +    bool lm_resid_alloc();
-+    bool lm_eligible(const llama_batch_ext & batch_inp, llama_memory_context_i * mctx, bool has_embd_row,
-+                     bool has_state_row, bool write_h_nextn, bool has_samplers) const;
++    // nullptr if the batch can run layer-major, else the reason it cannot
++    const char * lm_ineligible(const llama_batch_ext & batch_inp, llama_memory_context_i * mctx, bool has_embd_row,
++                               bool has_state_row, bool write_h_nextn, bool has_samplers) const;
 +    int  decode_layer_major_prepasses(llama_memory_context_i * mctx);
 +    int  lm_fail(llama_memory_context_i * mctx, ggml_status status);
 +    void lm_end();
@@ -2494,7 +2540,7 @@ index 3e3921c7d..5ff04b3dc 100644
      ggml_backend_t backend_from_dev(ggml_backend_dev_t dev) const;
  
      //
-@@ -318,6 +326,8 @@ private:
+@@ -318,6 +327,8 @@ private:
  
      // ggml_backend_sched realloc callback, counts and traces the graph reallocations of this context
      static void sched_graph_realloc(ggml_backend_sched_t sched, ggml_cgraph * gf, bool backend_ids_changed, bool graph_size_changed, void * user_data);
@@ -2503,7 +2549,7 @@ index 3e3921c7d..5ff04b3dc 100644
  
      // disable auto fused ops (Flash Attention, Gated Delta Net) whose op lands on a device
      // that differs from the layer it belongs to (usually due to missing backend support)
-@@ -338,6 +348,49 @@ private:
+@@ -338,6 +349,50 @@ private:
  
      llama_cparams cparams;
  
@@ -2531,6 +2577,7 @@ index 3e3921c7d..5ff04b3dc 100644
 +    bool          lm_enabled      = false;   // env PGRN_LAYER_MAJOR=1, or set_layer_major()
 +    bool          lm_hold         = true;    // env PGRN_LAYER_MAJOR_HOLD=0: re-stage per (layer, ubatch)
 +    uint32_t      lm_min_ubatches = 2;       // env PGRN_LAYER_MAJOR_MIN_UBATCHES
++    uint32_t      lm_max_tokens   = 40960;   // env PGRN_LAYER_MAJOR_MAX_TOKENS: lm_resid rows; larger batches run normally
 +    bool          lm_active       = false;   // inside a layer-major decode call
 +    llama_seq_id  lm_seq          = -1;      // the only sequence of the layer-major batch
 +    int32_t       lm_il0          = 0;       // layer range of the graphs built now
@@ -2642,7 +2689,7 @@ index fedc70969..9fcc8a992 100644
          const llama_grammar_rules      & rules,
          const llama_grammar_stack      & stack,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 5fef4c421..8db9af47f 100644
+index 5fef4c421..b4683aaa9 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -267,6 +267,22 @@ bool llm_graph_input_batch_idxs::can_reuse(const llm_graph_params & params) {
@@ -2786,13 +2833,15 @@ index 5fef4c421..8db9af47f 100644
          cb(logits, "ffn_moe_logits", il);
      } else {
          logits = probs_in;
-@@ -2432,6 +2504,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2432,6 +2504,17 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          selection_probs = ggml_add(ctx0, probs, exp_probs_b);
          cb(selection_probs, "ffn_moe_probs_biased", il);
      }
 +    // Slipstream Turbo (opt-in, lossy): selection bonus for resident / prefetching experts,
 +    // decode only (prompt routing stays exact); mixing weights keep the unbiased probs.
-+    if (ggml_tensor * st = (n_tokens <= 8 && il >= 0 && probs_in == nullptr) ? model.pgrn_steer_tensor() : nullptr) {
++    // Never inside a layer-major decode (lm_il1 >= 0): its resident mask is taken in another cache state
++    // than the normal path's, so a short ragged last ubatch would route differently.
++    if (ggml_tensor * st = (n_tokens <= 8 && il >= 0 && probs_in == nullptr && lm_il1 < 0) ? model.pgrn_steer_tensor() : nullptr) {
 +        if (st->ne[0] == n_expert && il < st->ne[1]) {
 +            ggml_tensor * steer = ggml_view_1d(ctx0, st, st->ne[0], (size_t) il * st->nb[1]);
 +            selection_probs = ggml_add(ctx0, selection_probs, steer);
@@ -2802,7 +2851,7 @@ index 5fef4c421..8db9af47f 100644
  
      // llama4 doesn't have exp_probs_b, and sigmoid is only used after top_k
      // see: https://github.com/meta-llama/llama-models/blob/699a02993512fb36936b1b0741e13c06790bcf98/models/llama4/moe.py#L183-L198
-@@ -2475,7 +2556,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2475,7 +2558,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          selected_experts = ggml_argsort_top_k(ctx0, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
          cb(selected_experts->src[0], "ffn_moe_argsort", il);
      }
@@ -2811,7 +2860,7 @@ index 5fef4c421..8db9af47f 100644
  
      if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
          // TODO: Use scalar div instead when/if implemented
-@@ -2528,7 +2609,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2528,7 +2611,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
      ggml_build_forward_expand(gf, weights);
  
      // benchmark only: the expert GEMMs use random ids, the router above is not changed
@@ -2820,7 +2869,7 @@ index 5fef4c421..8db9af47f 100644
          // fused top-k kernels write the router ids together with the weights, so keep the ids alive until here
          // the empty get_rows is skipped by the backends, it only adds this dependency
          ggml_build_forward_expand(gf, ggml_get_rows(ctx0, weights, ggml_view_2d(ctx0, selected_experts, 0, n_tokens, selected_experts->nb[1], 0)));
-@@ -2541,11 +2622,21 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2541,11 +2624,21 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          }
      }
  
@@ -2843,7 +2892,7 @@ index 5fef4c421..8db9af47f 100644
          moe_cache->build_lookup(*this, { il, up_exps, gate_exps, down_exps, gate_up_exps, weight_before_ffn }, selected_experts);
  
      cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
-@@ -2698,7 +2789,22 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2698,7 +2791,22 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
              cur = amax_src1.res;
          }
  
@@ -2866,7 +2915,7 @@ index 5fef4c421..8db9af47f 100644
          cb(experts, "ffn_moe_down", il);
  
          if (amax_src1.scale_s) {
-@@ -2708,7 +2814,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2708,7 +2816,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          return experts;
      };
  
@@ -2877,7 +2926,7 @@ index 5fef4c421..8db9af47f 100644
          build_experts(cur, selected_experts, nullptr, true) :
          moe_cache->build_experts(*this, cache, cur, selected_experts,
                  [](ggml_tensor * cur, ggml_tensor * ids, ggml_tensor * mm_ids, bool cached, void * user_data) {
-@@ -2971,6 +3079,22 @@ ggml_tensor * llm_graph_context::build_inp_pos() const {
+@@ -2971,6 +3081,22 @@ ggml_tensor * llm_graph_context::build_inp_pos() const {
      return cur;
  }
  
@@ -2902,10 +2951,10 @@ index 5fef4c421..8db9af47f 100644
  
 diff --git a/src/llama-graph.cpp.orig b/src/llama-graph.cpp.orig
 new file mode 100644
-index 000000000..584eb0d5e
+index 000000000..8db9af47f
 --- /dev/null
 +++ b/src/llama-graph.cpp.orig
-@@ -0,0 +1,4898 @@
+@@ -0,0 +1,4941 @@
 +#include "llama-graph.h"
 +
 +#include "llama-impl.h"
@@ -3172,6 +3221,22 @@ index 000000000..584eb0d5e
 +}
 +
 +bool llm_graph_input_batch_idxs::can_reuse(const llm_graph_params & params) {
++    return idxs->ne[0] == params.ubatch.n_tokens;
++}
++
++void llm_graph_input_lm_rows::set_input(const llama_ubatch * ubatch) {
++    const int64_t n_tokens = ubatch->n_tokens;
++
++    GGML_ASSERT(ubatch->data && ubatch->data->batch_idxs.size() == (size_t) n_tokens);
++    GGML_ASSERT(idxs && ggml_backend_buffer_is_host(idxs->buffer));
++
++    int32_t * data = (int32_t *) idxs->data;
++    for (int64_t i = 0; i < n_tokens; ++i) {
++        data[i] = (int32_t) ubatch->data->batch_idxs[i];
++    }
++}
++
++bool llm_graph_input_lm_rows::can_reuse(const llm_graph_params & params) {
 +    return idxs->ne[0] == params.ubatch.n_tokens;
 +}
 +
@@ -4178,15 +4243,21 @@ index 000000000..584eb0d5e
 +}
 +
 +void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
-+    mctx->get_attn()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
-+    mctx->get_attn()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);
++    // Slipstream layer-major prefill: a one-layer graph uses either the attention or the recurrent inputs,
++    // the unused ones stay unallocated
++    if (inp_attn->self_k_idxs && inp_attn->self_k_idxs->buffer) {
++        mctx->get_attn()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
++    }
++    if (inp_attn->self_v_idxs && inp_attn->self_v_idxs->buffer) {
++        mctx->get_attn()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);
++    }
 +
 +    // kv_rows and the mask stay unallocated if all attention layers have their own (e.g. qwen4exp QSA)
 +    mctx->get_attn()->set_input_attn_mask(inp_attn->self_attn_mask, ubatch, cparams.causal_attn);
 +
 +    const int64_t n_rs = mctx->get_recr()->get_n_rs();
 +
-+    if (inp_rs->s_copy) {
++    if (inp_rs->s_copy && inp_rs->s_copy->buffer) {
 +        GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
 +        int32_t * data = (int32_t *) inp_rs->s_copy->data;
 +
@@ -4664,6 +4735,9 @@ index 000000000..584eb0d5e
 +    layer_inp_src    (params.layer_inp_src),
 +    h_nextn_dev      (params.h_nextn_dev),
 +    h_nextn_src      (params.h_nextn_src),
++    lm_il0           (params.lm_il0),
++    lm_il1           (params.lm_il1),
++    lm_resid         (params.lm_resid),
 +    samplers         (params.samplers),
 +    cb_func          (params.cb),
 +    res              (params.res),
@@ -5311,7 +5385,9 @@ index 000000000..584eb0d5e
 +        // thrashes (Mellum2.1 at 1-2 GiB: 8-17 slots for top-8 -> -19..-27 % with lookahead).
 +        // Require >= 4x top-k slots in the next layer's partition; otherwise build nothing.
 +        const size_t la_cap = model.pgrn_layer_capacity((uint16_t) (il + 1));
-+        if (la_cap >= (size_t) (4 * n_expert_used) &&
++        // ... and skip it when the partition holds the whole layer (everything ends up resident;
++        // Mellum2.1 at 8 GiB: -4 % from the extra graph work alone).
++        if (la_cap >= (size_t) (4 * n_expert_used) && la_cap < (size_t) n_expert &&
 +                next.ffn_gate_inp != nullptr && next.ffn_gate_inp->ne[0] == n_embd &&
 +                next.ffn_gate_inp->ne[1] == n_expert) {
 +            ggml_tensor * la_sel = build_lora_mm(next.ffn_gate_inp, cur);
@@ -5954,6 +6030,22 @@ index 000000000..584eb0d5e
 +    cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, (int64_t)n_tokens*hparams.n_pos_per_embd());
 +    ggml_set_input(cur);
 +    cb(cur, "inp_pos", -1);
++
++    res->add_input(std::move(inp));
++
++    return cur;
++}
++
++ggml_tensor * llm_graph_context::build_inp_lm_rows() const {
++    GGML_ASSERT(lm_resid != nullptr && "layer-range graph without the residual buffer");
++
++    auto inp = std::make_unique<llm_graph_input_lm_rows>();
++
++    inp->idxs = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
++    ggml_set_input(inp->idxs);
++    ggml_set_name(inp->idxs, "lm_rows");
++
++    ggml_tensor * cur = inp->idxs;
 +
 +    res->add_input(std::move(inp));
 +
@@ -10256,7 +10348,7 @@ index 772c9f02d..d7df4c817 100644
                                          if (nr2 == 16 && hsk != 192) continue;
                                          if (nr2 == 20 && (nh != 1 || hsk != 576)) continue;
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 6faa8843d..56aaeb2f7 100644
+index 6faa8843d..8b8a428ee 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -9,6 +9,8 @@
@@ -10273,11 +10365,11 @@ index 6faa8843d..56aaeb2f7 100644
      } else if (arch == LLM_ARCH_METIS16) {
          n_layer = 4; // 2 passes over 2 physical layers, one attention and one Mamba-2
 +    } else if (arch == LLM_ARCH_QWEN35MOE) {
-+        // Two trunk blocks plus one real NextN/MTP block. Peregrine's model
-+        // integration uses this fixture to exercise streaming in both graphs.
-+        // With full_attention_interval 2 (set below) the trunk is one DeltaNet and one attention
-+        // layer, so layer-major prefill covers both layer types.
-+        n_layer = 3;
++        // Four trunk blocks plus one real NextN/MTP block. Peregrine's model integration uses this
++        // fixture to exercise streaming in both graphs. With full_attention_interval 2 (set below) the
++        // trunk is DeltaNet, attention, DeltaNet, attention, so layer-major prefill runs first, middle
++        // (reads and writes lm_resid) and last layer-range graphs of both layer types.
++        n_layer = 5;
      } else if (arch == LLM_ARCH_CHAMELEON) {
          n_vocab = 10240;
      } else if (arch == LLM_ARCH_QWEN3TTS) {
@@ -10417,10 +10509,19 @@ index 9f9393f98..8aca50123 100644
      server-chat.h
      server-task.cpp
 diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
-index 95c57f877..9d3b2fc65 100644
+index 95c57f877..5f29e09f3 100644
 --- a/tools/server/server-common.cpp
 +++ b/tools/server/server-common.cpp
-@@ -164,6 +164,13 @@ json server_slot_stats::to_json() const {
+@@ -159,11 +159,22 @@ json server_slot_stats::to_json() const {
+         {"predicted_per_second",   n_gen_tps()},
+     };
+ 
++    if (pgrn_lm_decodes > 0) {
++        base["pgrn_lm_decodes"] = pgrn_lm_decodes;
++    }
++
+     if (n_draft_tokens > 0) {
+         base["draft_n"]          = n_draft_tokens;
          base["draft_n_accepted"] = n_draft_accepted;
      }
  
@@ -10434,7 +10535,7 @@ index 95c57f877..9d3b2fc65 100644
      return base;
  }
  
-@@ -1498,7 +1505,43 @@ json oaicompat_chat_params_parse(
+@@ -1498,7 +1509,43 @@ json oaicompat_chat_params_parse(
      auto tools = json_value(body, "tools", json());
      auto has_tools = tools.is_array() && !tools.empty();
      auto stream = json_value(body, "stream", false);
@@ -10480,13 +10581,16 @@ index 95c57f877..9d3b2fc65 100644
      if (!opt.use_jinja) {
          if (has_tools) {
 diff --git a/tools/server/server-common.h b/tools/server/server-common.h
-index c1a0f4dca..ab2e7c193 100644
+index c1a0f4dca..ccbd60722 100644
 --- a/tools/server/server-common.h
 +++ b/tools/server/server-common.h
-@@ -448,6 +448,12 @@ struct server_slot_stats {
+@@ -448,6 +448,15 @@ struct server_slot_stats {
      uint64_t n_draft_accepted    = 0;
      uint64_t n_draft_verif_steps = 0;
  
++    // Slipstream: decode calls of this task that ran layer-major (PGRN_LAYER_MAJOR=1)
++    uint64_t pgrn_lm_decodes = 0;
++
 +    // Slipstream: optional response-level adaptive draft metrics (--spec-draft-adaptive)
 +    int32_t draft_adaptive_n      = 0;
 +    int32_t draft_adaptive_n_next = 0;
@@ -10497,7 +10601,7 @@ index c1a0f4dca..ab2e7c193 100644
      // note: must be signed - they are subtracted before the later ones are set
      int64_t t_start       = 0;
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 2f927d74f..d3e92a163 100644
+index 2f927d74f..2363cb12b 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -6,6 +6,7 @@
@@ -10552,7 +10656,7 @@ index 2f927d74f..d3e92a163 100644
          SLT_DBG(*this, "max possible draft: %d\n", n_draft_max);
  
          return n_draft_max;
-@@ -788,9 +812,36 @@ struct server_slot {
+@@ -788,9 +812,43 @@ struct server_slot {
                  "      total time = %10.2f ms / %5d tokens\n",
                  t_prompt_total + t_gen_total, (int) (stats.n_prompt_processed + stats.n_gen));
  
@@ -10561,6 +10665,13 @@ index 2f927d74f..d3e92a163 100644
                  "   graphs reused = %10d\n",
 -                llama_perf_context(ctx_tgt).n_reused);
 +                perf.n_reused);
++
++        if (perf.pgrn_lm_decodes > 0) {
++            SLT_INF(*this,
++                    "   PGRN layer-major: decodes = %llu (this task %llu), layer passes = %llu, held skips = %llu\n",
++                    (unsigned long long) perf.pgrn_lm_decodes, (unsigned long long) stats.pgrn_lm_decodes,
++                    (unsigned long long) perf.pgrn_lm_passes, (unsigned long long) perf.pgrn_lm_held_skips);
++        }
 +
 +        if (perf.pgrn_cache_bytes > 0) {
 +            const uint64_t accesses = perf.pgrn_cache_hits + perf.pgrn_cache_misses;
@@ -10590,7 +10701,7 @@ index 2f927d74f..d3e92a163 100644
  
          SLT_INF(*this,
                  "  graph reallocs = %10d    / %5d        (same size) / (changed size)\n",
-@@ -1347,6 +1398,20 @@ private:
+@@ -1347,6 +1405,20 @@ private:
              return false;
          }
  
@@ -10611,7 +10722,7 @@ index 2f927d74f..d3e92a163 100644
          n_ctx = llama_n_ctx(ctx_tgt);
  
          add_bos_token = llama_vocab_get_add_bos(vocab);
-@@ -1358,6 +1423,7 @@ private:
+@@ -1358,6 +1430,7 @@ private:
  
              {
                  common_params params_dft = common_base_params_to_speculative(params_base);
@@ -10619,7 +10730,7 @@ index 2f927d74f..d3e92a163 100644
  
                  // progress callback
                  params_dft.load_progress_callback           = load_progress_callback;
-@@ -1519,7 +1585,10 @@ private:
+@@ -1519,7 +1592,10 @@ private:
                  spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
              } catch (const std::exception & e) {
                  SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
@@ -10631,7 +10742,7 @@ index 2f927d74f..d3e92a163 100644
                      return false;
                  }
              }
-@@ -1551,6 +1620,8 @@ private:
+@@ -1551,6 +1627,8 @@ private:
              slot.mem.init(ctx_tgt, ctx_dft);
              slot.spec    = spec.get();
              slot.n_ctx   = n_ctx_slot();
@@ -10640,7 +10751,7 @@ index 2f927d74f..d3e92a163 100644
  
              slot.mctx                   = mctx;
              slot.prompt.tokens.has_mtmd = mctx != nullptr;
-@@ -2387,6 +2458,8 @@ private:
+@@ -2387,6 +2465,8 @@ private:
      void send_final_response(server_slot & slot) {
          auto res = std::make_unique<server_task_result_cmpl_final>();
  
@@ -10649,7 +10760,7 @@ index 2f927d74f..d3e92a163 100644
          res->id      = slot.task->id;
          res->id_slot = slot.id;
  
-@@ -3896,6 +3969,45 @@ private:
+@@ -3896,6 +3976,45 @@ private:
              });
          }
  
@@ -10695,7 +10806,7 @@ index 2f927d74f..d3e92a163 100644
          // make checkpoints if needed
          iterate(drafting, [&](server_slot & slot) {
              auto & draft = slot.spec_draft;
-@@ -4651,6 +4763,35 @@ private:
+@@ -4651,6 +4770,35 @@ private:
              }
          }
  
@@ -10731,7 +10842,15 @@ index 2f927d74f..d3e92a163 100644
          bool has_output = false;
          for (int i = off; i < off + batch.view.size(); ++i) {
              has_output |= batch.tokens[i].output;
-@@ -4666,6 +4807,16 @@ private:
+@@ -4659,6 +4807,7 @@ private:
+         // yield to the queue, so we can still handle metrics tasks while decoding
+         // note: the sync is done here too, so that the wait is also covered by the yield
+         int ret = 0;
++        const uint64_t lm_decodes_before = llama_perf_context(ctx_tgt).pgrn_lm_decodes;
+         queue_tasks.yield_to_queue([&]() {
+             ret = llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch.view.get());
+             if (ret == 0 && has_output) {
+@@ -4666,6 +4815,16 @@ private:
              }
          });
  
@@ -10748,6 +10867,37 @@ index 2f927d74f..d3e92a163 100644
          if (ret != 0) {
              {
                  std::string err;
+@@ -4685,7 +4844,13 @@ private:
+                     err = "Compute error.";
+                 }
+ 
+-                // TODO: handle ret == 2 (abort) when we start aborting
++                if (ret == 2) {
++                    // Slipstream: an aborted decode. A layer-major prefill drops the sequence's whole memory
++                    // (llama_context::lm_fail), so the slot's cached prompt is gone: clear it, do not retry.
++                    // Note: the server sets no abort callback today, so a running decode call (a layer-major
++                    // prefill is one call for the whole prompt) is not interruptible; this is the safe path.
++                    err = "Decode aborted.";
++                }
+ 
+                 if (!err.empty()) {
+                     SRV_ERR("%s off = %d, n_batch = %d, ret = %d\n", err.c_str(), off, n_batch, ret);
+@@ -4717,6 +4882,15 @@ private:
+         } else {
+             // success, apply batch metrics
+             metrics_post_decode(off, batch.view.size(), has_output);
++
++            const uint64_t lm_decodes = llama_perf_context(ctx_tgt).pgrn_lm_decodes - lm_decodes_before;
++            if (lm_decodes > 0) {
++                for (auto & slot : slots) {
++                    if (slot.is_processing()) {
++                        slot.stats.pgrn_lm_decodes += lm_decodes;
++                    }
++                }
++            }
+         }
+ 
+         // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
 diff --git a/tools/server/server.cpp b/tools/server/server.cpp
 index e022355dc..628ef03bb 100644
 --- a/tools/server/server.cpp

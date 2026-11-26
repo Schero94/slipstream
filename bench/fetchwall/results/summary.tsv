@@ -228,3 +228,5 @@ e2 ship-ub4096-cram2048 peak_rss_mb=16954 swap_delta_mb=0
 20261126-063603	label=mellum-la	cache=8	decode_tps=23.71	prefill_tps=52.67	hit=95.52	la_recall=85.46	swap_delta_mb=0	out=510cfeccf6b9	env=
 20261126-063647	label=mellum-laoff	cache=8	decode_tps=23.54	prefill_tps=55.63	hit=95.74	la_recall=NA	swap_delta_mb=0	out=510cfeccf6b9	env=PGRN_LOOKAHEAD=-1
 20261126-063732	label=mellum-la	cache=8	decode_tps=23.54	prefill_tps=54.57	hit=95.52	la_recall=85.46	swap_delta_mb=0	out=510cfeccf6b9	env=
+20261126-083117	label=gate-qwen-la	cache=4	decode_tps=10.70	prefill_tps=20.90	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=
+20261126-083248	srv	label=gate-app-default	cache=4	decode_tps=7.90	prompt_n=39515	ttft_s=183.2	prefill_tps=215.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=9720	lm_decodes=0	out=54edf738c5a8	env=

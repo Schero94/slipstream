@@ -25,3 +25,4 @@ bench/fetchwall/results/*.bin
 bench/fetchwall/results/*.txt
 bench/fetchwall/results/*.json
 bench/fetchwall/results/oldpin/
+bench/fetchwall/results/*.peak

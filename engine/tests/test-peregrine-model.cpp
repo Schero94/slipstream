@@ -1,5 +1,6 @@
 #include "common.h"
 #include "llama.h"
+#include "gguf.h"
 #include "llama-model.h"
 #include "llama-context.h"
 #include "llama-batch.h"
@@ -58,6 +59,23 @@ static std::string write_coupling_fixture(int n_layer, int n_expert) {
     while (done < b.size()) { ssize_t n = write(fd, b.data() + done, b.size() - done); if (n <= 0) break; done += (size_t) n; }
     close(fd);
     return done == b.size() ? std::string(path) : std::string();
+}
+
+// The fixture's PGRN budget: one fixed slot per streamed layer (the layer-partitioned cache refuses less),
+// read from the GGUF block count so the fixture can grow without breaking admission.
+static uint64_t fixture_cache_bytes(const char * gguf) {
+    uint64_t n_blocks = 3;
+    gguf_init_params ip = { /*.no_alloc =*/ true, /*.ctx =*/ nullptr };
+    if (gguf_context * g = gguf_init_from_file(gguf, ip)) {
+        const int64_t arch_id = gguf_find_key(g, "general.architecture");
+        if (arch_id >= 0) {
+            const std::string key = std::string(gguf_get_val_str(g, arch_id)) + ".block_count";
+            const int64_t id = gguf_find_key(g, key.c_str());
+            if (id >= 0) n_blocks = std::max<uint64_t>(n_blocks, gguf_get_val_u32(g, id));
+        }
+        gguf_free(g);
+    }
+    return n_blocks * 1179648ULL;
 }
 
 static uint64_t gibibytes(const char * text) {
@@ -152,7 +170,7 @@ static decode_result decode(const char * gguf, const char * pgrn, bool mtp, bool
         mp.pgrn_path = pgrn;
         // Layer-partitioned caches require at least one fixed slot per routed
         // layer; keep the tiny fixture budget bounded but above that minimum.
-        mp.pgrn_cache_bytes = 3ULL * 1179648ULL;
+        mp.pgrn_cache_bytes = fixture_cache_bytes(gguf);
         mp.pgrn_headroom_bytes = 1ULL * 1024ULL * 1024ULL * 1024ULL;
         mp.pgrn_compact_slots = compact;
         mp.pgrn_coupling_path = coupling_path;
@@ -309,19 +327,34 @@ struct lm_run {
     std::vector<float> prompt_logits;
     std::vector<float> follow_logits;
     std::vector<uint8_t> state;
+    std::vector<uint8_t> state_seq;
     uint64_t staged = 0, uploaded = 0, lm_decodes = 0, lm_passes = 0, skips = 0;
 };
 
-static lm_run lm_decode(llama_context * ctx, const llama_model * model, bool layer_major, int n_prompt) {
+static std::vector<uint8_t> lm_state_seq(llama_context * ctx, llama_seq_id seq) {
+    std::vector<uint8_t> state(llama_state_seq_get_size(ctx, seq));
+    const size_t n = llama_state_seq_get_data(ctx, state.data(), state.size(), seq);
+    state.resize(n);
+    return state;
+}
+
+// n_prefix > 0: decode a prefix normally first, so the (layer-major) batch starts on a non-empty memory
+static lm_run lm_decode(llama_context * ctx, const llama_model * model, bool layer_major, int n_prompt, int n_prefix = 0) {
     llama_memory_clear(llama_get_memory(ctx), true);
-    if (!ctx->set_layer_major(layer_major)) throw std::runtime_error("set_layer_major failed");
     const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-    const auto tokens = lm_fixture_tokens(n_prompt, n_vocab);
+    const auto tokens = lm_fixture_tokens(n_prefix + n_prompt, n_vocab);
+    if (n_prefix > 0) {
+        if (!ctx->set_layer_major(false)) throw std::runtime_error("set_layer_major failed");
+        common_batch prefix(ctx);
+        for (int i = 0; i < n_prefix; ++i) prefix.add(tokens[(size_t) i], i, 0, i + 1 == n_prefix);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, prefix.get()) != 0) throw std::runtime_error("prefix decode failed");
+    }
+    if (!ctx->set_layer_major(layer_major)) throw std::runtime_error("set_layer_major failed");
     lm_run run;
     const llama_perf_context_data p0 = llama_perf_context(ctx);
     {
         common_batch prompt(ctx);
-        for (int i = 0; i < n_prompt; ++i) prompt.add(tokens[(size_t) i], i, 0, true);
+        for (int i = 0; i < n_prompt; ++i) prompt.add(tokens[(size_t) (n_prefix + i)], n_prefix + i, 0, true);
         if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, prompt.get()) != 0) throw std::runtime_error("prompt decode failed");
     }
     const llama_perf_context_data p1 = llama_perf_context(ctx);
@@ -329,10 +362,11 @@ static lm_run lm_decode(llama_context * ctx, const llama_model * model, bool lay
         const float * logits = llama_get_logits_ith(ctx, i);
         run.prompt_logits.insert(run.prompt_logits.end(), logits, logits + n_vocab);
     }
-    run.state = lm_state(ctx);
+    run.state     = lm_state(ctx);
+    run.state_seq = lm_state_seq(ctx, 0);
     {
         common_batch next(ctx);
-        next.add(5, n_prompt, 0, true);
+        next.add(5, n_prefix + n_prompt, 0, true);
         if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, next.get()) != 0) throw std::runtime_error("follow-up decode failed");
         const float * logits = llama_get_logits_ith(ctx, 0);
         run.follow_logits.assign(logits, logits + n_vocab);
@@ -355,12 +389,14 @@ static double lm_max_abs(const std::vector<float> & a, const std::vector<float> 
     return m;
 }
 
-// T1: normal vs layer-major prefill on the fixture, resident and streamed, every token an output
+// T1: normal vs layer-major prefill on the fixture, resident and streamed, every token an output; once on an
+// empty memory and once after a normally decoded prefix (non-empty KV and recurrent state)
 static int layer_major_fixture(const char * gguf, const char * pgrn, bool gpu) {
     const int n_prompt = 23;          // n_ubatch 4 -> 6 ubatches, ragged last one
     const uint32_t n_ubatch = 4;
-    lm_run res_n, res_l, str_n, str_l;
-    int n_attn = 0, n_recr = 0;
+    const int prefixes[] = { 0, 5 };
+    lm_run res_n[2], res_l[2], str_n[2], str_l[2];
+    int n_attn = 0, n_recr = 0, n_layer = 0;
     for (int streamed = 0; streamed < 2; ++streamed) {
         llama_model_params mp = llama_model_default_params();
         mp.load_mode = streamed ? LLAMA_LOAD_MODE_NONE : LLAMA_LOAD_MODE_MMAP;
@@ -368,7 +404,7 @@ static int layer_major_fixture(const char * gguf, const char * pgrn, bool gpu) {
         if (gpu) mp.n_gpu_layers = 99;
         if (streamed) {
             mp.pgrn_path = pgrn;
-            mp.pgrn_cache_bytes = 3ULL * 1179648ULL;
+            mp.pgrn_cache_bytes = fixture_cache_bytes(gguf);
             mp.pgrn_headroom_bytes = 1ULL * 1024ULL * 1024ULL * 1024ULL;
         }
         llama_model_ptr model(llama_model_load_from_file(gguf, mp));
@@ -376,8 +412,10 @@ static int layer_major_fixture(const char * gguf, const char * pgrn, bool gpu) {
         if (streamed && !model->pgrn_enabled()) throw std::runtime_error("PGRN runtime was not enabled");
         if (!model->supports_layer_range()) throw std::runtime_error("arch has no layer-range graph");
         n_attn = n_recr = 0;
-        for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) (model->hparams.is_recr(il) ? n_recr : n_attn)++;
+        n_layer = (int) model->hparams.n_layer();
+        for (int il = 0; il < n_layer; ++il) (model->hparams.is_recr(il) ? n_recr : n_attn)++;
         if (n_attn == 0 || n_recr == 0) throw std::runtime_error("fixture must cover attention and recurrent layers");
+        if (n_layer < 3) throw std::runtime_error("fixture needs >= 3 trunk layers to cover a middle layer-range graph");
         llama_context_params cp = llama_context_default_params();
         cp.n_ctx = 64;
         cp.n_batch = 32;
@@ -387,37 +425,46 @@ static int layer_major_fixture(const char * gguf, const char * pgrn, bool gpu) {
         llama_context_ptr ctx(llama_init_from_model(model.get(), cp));
         if (!ctx) throw std::runtime_error("context creation failed");
         if (!streamed) lm_rewind_test(ctx.get(), model.get(), n_prompt, n_ubatch);
-        lm_run & n = streamed ? str_n : res_n;
-        lm_run & l = streamed ? str_l : res_l;
-        n = lm_decode(ctx.get(), model.get(), false, n_prompt);
-        l = lm_decode(ctx.get(), model.get(), true, n_prompt);
-        if (n.lm_decodes != 0 || l.lm_decodes != 1) throw std::runtime_error("layer-major path did not run exactly once");
-        if (l.lm_passes != model->hparams.n_layer() - 1) throw std::runtime_error("unexpected number of layer passes");
+        for (int p = 0; p < 2; ++p) {
+            lm_run & n = streamed ? str_n[p] : res_n[p];
+            lm_run & l = streamed ? str_l[p] : res_l[p];
+            n = lm_decode(ctx.get(), model.get(), false, n_prompt, prefixes[p]);
+            l = lm_decode(ctx.get(), model.get(), true, n_prompt, prefixes[p]);
+            if (n.lm_decodes != 0 || l.lm_decodes != 1) throw std::runtime_error("layer-major path did not run exactly once");
+            if ((int) l.lm_passes != n_layer - 1) throw std::runtime_error("unexpected number of layer passes");
+        }
     }
-    struct check { const char * what; bool ok; };
-    const check checks[] = {
-        { "resident prompt logits",  lm_bitwise(res_n.prompt_logits, res_l.prompt_logits) },
-        { "resident follow logits",  lm_bitwise(res_n.follow_logits, res_l.follow_logits) },
-        { "resident memory state",   res_n.state == res_l.state },
-        { "streamed prompt logits",  lm_bitwise(str_n.prompt_logits, str_l.prompt_logits) },
-        { "streamed follow logits",  lm_bitwise(str_n.follow_logits, str_l.follow_logits) },
-        { "streamed memory state",   str_n.state == str_l.state },
-        { "staged(LM) <= staged(normal)", str_l.staged <= str_n.staged },
-        { "held skips > 0",          str_l.skips > 0 },
-    };
+    struct check { std::string what; bool ok; };
+    std::vector<check> checks;
+    double max_abs = 0.0, max_abs_follow = 0.0, res_vs_str = 0.0;
+    for (int p = 0; p < 2; ++p) {
+        const std::string tag = " (prefix " + std::to_string(prefixes[p]) + ")";
+        checks.push_back({ "resident prompt logits" + tag,   lm_bitwise(res_n[p].prompt_logits, res_l[p].prompt_logits) });
+        checks.push_back({ "resident follow logits" + tag,   lm_bitwise(res_n[p].follow_logits, res_l[p].follow_logits) });
+        checks.push_back({ "resident memory state" + tag,    res_n[p].state == res_l[p].state });
+        checks.push_back({ "resident seq state" + tag,       !res_n[p].state_seq.empty() && res_n[p].state_seq == res_l[p].state_seq });
+        checks.push_back({ "streamed prompt logits" + tag,   lm_bitwise(str_n[p].prompt_logits, str_l[p].prompt_logits) });
+        checks.push_back({ "streamed follow logits" + tag,   lm_bitwise(str_n[p].follow_logits, str_l[p].follow_logits) });
+        checks.push_back({ "streamed memory state" + tag,    str_n[p].state == str_l[p].state });
+        checks.push_back({ "streamed seq state" + tag,       !str_n[p].state_seq.empty() && str_n[p].state_seq == str_l[p].state_seq });
+        checks.push_back({ "staged(LM) <= staged(normal)" + tag, str_l[p].staged <= str_n[p].staged });
+        checks.push_back({ "held skips > 0" + tag,           str_l[p].skips > 0 });
+        max_abs = std::max({ max_abs, lm_max_abs(res_n[p].prompt_logits, res_l[p].prompt_logits),
+                             lm_max_abs(str_n[p].prompt_logits, str_l[p].prompt_logits) });
+        max_abs_follow = std::max({ max_abs_follow, lm_max_abs(res_n[p].follow_logits, res_l[p].follow_logits),
+                                    lm_max_abs(str_n[p].follow_logits, str_l[p].follow_logits) });
+        res_vs_str = std::max(res_vs_str, lm_max_abs(res_l[p].prompt_logits, str_l[p].prompt_logits));
+    }
     bool ok = true;
     for (const auto & c : checks) {
-        if (!c.ok) { std::fprintf(stderr, "PGR_LM_CHECK_FAIL: %s\n", c.what); ok = false; }
+        if (!c.ok) { std::fprintf(stderr, "PGR_LM_CHECK_FAIL: %s\n", c.what.c_str()); ok = false; }
     }
-    const double res_vs_str = lm_max_abs(res_l.prompt_logits, str_l.prompt_logits);
-    std::printf("PGR_MODEL_PARITY_OK mode=layer_major device=%s layers=%d attn=%d recr=%d prompt=%d ubatch=%u "
-                "max_abs=%.9g max_abs_follow=%.9g resident_vs_streamed=%.9g staged_normal=%llu staged_lm=%llu "
+    std::printf("PGR_MODEL_PARITY_OK mode=layer_major device=%s layers=%d attn=%d recr=%d prompt=%d ubatch=%u prefixes=0,5 "
+                "checks=%zu max_abs=%.9g max_abs_follow=%.9g resident_vs_streamed=%.9g staged_normal=%llu staged_lm=%llu "
                 "held_skips=%llu bitwise=%s\n",
-        gpu ? "gpu" : "default", n_attn + n_recr, n_attn, n_recr, n_prompt, n_ubatch,
-        std::max(lm_max_abs(res_n.prompt_logits, res_l.prompt_logits), lm_max_abs(str_n.prompt_logits, str_l.prompt_logits)),
-        std::max(lm_max_abs(res_n.follow_logits, res_l.follow_logits), lm_max_abs(str_n.follow_logits, str_l.follow_logits)),
-        res_vs_str, (unsigned long long) str_n.staged, (unsigned long long) str_l.staged,
-        (unsigned long long) str_l.skips, ok ? "yes" : "no");
+        gpu ? "gpu" : "default", n_layer, n_attn, n_recr, n_prompt, n_ubatch, checks.size(), max_abs, max_abs_follow,
+        res_vs_str, (unsigned long long) str_n[0].staged, (unsigned long long) str_l[0].staged,
+        (unsigned long long) str_l[0].skips, ok ? "yes" : "no");
     return ok && res_vs_str == 0.0 ? 0 : 1;
 }
 
@@ -446,7 +493,7 @@ static int layer_major_file(const char * gguf, const char * pgrn, const char * p
     llama_context_ptr ctx(llama_init_from_model(model.get(), cp));
     if (!ctx) throw std::runtime_error("context creation failed");
     const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
-    struct out { std::vector<float> last; std::vector<llama_token> gen; double prompt_s; uint64_t staged, uploaded, skips; };
+    struct out { std::vector<float> last; std::vector<llama_token> gen; std::vector<uint8_t> state_seq; double prompt_s; uint64_t staged, uploaded, skips; };
     auto run = [&](bool lm) {
         llama_memory_clear(llama_get_memory(ctx.get()), true);
         if (!ctx->set_layer_major(lm)) throw std::runtime_error("set_layer_major failed");
@@ -459,6 +506,7 @@ static int layer_major_file(const char * gguf, const char * pgrn, const char * p
         const float * logits = llama_get_logits_ith(ctx.get(), -1);
         o.last.assign(logits, logits + n_vocab);
         o.prompt_s = std::chrono::duration<double>(clock::now() - t0).count();
+        o.state_seq = lm_state_seq(ctx.get(), 0);   // serialized KV + recurrent state right after the prompt
         const auto p1 = llama_perf_context(ctx.get());
         if (lm && p1.pgrn_lm_decodes != p0.pgrn_lm_decodes + 1) throw std::runtime_error("layer-major path did not run");
         o.staged = p1.pgrn_experts_staged - p0.pgrn_experts_staged;
@@ -479,12 +527,15 @@ static int layer_major_file(const char * gguf, const char * pgrn, const char * p
     const out b = run(true);
     const bool bitwise = lm_bitwise(a.last, b.last);
     const bool same_gen = a.gen == b.gen;
+    const bool same_state = !a.state_seq.empty() && a.state_seq == b.state_seq;
     std::printf("PGR_LM_FILE tokens=%zu ubatch=%d cache_gib=%.2f bitwise_last_logits=%s max_abs=%.9g greedy_%d_equal=%s "
+                "seq_state_equal=%s seq_state_mib=%.1f "
                 "normal_prompt_s=%.2f lm_prompt_s=%.2f normal_staged=%llu lm_staged=%llu normal_mib=%.0f lm_mib=%.0f held_skips=%llu\n",
         tokens.size(), n_ubatch, cache_bytes / 1073741824.0, bitwise ? "yes" : "no", lm_max_abs(a.last, b.last), n_gen,
-        same_gen ? "yes" : "no", a.prompt_s, b.prompt_s, (unsigned long long) a.staged, (unsigned long long) b.staged,
+        same_gen ? "yes" : "no", same_state ? "yes" : "no", a.state_seq.size() / 1048576.0,
+        a.prompt_s, b.prompt_s, (unsigned long long) a.staged, (unsigned long long) b.staged,
         a.uploaded / 1048576.0, b.uploaded / 1048576.0, (unsigned long long) b.skips);
-    return bitwise && same_gen ? 0 : 1;
+    return bitwise && same_gen && same_state ? 0 : 1;
 }
 
 int main(int argc, char ** argv) {
