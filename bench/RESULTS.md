@@ -3689,3 +3689,8 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   model. Critic: holds with caveats (fixture lacks a middle-layer graph, non-empty-memory
   parity untested, Turbo must be off in lm mode, lm_resid unbudgeted, not cancellable) →
   shipped OPT-IN (PGRN_LAYER_MAJOR=1), default after those follow-ups.
+- CORRECTION (same day): the gen3 build that produced "ctest 14/14 / Qwen hash unchanged" was
+  compiled at 05:49:51, before the layer-major diff was applied (05:53:32) — so b9c8ef6's
+  layer-major part was NOT covered by that verification, and the first app-regime layer-major
+  A/B (lm_app: 235.2 vs 236.3 s) ran a binary without layer-major (`strings` count 0). Full
+  rebuild + ctest + Qwen parity (gen_verify4) and a re-run of lm_app follow.

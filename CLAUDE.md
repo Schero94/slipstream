@@ -83,3 +83,5 @@ revert the rest and record it as a negative.
 
 - After a release merge, switch back to `feat/fetch-wall` immediately; check
   `git branch --show-current` before every commit (2026-11-26: 12 commits landed on local `main`).
+- A verification only counts for sources older than the binary: compare `stat` of the binary
+  with the newest source change before trusting a test or benchmark (2026-11-26 stale binary).
