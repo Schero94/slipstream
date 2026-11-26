@@ -61,8 +61,30 @@ speculation (−9 % on a rewrite). Details in `bench/RESULTS.md`.
 
 ## Validation
 
-_Filled in after the release build._
+- Engine: 14/14 peregrine tests on a fresh build (binary newer than every source), incl. the
+  layer-major fixture with four trunk layers, non-empty-memory and serialized-state parity on
+  CPU and Metal. Qwen3.6 greedy output unchanged (hash `e6c6a36552db`).
+- 183/183 Rust workspace tests, 96/96 Tauri tests, 44/44 Python tests, 7/7 UI contracts,
+  headless asset check PASS.
+- DMG checksum valid; the mounted app passes `codesign --verify --deep --strict` (ad-hoc, not
+  notarized), reports 0.4.1, contains 476 resource files, all 16 runtime components, no Python
+  bytecode cache, no Ollama payload; all binaries arm64; llama-server links system frameworks only.
+- The bundled llama-server, started from the mounted DMG with the app's flags, decodes the
+  reference prompt at 9.9 tok/s with the reference output hash, with and without Fast prompt
+  reading, 0 MB swap. The app launches from the DMG and quits cleanly; ports 8080/8081 stay free.
+- Prompt reuse: a follow-up served from the prompt cache is byte-identical to a fresh prefill.
 
 ## Release artifacts
 
-_Filled in after the release build._
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `Slipstream_0.4.1_aarch64.dmg` | 69,996,389 | `dbfc5a6be8b55071b383893ebf88bf829b15565ac9bc8958aba0d6de7a6811ba` |
+| `Slipstream_0.4.1_aarch64.zip` | 68,379,544 | `5ed8a886dc2721ed2f282366a22d9e259ee1f8930e80d3e43eb79c808bb2cc71` |
+| `slipstream-node_0.4.1_macos_aarch64.tar.gz` | 5,449,311 | `29f31fb3135d708773ee59251157ebfdedc35b96b139ba1025b06795549dd373` |
+
+The node archive reports 0.4.1 and contains the arm64 binary, launchd/systemd/Docker templates,
+the deploy README and the community mesh guide. It is ~1.1 MB larger than 0.4.0 because
+libp2p 0.57 links aws-lc-rs; the Docker image has not been rebuilt with it yet.
+
+The app is ad-hoc signed, **not notarized**: the first launch needs right-click → Open, or
+`xattr -dr com.apple.quarantine Slipstream.app`.

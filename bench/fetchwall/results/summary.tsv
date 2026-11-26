@@ -235,3 +235,5 @@ e2 ship-ub4096-cram2048 peak_rss_mb=16954 swap_delta_mb=0
 20261126-101523	srv	label=lmapp-ub2048	cache=4	decode_tps=7.76	prompt_n=39515	ttft_s=159.7	prefill_tps=247.4	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8942	lm_decodes=1	out=54edf738c5a8	env=PGRN_LAYER_MAJOR=1
 20261126-102217	srv	label=lmapp-ub4096	cache=4	decode_tps=7.78	prompt_n=39515	ttft_s=155.5	prefill_tps=254.2	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=9339	lm_decodes=1	out=54edf738c5a8	env=PGRN_LAYER_MAJOR=1
 20261126-102900	srv	label=lmapp-ub2048	cache=4	decode_tps=7.91	prompt_n=39515	ttft_s=147.2	prefill_tps=268.5	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8941	lm_decodes=1	out=54edf738c5a8	env=PGRN_LAYER_MAJOR=1
+20261126-103838	srv	label=bundle041-default	cache=4	decode_tps=9.91	prompt_n=57	ttft_s=2.8	prefill_tps=20.1	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8080	lm_decodes=0	out=38b5b06864f1	env=
+20261126-104025	srv	label=bundle041-layermajor	cache=4	decode_tps=9.84	prompt_n=57	ttft_s=2.8	prefill_tps=20.4	draft_acc=None/None	swap_delta_mb=-133.43	peak_rss_mb=7652	lm_decodes=0	out=38b5b06864f1	env=PGRN_LAYER_MAJOR=1
