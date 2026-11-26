@@ -268,7 +268,7 @@
       <div class="card rv"><span class="k">CLOCK-LRU-K</span><h3>Layer-partitioned arena</h3><p>One bounded cache tier per layer. Cross-layer eviction is impossible by construction, so streaming behaviour stays predictable.</p></div>
       <div class="card rv"><span class="k">admission gate</span><h3>Memory-health guard</h3><p>The engine refuses a cache that would push the Mac into swap. "The Mac stays usable" is a hard invariant, not a hope.</p></div>
       <div class="card rv"><span class="k">MTP · DFlash</span><h3>Speculative decoding</h3><p>Drafts several tokens per target pass: MTP for Qwen, a DFlash draft model for Laguna. Each draft amortizes the expert fetches behind it.</p></div>
-      <div class="card rv"><span class="k">PGCT1 · PGCC1</span><h3>Async prefetch</h3><p>A background thread warms the next layer's experts while the current one computes. Wired end-to-end; the predictor is active research.</p></div>
+      <div class="card rv"><span class="k">lookahead · Turbo</span><h3>Lookahead prefetch</h3><p>While one layer computes, the next layer's router is scored early and its experts are read from the SSD in parallel. Lossless, on by default for every MoE model: +20–33 % decode. Turbo (opt-in) nudges routing toward cached experts.</p></div>
       <div class="card rv"><span class="k">NMSE = 0</span><h3>Parity gate</h3><p>A test asserts streamed output is bit-identical to fully-resident output. Optimizations that only reorder eviction can't change results.</p></div>
     </div>
   </div>
@@ -301,6 +301,18 @@
         </tbody>
       </table></div>
       <div class="tbl-cap">Prefill of a ~30k-token agent prompt: 75 → 208 tok/s (2.7×) with ubatch 2048 + parallel I/O threads.</div>
+    </div>
+
+    <div class="rv">
+      <h3 style="margin-top:52px;font-size:19px">Agent latency, v0.4.1 (~40k-token coding-agent prompt, 4 GiB cache)</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Time to first token</th><th class="num">v0.4.0</th><th class="num">v0.4.1 default</th><th class="num">+ Fast prompt reading (opt-in)</th></tr></thead>
+        <tbody>
+          <tr><td>First turn (cold)</td><td class="num">235 s</td><td class="num win">183 s</td><td class="num win">~154 s</td></tr>
+          <tr><td>Follow-up turn after another request</td><td class="num">229 s</td><td class="num win">0.8 s</td><td class="num win">0.8 s</td></tr>
+        </tbody>
+      </table></div>
+      <div class="tbl-cap">App regime (llama-server with the app's flags), Qwen3.6-35B-A3B Q4 on a 36 GB M3 Pro. Reused context is byte-identical to a fresh read.</div>
     </div>
 
     <div class="rv">
