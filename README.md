@@ -312,6 +312,21 @@ Multi-part GGUFs are converted in one pass — point `--input` at the first shar
 
 ---
 
+## Research behind Slipstream
+
+Every idea we kept comes from a paper we read and then measured on a real Mac.
+
+| What it does in Slipstream | Paper |
+|---|---|
+| Stream model weights from the SSD instead of holding them all in RAM | [LLM in a flash (Apple), 2312.11514](https://arxiv.org/abs/2312.11514) |
+| Lookahead: guess the next layer's experts early and start reading them (on by default, lossless) | [Fast Inference of MoE Models with Offloading, 2312.17238](https://arxiv.org/abs/2312.17238) |
+| Turbo: prefer experts that are already loaded (opt-in, small measured quality change) | [Prefetch-Steered Routing, 2610.34721](https://arxiv.org/abs/2610.34721) · [Cache-Conditional Experts, 2412.00099](https://arxiv.org/abs/2412.00099) · [CECAR, 2611.20119](https://arxiv.org/abs/2611.20119) |
+| Draft several tokens at once (MTP, DFlash) and hide SSD reads behind them | [Medusa, 2401.10774](https://arxiv.org/abs/2401.10774) · [EAGLE, 2401.15077](https://arxiv.org/abs/2401.15077) · [DFlash, 2602.06036](https://arxiv.org/abs/2602.06036) · [SP-MoE, 2510.10302](https://arxiv.org/abs/2510.10302) · [Hiding offloading latency, 2508.21706](https://arxiv.org/abs/2508.21706) |
+| Comparable designs for MoE on small-memory machines | [eMoE, 2503.06823](https://arxiv.org/abs/2503.06823) · [FloE, 2505.05950](https://arxiv.org/abs/2505.05950) |
+| Reference for fast native Metal inference on Apple chips | [BaseRT, 2607.00501](https://arxiv.org/abs/2607.00501) · [BaseRT M5, 2607.19438](https://arxiv.org/abs/2607.19438) |
+
+Ideas we tested and dropped are recorded with their numbers in `bench/RESULTS.md`.
+
 ## Acknowledgements
 
 Slipstream was inspired by [Colibrì](https://github.com/JustVugg/colibri) by JustVugg, the project that showed a 700B-scale MoE model streaming from disk on consumer hardware. Colibrì is pure C on CPU and CUDA; Slipstream takes the idea to Apple Silicon (Metal, unified memory) with a native app and its own PGRN engine. The disk-benchmarking methodology, the route-trace and expert-coupling analysis, and the RAM admission idea all came from reading it. Thank you. 🐦

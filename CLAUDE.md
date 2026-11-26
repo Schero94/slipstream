@@ -89,6 +89,8 @@ the current state, understandable for a non-expert. A change is not done until t
 - **Check:** after each release, read the whole page top to bottom as a newcomer: version in
   the metadata, the "New in" box, the benchmark tables, the feature cards and the download link
   all match the release notes.
+- **Papers:** every arXiv paper behind a kept feature is linked on the website (papers
+  section) and in README "Research behind Slipstream", with one plain sentence on what it does.
 
 ## Repo hygiene
 
