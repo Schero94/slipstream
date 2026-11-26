@@ -3694,3 +3694,7 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   layer-major part was NOT covered by that verification, and the first app-regime layer-major
   A/B (lm_app: 235.2 vs 236.3 s) ran a binary without layer-major (`strings` count 0). Full
   rebuild + ctest + Qwen parity (gen_verify4) and a re-run of lm_app follow.
+- Full rebuild verification (gen_verify4, binary 06:32:03 after the last source change,
+  contains layer-major): ctest 14/14; Qwen3.6 4 / 10 GiB hash e6c6a36552db, 10.36 / 18.14
+  tok/s; Mellum2.1 8 GiB with the fully-resident guard 23.49 (off) vs 23.63 (on) tok/s,
+  identical output — neutral (was −4 %).
