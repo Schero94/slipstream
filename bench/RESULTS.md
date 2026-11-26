@@ -3698,3 +3698,25 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   contains layer-major): ctest 14/14; Qwen3.6 4 / 10 GiB hash e6c6a36552db, 10.36 / 18.14
   tok/s; Mellum2.1 8 GiB with the fully-resident guard 23.49 (off) vs 23.63 (on) tok/s,
   identical output — neutral (was −4 %).
+
+## Layer-major follow-ups (critic items) — DONE — 2026-11-26
+
+- Fixture: qwen35moe with 4 trunk layers (DeltaNet, attention, DeltaNet, attention) + MTP, so
+  the middle layer-range graph (reads and writes lm_resid) runs in CI; CPU + Metal, resident +
+  streamed; 20 bitwise checks per device incl. a non-empty-memory prefix (5 tokens decoded
+  normally first) and llama_state_seq_get_data. Real model: last-token logits, 16 greedy tokens
+  and the 835.5 MiB serialized sequence state identical to the normal path.
+- Guards: no Turbo bias inside layer-major graphs (bitwise identical with PGRN_STEER=0.02 when no
+  tail ubatch ≤ 8 tokens); PGRN_LAYER_MAJOR_MAX_TOKENS (default 40960) sizes lm_resid and the
+  buffer is only allocated if it fits next to the PGRN headroom; fallback reason logged once per
+  decode; pgrn_lm_decodes in perf print, server slot print and /completion timings.
+- Server: an aborted decode (ret 2) clears the slot's prompt state instead of the halve-batch
+  retry. llama-server sets no abort callback, so a layer-major prefill (one decode call) is not
+  interruptible today (design doc §2.8 corrected).
+- App regime (agent, 4 GiB, -b 40960, interleaved 2 reps, hash 54edf738c5a8 everywhere):
+  ub 4096 + --cache-ram 2048 -fa on --jinja: off 183.3 / 183.4 s → on 138.7 / 138.9 s (−24 %);
+  E1 follow-up with layer-major on: 27 tokens recomputed, 1.7 s.
+- Release gate (main tree, fresh binary 08:31 > newest source 08:30, layer-major strings 8):
+  ctest 14/14; Qwen3.6 hash e6c6a36552db 10.70 tok/s; app default 183.2 s (lm_decodes 0);
+  app + layer-major at ub 2048: 157.5 s (lm_decodes 1), hash 54edf738c5a8 — ub choice for the
+  layer-major app path re-measured in lm_ub_app.sh.
