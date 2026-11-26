@@ -2379,7 +2379,12 @@ function computeReco() {
   else if (free >= 12) { cache = 8; band = "cons"; }
   else if (free >= 8) { cache = 6; band = "cons"; }
   else { cache = 4; band = "tight"; }
-  const maxByFloor = Math.floor(free - resident - draftGb - headroom - postFloor);
+  // Engine RAM outside the expert cache that admission's fixed 2 GiB overhead does not see:
+  // the prompt cache (--cache-ram: 2 GiB on >= 32 GB, else 1 GiB) and the larger compute
+  // buffer of the 4096 prefill batch used for streamed runs (~+1 GiB, conservative).
+  const promptCacheGb = s.total_gib >= 32 ? 2 : 1;
+  const prefillBufGb = 1;
+  const maxByFloor = Math.floor(free - resident - draftGb - headroom - postFloor - promptCacheGb - prefillBufGb);
   if (Number.isFinite(maxByFloor)) cache = Math.min(cache, Math.max(4, maxByFloor));
   cache = Math.max(4, Math.min(cache, 24, Math.ceil(pgrnGb) || cache));
   // context: derived from BOTH total and free RAM (KV cache grows with context), snapped to options.

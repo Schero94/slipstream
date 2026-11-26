@@ -32,6 +32,10 @@ assert.match(js, /c\.name\.startsWith\("omlx_"\)/);
 assert.match(js, /c\.name\.startsWith\("pgrn_host"\)/);
 assert.doesNotMatch(html, /value=["']ollama["']/i);
 assert.doesNotMatch(js, /backend\.ollama|start_ollama|OLLAMA_MODELS/);
-assert.match(rust, /"--cache-ram",\s*"512"/);
+// Prompt-cache RAM is bounded and scaled by machine RAM (E1/E2 2026-11-26): 2048 MiB on
+// >= 32 GB, 1024 MiB below. It must never be unbounded (llama.cpp default is 8 GiB).
+assert.match(rust, /"--cache-ram",\s*cache_ram/);
+assert.match(rust, /g >= 32\.0 => "2048"/);
+assert.match(rust, /_ => "1024"/);
 
 console.log("native runtime UI contract: PASS");

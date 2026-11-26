@@ -403,17 +403,29 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
             cmd.arg("--pgrn-compact-slots");
         }
     }
+    // Prefill batch. 2048 shares one SSD expert fetch across many tokens (~2.7x faster agent
+    // prompts than 512). Streamed MoE runs use 4096: half the expert re-reads per prompt
+    // (39.5k-token prompt TTFT 259 -> 207 s @4 GiB, 231 -> 182 s @10 GiB, identical output).
+    // Dense / resident models have nothing to re-read and keep 2048 (smaller compute buffer).
+    let ub_streamed = {
+        let pb = file_size(&cfg.pgrn) as f64;
+        pb > 0.0 && !cfg.dense && cfg.cache_gb * 1073741824.0 < 0.9 * pb
+    };
+    let ubatch = if ub_streamed { "4096" } else { "2048" };
+    // Prompt-cache RAM: 2048 MiB holds a ~40k-token agent context (follow-up turn 229 s ->
+    // 0.8 s, RESULTS E1); smaller Macs get 1024 MiB (~45k tokens of Qwen3.6 state is ~0.9 GB)
+    // so the extra prompt state cannot push them into swap.
+    let cache_ram = match sysctl_total_gib() {
+        Some(g) if g >= 32.0 => "2048",
+        _ => "1024",
+    };
     cmd.args([
         "--model", &cfg.model,
         "--gpu-layers", "99",
         "--ctx-size", &cfg.ctx.to_string(),
         "--parallel", "1",
-        // Large prefill batch: more tokens share one SSD expert-fetch, so
-        // reading big Kilo prompts is ~2.7x faster (measured 208 vs 75 tok/s). 4096 halves the
-        // expert re-reads per prompt: 39.5k-token agent prompt TTFT 259 -> 207 s @4 GiB and
-        // 231 -> 182 s @10 GiB, identical output, decode unchanged, 0 MB swap (RESULTS 2026-11-26).
-        "--batch-size", "4096",
-        "--ubatch-size", "4096",
+        "--batch-size", ubatch,
+        "--ubatch-size", ubatch,
         "-fa", "on",
         "--jinja",
         "--alias", "slipstream",
@@ -426,10 +438,8 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         // bounding long-running multi-client growth and preserving the RAM gate.
         // 512 MiB cannot hold an agent context above ~22k tokens (Qwen3.6 ~20 KiB/token), so
         // any interleaved request (title, commit message, warm-up) threw the context away.
-        // 2048 MiB: 39.5k-token agent context, interleaved request, follow-up turn TTFT
-        // 229 s -> 15 s (37,467 of 39,526 tokens from cache), +0.9 GB RSS, 0 MB swap
-        // (bench/RESULTS.md E2, 2026-11-26).
-        "--cache-ram", "2048",
+        // Scaled by RAM above (2048 MiB on >= 32 GB, else 1024 MiB); E1/E2 2026-11-26.
+        "--cache-ram", cache_ram,
         // Serving counters for the menubar's Serving Stats submenu.
         "--metrics",
     ]);

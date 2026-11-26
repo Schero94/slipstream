@@ -3586,8 +3586,14 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   the shared full-n_expert scratch holds a layer across ubatches). Its I/O-vs-compute split is
   an estimate until the llama-completion split measurement (split1) is recorded.
 - App default changed to `-b 4096 -ub 4096` for the main server (consistent −20/−21 % TTFT at
-  4/10 GiB, identical output, decode unchanged, 0 MB swap). Caveat: larger Metal compute
-  buffers — RAM headroom on 16 GB Macs is not yet measured (admission still refuses unsafe plans).
+  4/10 GiB, identical output, decode unchanged, 0 MB swap). CORRECTION (critic review,
+  2026-11-26): admission does NOT account for this — it runs at model load with a fixed 2 GiB
+  overhead for KV + compute buffers + prompt cache, so the larger compute buffer and the prompt
+  cache are unbudgeted. Follow-up: ub 4096 only for streamed PGRN runs (dense/resident keep
+  2048), --cache-ram scaled by RAM (2048 MiB >= 32 GB, else 1024), the app's cache
+  recommendation subtracts prompt cache + ~1 GiB prefill buffer; peak RSS / compute buffer and
+  the combined defaults are re-measured in a ship check before release. Single sequential runs
+  (warm-up pass of the same prompt agrees: 269/259 s and 208/207 s @4 GiB).
 - Split measured (llama-completion, same 39,512-token prompt, ub 2048, lookahead on):
 
   | cache | prompt eval | PGRN staging (fetch) | rest (compute + sync) | prefill hit-rate |
