@@ -51,7 +51,7 @@ echo "engine/: ${#owned[@]} owned files synced; patch: ${#upstream[@]} upstream 
 if [ "${1:-}" = "--verify" ]; then
   TMP=$(mktemp -d "${TMPDIR:-/tmp}/slipstream-verify.XXXXXX")
   ( cd "$HERE" && UPSTREAM="$TREE" ./apply.sh "$TMP/tree" >/dev/null )
-  if diff -rq -x .git -x 'build*' -x '.claude' "$TMP/tree" "$TREE" ; then
+  if diff -rq -x .git -x 'build*' -x '.claude' -x '__pycache__' "$TMP/tree" "$TREE" ; then
     echo "VERIFY PASS: apply.sh reproduces the working tree exactly"
     rm -rf "$TMP"
   else
