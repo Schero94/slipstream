@@ -14,8 +14,11 @@ the experiments that lost are in `bench/RESULTS.md`.
 | | 0.4.0 | 0.4.1 |
 |---|---:|---:|
 | Agent follow-up turn after an interleaved request | 229 s | **0.8 s** |
-| First answer, 39.5k-token prompt, 10 GiB cache | 231 s | **182 s** (default) |
-| First answer with "Fast prompt reading" (opt-in), 4 GiB | 235 s | **134 s** |
+| First answer, 39.5k-token prompt, 4 GiB cache | 235 s | **183 s** (default) |
+| First answer with "Fast prompt reading" (opt-in), 4 GiB | 235 s | **~154 s** |
+
+Measured in the app's own server setup (`-fa on`, prompt cache, checkpoints), interleaved,
+two runs each. Without those (bare server) Fast prompt reading reaches 134 s.
 
 - **Follow-up turns.** The prompt cache now holds 2 GiB on Macs with 32 GB or more and 1 GiB
   below (was 512 MiB, which could not hold any context above ~22k tokens, so a title or
@@ -25,7 +28,8 @@ the experiments that lost are in `bench/RESULTS.md`.
   re-reads (−21 %, +340 MB peak RAM).
 - **Fast prompt reading (layer-major prefill), opt-in.** Runs every layer for the whole prompt
   before the next layer, so each expert is read from the SSD once per prompt instead of once
-  per batch (SSD reads in the prompt: 102 s → 6 s). Output is bit-identical. It is off by
+  per batch (SSD reads in the prompt: 102 s → 6 s; first answer −16 % on top of the new
+  default). Output is bit-identical, and follow-up turns still come from the prompt cache. It is off by
   default while the remaining safety work lands: a long prompt cannot be stopped mid-read yet.
 - **Lookahead for every MoE model.** Lookahead prefetch moved into the shared MoE code, so it
   now works for all architectures, not only Qwen3.6, with two guards that switch it off where

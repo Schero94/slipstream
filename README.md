@@ -12,12 +12,15 @@ Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that 
 
 It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
-**New in v0.4.0:** the streamed 35B decodes about a third faster without changing a single
-output token, and up to 86% faster with an opt-in Turbo mode. Lookahead prefetch reads the
-experts the next layer will need while the current layer computes; Turbo nudges the router,
-while generating, towards experts already in RAM. The engine is ported to current upstream
-llama.cpp (2677 commits newer), and the app gets a live engine cockpit and a four-click first
-run. Numbers below and in [`docs/RELEASE_0.4.0.md`](docs/RELEASE_0.4.0.md).
+**New in v0.4.1:** coding agents get follow-up answers in under a second. A ~40k-token agent
+context now survives interleaved requests, so the next turn starts in 0.8 s instead of almost
+four minutes. The first answer to a long prompt is 22% faster by default and about 35% faster
+with the new opt-in "Fast prompt reading", lookahead prefetch works for every MoE model, and
+LFM2.5 and JetBrains Mellum2.1 run. Details in [`docs/RELEASE_0.4.1.md`](docs/RELEASE_0.4.1.md).
+
+**v0.4.0** made the streamed 35B a third faster without changing a single output token
+(lookahead prefetch), added an opt-in Turbo mode, and moved the engine to current upstream
+llama.cpp ([`docs/RELEASE_0.4.0.md`](docs/RELEASE_0.4.0.md)).
 
 In v0.3.4 the app shell became properly clickable and announced: labelled path fields,
 tablist semantics and spoken toasts.
@@ -86,6 +89,20 @@ Numbers from a 36 GB Apple-Silicon Mac, raw logs in [`bench/RESULTS.md`](bench/R
 | 14 GiB | ~19 tok/s | ~86% |
 
 Prefill of a large (~30k-token) coding-agent prompt goes from 75 to 208 tok/s, a 2.7x gain, with `ubatch 2048` and parallel I/O threads.
+
+#### Agent prompts (v0.4.1)
+
+Same setup, a 39,515-token coding-agent prompt:
+
+| | v0.4.0 | v0.4.1 |
+|---|---:|---:|
+| Follow-up turn after an interleaved request | 229 s | **0.8 s** |
+| First answer, 4 GiB cache | 235 s | **183 s** |
+| First answer with Fast prompt reading (opt-in), 4 GiB | 235 s | **~154 s** |
+
+The follow-up comes from the prompt cache (byte-identical to a fresh prefill). Fast prompt
+reading runs every layer over the whole prompt before the next one, so each expert is read
+from the SSD once per prompt instead of once per batch; output is bit-identical.
 
 #### Lookahead prefetch and Turbo (v0.4.0)
 

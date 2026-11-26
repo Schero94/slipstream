@@ -231,3 +231,7 @@ e2 ship-ub4096-cram2048 peak_rss_mb=16954 swap_delta_mb=0
 20261126-083117	label=gate-qwen-la	cache=4	decode_tps=10.70	prefill_tps=20.90	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=
 20261126-083248	srv	label=gate-app-default	cache=4	decode_tps=7.90	prompt_n=39515	ttft_s=183.2	prefill_tps=215.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=9720	lm_decodes=0	out=54edf738c5a8	env=
 20261126-100156	srv	label=gate-app-layermajor	cache=4	decode_tps=7.82	prompt_n=39515	ttft_s=157.5	prefill_tps=250.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=9207	lm_decodes=1	out=54edf738c5a8	env=PGRN_LAYER_MAJOR=1
+20261126-100833	srv	label=lmapp-ub4096	cache=4	decode_tps=8.01	prompt_n=39515	ttft_s=155.7	prefill_tps=253.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=9332	lm_decodes=1	out=54edf738c5a8	env=PGRN_LAYER_MAJOR=1
+20261126-101523	srv	label=lmapp-ub2048	cache=4	decode_tps=7.76	prompt_n=39515	ttft_s=159.7	prefill_tps=247.4	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8942	lm_decodes=1	out=54edf738c5a8	env=PGRN_LAYER_MAJOR=1
+20261126-102217	srv	label=lmapp-ub4096	cache=4	decode_tps=7.78	prompt_n=39515	ttft_s=155.5	prefill_tps=254.2	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=9339	lm_decodes=1	out=54edf738c5a8	env=PGRN_LAYER_MAJOR=1
+20261126-102900	srv	label=lmapp-ub2048	cache=4	decode_tps=7.91	prompt_n=39515	ttft_s=147.2	prefill_tps=268.5	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8941	lm_decodes=1	out=54edf738c5a8	env=PGRN_LAYER_MAJOR=1

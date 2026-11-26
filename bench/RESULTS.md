@@ -3720,3 +3720,9 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   ctest 14/14; Qwen3.6 hash e6c6a36552db 10.70 tok/s; app default 183.2 s (lm_decodes 0);
   app + layer-major at ub 2048: 157.5 s (lm_decodes 1), hash 54edf738c5a8 — ub choice for the
   layer-major app path re-measured in lm_ub_app.sh.
+- Layer-major ubatch in the exact app regime (-b 40960, --cache-ram 2048, -fa on, --jinja, 4 GiB,
+  interleaved, 2 reps, hash 54edf738c5a8, lm_decodes 1): ub 4096 155.7 / 155.5 s (peak RSS 9.33 GB),
+  ub 2048 159.7 / 147.2 s (8.94 GB). Same speed within noise, ub 2048 uses ~0.4 GB less → the app
+  uses ub 2048 with layer-major. App default (no layer-major, ub 4096) 183.2 s → ~154 s (−16 %);
+  vs 0.4.0's default (ub 2048) ~235 s: −35 %. The 134 s figure is the bare server without -fa
+  on / prompt cache / checkpoints.
