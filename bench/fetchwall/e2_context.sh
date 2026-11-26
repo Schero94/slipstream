@@ -13,6 +13,7 @@ S0=$(swap_mb)
 "$BIN" -m "$G" --pgrn "$P" --pgrn-cache-gb "$CACHE" --pgrn-io-threads 8 --pgrn-compact-slots --gpu-layers 99 \
   -c 40960 --parallel 1 -b "${UB:-2048}" -ub "${UB:-2048}" -fa on --jinja --cache-ram "$CRAM" --host 127.0.0.1 --port $PORT > "$LOG" 2>&1 &
 PID=$!
+trap 'kill $PID 2>/dev/null; sleep 1; kill -9 $PID 2>/dev/null' EXIT INT TERM
 ( peak=0; while kill -0 $PID 2>/dev/null; do r=$(ps -o rss= -p $PID 2>/dev/null | tr -d " "); [ -n "$r" ] && [ "$r" -gt "$peak" ] && peak=$r && echo $peak > "$LOG.peak"; sleep 1; done ) &
 for i in $(seq 1 600); do curl -sf http://127.0.0.1:$PORT/health >/dev/null && break; sleep 1; done
 python3 - "$HERE/prompt_30k.txt" "$PORT" "$LABEL" "$CRAM" "$STAMP" <<'PY' | tee -a "$OUT/summary.tsv"

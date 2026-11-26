@@ -17,6 +17,7 @@ env "$@" "$BIN" -m "$GGUF" --pgrn "$PGRN" --pgrn-cache-gb "$CACHE" --pgrn-io-thr
   --pgrn-compact-slots --gpu-layers 99 -c "${CTX:-4096}" --parallel 1 -b "${B:-${UB:-2048}}" -ub "${UB:-2048}" \
   ${SPEC_ARGS---spec-type draft-mtp --spec-draft-n-max 4} --host 127.0.0.1 --port "$PORT" > "$LOG" 2>&1 &
 PID=$!
+trap 'kill $PID 2>/dev/null; sleep 1; kill -9 $PID 2>/dev/null' EXIT INT TERM
 for i in $(seq 1 600); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; kill -0 $PID 2>/dev/null || break; sleep 1; done
 req() { python3 -c 'import json,sys,os
 r={"prompt": open(sys.argv[1]).read(), "n_predict": int(sys.argv[2]), "temperature": 0, "seed": 1, "cache_prompt": False}
