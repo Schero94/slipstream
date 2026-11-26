@@ -30,7 +30,14 @@ open score. Add every new idea here with a one-line hypothesis.
 | 5.0 | Cheap prefill levers: ubatch 4096/8192, io-threads 16 | fewer passes → fewer expert re-reads; TTFT −20..40 % | 4 | 5 | 4 | doing |
 | 5.0 | Layer-(group)-major prefill (Colibrì qwen36_graph.h qg_prompt_layers, PR #2298 — same model, Metal) | each expert read once per prompt; needs full-layer scratch (partitions hold ~130 < 256 experts) or 4-layer groups; output identical | 5 | 4 | 4 | open |
 | — | Colibrì latest optimizations review | done 2026-11-25: main e479104, dev 8ea9e9d; items added above | | | | done |
-| 4.0 | Dependencies + forks to latest (worktree chore/deps-latest) | current, secure, no regressions | 3 | 4 | 3 | doing |
+| — | Dependencies semver refresh | done: cargo update both workspaces + Tauri 2.12.7 merged (183/96/44/7 tests, dmg build ok) | | | | done |
+| 6.0 | llama.cpp re-port: 45 upstream commits since 33aeb17f8586 | stay current cheaply while the gap is small (engine_sync + apply + parity) | 3 | 4 | 2 | open |
+| 5.0 | Low-risk dependency majors: libp2p 0.57, base64 0.23, mdns-sd 0.22, ureq 3 | current deps; P2P smoke + all tests green | 2 | 5 | 2 | open |
+| 4.0 | MLX runtime lock refresh (chore/deps-latest 992c7e7) + live oMLX/PGRN serve smoke | newer starlette/pydantic/hf-hub; must serve an MLX model before release | 2 | 4 | 2 | open |
+| 2.0 | RustCrypto 3.x + rand 0.10 together (16 call sites, wire crypto) | needs interop tests between old/new nodes | 2 | 3 | 3 | open |
+| 1.3 | oMLX fork 0.5.3 → 0.8.3 (1,881 commits; mlx 0.32.4, transformers ≥5.14) | multi-day rebase + vendor A/B gate | 3 | 2 | 4.5 | open |
+| 1.5 | rusqlite 0.43 (MSRV 1.89 → bump Dockerfile.node rust image) | | 1 | 4 | 2.7 | open |
+
 
 | 2.7 | Improve lookahead recall beyond 83 % | each +5 pp recall ≈ fewer sync misses (38 % of decode time at 10 GiB) | 4 | 2 | 3 | open |
 | 2.0 | Laguna 118B validation on the new engine | the "bigger than RAM" pitch works with v0.4+ | 5 | 4 | 5 | blocked (disk: ~134 GB needed, ~50–63 GB free) |
