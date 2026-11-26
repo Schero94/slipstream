@@ -32,7 +32,7 @@ open score. Add every new idea here with a one-line hypothesis.
 | — | Colibrì latest optimizations review | done 2026-11-25: main e479104, dev 8ea9e9d; items added above | | | | done |
 | — | Dependencies semver refresh | done: cargo update both workspaces + Tauri 2.12.7 merged (183/96/44/7 tests, dmg build ok) | | | | done |
 | 6.0 | llama.cpp re-port: 45 upstream commits since 33aeb17f8586 | stay current cheaply while the gap is small (engine_sync + apply + parity) | 3 | 4 | 2 | open |
-| 5.0 | Low-risk dependency majors: libp2p 0.57, base64 0.23, mdns-sd 0.22, ureq 3 | current deps; P2P smoke + all tests green | 2 | 5 | 2 | open |
+| — | Low-risk dependency majors | done: libp2p 0.57.1 (codec → native async fn; pulls aws-lc-rs), ureq 3, mdns-sd 0.22 (IPv6 answers now parsed), base64 0.23; 183/96 tests + mdns 15/15, dmg build ok; Dockerfile.node rebuild not verified | | | | done |
 | 4.0 | MLX runtime lock refresh (chore/deps-latest 992c7e7) + live oMLX/PGRN serve smoke | newer starlette/pydantic/hf-hub; must serve an MLX model before release | 2 | 4 | 2 | open |
 | 2.0 | RustCrypto 3.x + rand 0.10 together (16 call sites, wire crypto) | needs interop tests between old/new nodes | 2 | 3 | 3 | open |
 | 1.3 | oMLX fork 0.5.3 → 0.8.3 (1,881 commits; mlx 0.32.4, transformers ≥5.14) | multi-day rebase + vendor A/B gate | 3 | 2 | 4.5 | open |

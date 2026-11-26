@@ -78,3 +78,8 @@ revert the rest and record it as a negative.
 - App frontend is vanilla JS in `app/dist/` (no build step); keep EN+DE strings, a11y
   (labels, tablist, live regions) and the `app/scripts/test_*.mjs` contracts green.
 - Never commit models (`*.gguf`, `*.pgrn`), binaries, or `llama.cpp-slipstream/`.
+
+## Lessons
+
+- After a release merge, switch back to `feat/fetch-wall` immediately; check
+  `git branch --show-current` before every commit (2026-11-26: 12 commits landed on local `main`).
