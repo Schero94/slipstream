@@ -3791,3 +3791,16 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   divergence to the start; then nothing is reused. Not yet tested with real Kilo/OpenCode prompts.
 - Note: the layer-major arm ran the newer binary with the cancellable layer-major change (31712b2,
   built 23:48:56); the default arm the 08:31 binary. Outputs identical across both.
+
+## Prefill scaling — where the first-turn time goes (layer-major) — 2026-11-28
+
+- Method: `bench/fetchwall/prefill_scaling.sh`, one llama-server (app regime, layer-major
+  ub 2048 / -b 40960, 4 GiB cache, --cache-ram 0, f16 KV like the app's Qwen3.6 default),
+  prompts cut from the agent prompt at 10k / 20k / 39k tokens, cache_prompt off, binary 23:48:56.
+- 10,020 tokens 33.8 s · 20,020 tokens 61.4 s · 39,019 tokens 132.7 s (lm_decodes 1 each).
+- Exact fit t = a + b·n + c·n²: fixed 13.2 s, linear 67.0 s, quadratic 52.6 s (40 %) at 39k.
+  Quadratic = full attention (10 of 40 layers); linear = experts + DeltaNet + projections
+  (~580 tok/s); fetch is ~6 s of the total (layer-major, RESULTS 2026-11-26).
+- Verdict: the cold first turn is close to the M3 Pro's compute limits; attention cannot be cut
+  losslessly. The big wins for agents are reuse (follow-up 0.8 s, new conversation 2.1 s) and
+  keeping that state across restarts (E5).

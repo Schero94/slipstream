@@ -245,3 +245,7 @@ e4 lm peak_rss_mb=10471 swap_delta_mb=0
 lmabort lm4g peak_rss_mb=9333 swap_delta_mb=0
 20261127-235904	e4fresh	label=fresh	S2_prompt_n=39509	S2_ttft_s=186.9	S2_out=c4062b92a557
 e4 fresh peak_rss_mb=9775 swap_delta_mb=0
+20261128-000312	scale	label=lm	prompt_n=10020	prompt_s=33.8	lm=1
+20261128-000312	scale	label=lm	prompt_n=20020	prompt_s=61.4	lm=1
+20261128-000312	scale	label=lm	prompt_n=39019	prompt_s=132.7	lm=1
+20261128-000312	scale_fit	label=lm	a=13.2s	linear=67.0s	quadratic=52.6s	quad_share=40%
