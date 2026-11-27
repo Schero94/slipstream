@@ -329,7 +329,24 @@ struct lm_run {
     std::vector<uint8_t> state;
     std::vector<uint8_t> state_seq;
     uint64_t staged = 0, uploaded = 0, lm_decodes = 0, lm_passes = 0, skips = 0;
+    std::vector<std::pair<int64_t, int64_t>> progress;   // (n_done, n_total) per layer-major progress callback
 };
+
+static void lm_progress_cb(void * data, int64_t n_done, int64_t n_total) {
+    static_cast<std::vector<std::pair<int64_t, int64_t>> *>(data)->emplace_back(n_done, n_total);
+}
+
+// the progress callback of one decode: one call per (layer, ubatch) step, strictly increasing, constant total =
+// n_layer * n_prompt, ending at the total
+static bool lm_progress_ok(const lm_run & r, int n_layer, int n_prompt, int n_ub) {
+    if ((int) r.progress.size() != n_layer * n_ub) return false;
+    int64_t prev = 0;
+    for (const auto & [done, total] : r.progress) {
+        if (total != (int64_t) n_layer * n_prompt || done <= prev || done > total) return false;
+        prev = done;
+    }
+    return prev == (int64_t) n_layer * n_prompt;
+}
 
 static std::vector<uint8_t> lm_state_seq(llama_context * ctx, llama_seq_id seq) {
     std::vector<uint8_t> state(llama_state_seq_get_size(ctx, seq));
@@ -355,7 +372,11 @@ static lm_run lm_decode(llama_context * ctx, const llama_model * model, bool lay
     {
         common_batch prompt(ctx);
         for (int i = 0; i < n_prompt; ++i) prompt.add(tokens[(size_t) (n_prefix + i)], n_prefix + i, 0, true);
-        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, prompt.get()) != 0) throw std::runtime_error("prompt decode failed");
+        // installed for both arms: the normal path must never call it, and it must not change any output
+        llama_set_layer_major_progress_callback(ctx, lm_progress_cb, &run.progress);
+        const int ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, prompt.get());
+        llama_set_layer_major_progress_callback(ctx, nullptr, nullptr);
+        if (ret != 0) throw std::runtime_error("prompt decode failed");
     }
     const llama_perf_context_data p1 = llama_perf_context(ctx);
     for (int i = 0; i < n_prompt; ++i) {
@@ -520,6 +541,10 @@ static int layer_major_fixture(const char * gguf, const char * pgrn, bool gpu) {
         checks.push_back({ "streamed seq state" + tag,       !str_n[p].state_seq.empty() && str_n[p].state_seq == str_l[p].state_seq });
         checks.push_back({ "staged(LM) <= staged(normal)" + tag, str_l[p].staged <= str_n[p].staged });
         checks.push_back({ "held skips > 0" + tag,           str_l[p].skips > 0 });
+        const int n_ub = (n_prompt + (int) n_ubatch - 1) / (int) n_ubatch;
+        checks.push_back({ "normal path: no progress calls" + tag, res_n[p].progress.empty() && str_n[p].progress.empty() });
+        checks.push_back({ "resident progress monotonic, ends at total" + tag, lm_progress_ok(res_l[p], n_layer, n_prompt, n_ub) });
+        checks.push_back({ "streamed progress monotonic, ends at total" + tag, lm_progress_ok(str_l[p], n_layer, n_prompt, n_ub) });
         max_abs = std::max({ max_abs, lm_max_abs(res_n[p].prompt_logits, res_l[p].prompt_logits),
                              lm_max_abs(str_n[p].prompt_logits, str_l[p].prompt_logits) });
         max_abs_follow = std::max({ max_abs_follow, lm_max_abs(res_n[p].follow_logits, res_l[p].follow_logits),

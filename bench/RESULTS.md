@@ -3818,3 +3818,39 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   disk stays free; newest 2 files kept, keyed by model/sidecar/ctx/KV type/model size) and
   restores it in the background once the next server is ready. First request after a restart
   ~187 s → ~2 s.
+
+## Layer-major prompt progress + cancel fixes (D1/D3/D5) — KEEP (lossless, UX) — 2026-11-28
+
+- Change: `llama_set_layer_major_progress_callback(ctx, cb, data)` — called on the decoding thread after every
+  (layer, ubatch) step of a layer-major decode with `n_done / n_total` in (layer × token) units
+  (`n_total = n_layer × n_tokens`); host side only, no extra sync. llama-server maps it to
+  `prompt_progress.processed = base + n_tokens_in_decode × n_done / n_total` and streams it (≤ 1 event per
+  250 ms) when `"stream": true, "return_progress": true`; `/slots` gets `phase` (idle|waiting|prompt|generating)
+  and `prompt_progress` {total, cache, processed, time_ms}; new INFO log lines `slot prompt_start:`,
+  `slot prompt_progress:` (every 3 s inside a layer-major decode), `slot prompt_done:`, `slot prompt_abort:`.
+- D1: a cancelled layer-major prefill (ret 2) now ends only the cancelled task's slot (send error, release,
+  prompt_clear) and returns without throwing; other slots continue. Kill-all stays for every other error.
+  D3: the cancel log is reworded ("flagged (a layer-major prefill stops at its next layer step)").
+  D5: `lm_fail` now calls `ggml_backend_sched_synchronize` before rewinding / releasing the scratch hold.
+  D2 (keep the cached prefix on abort) not done.
+- Tests: test-peregrine-model --layer-major also asserts the progress callback (CPU + Metal, resident +
+  streamed, prefix 0/5): exactly n_layer × n_ubatches calls, strictly increasing, constant total, ends at total,
+  never called on the normal path; prompt logits / follow logits / memory state stay bitwise identical with the
+  callback installed (checks 20 → 26, bitwise=yes). ctest -R peregrine 14/14. Binary 00:14:18 > newest source
+  00:09:59. engine_sync --verify PASS (exit 0).
+- Real run 1 (`bench/fetchwall/lm_progress.sh`, e4 flags LM=1: -b 40960 -ub 2048, 4 GiB cache, -c 40960,
+  --cache-ram 2048, Qwen3.6-35B-A3B Q4 from ~/Modelle): streamed /completion of the 39,515-token prompt.
+  332 prompt_progress events, first at 0.03 s, monotonic; median gap 0.32 s, max gap 0.57 s during the
+  layer-major decode (329 events, 0 → 37,463 tokens in 119.4 s). One 14.8 s gap remains at the end: the server
+  splits the last 4 + n_ubatch tokens off for its context checkpoints (37,463 + 2,048 + 4), and the 2,048-token
+  chunk is a normal single-ubatch decode (no per-layer progress) — progress there only arrives after it.
+  First token 134.5 s (prompt_done t = 134,497 ms, 293.8 tok/s); 38 prompt_progress log lines;
+  /slots sampled every 2 s showed phase=prompt with processed rising (870, 1806, 2743, …). Output 54edf738c5a8.
+  Peak RSS 9452 MB, swap Δ 0 MB.
+- Real run 2, D1 (`bench/fetchwall/lm_cancel_parallel.sh`, LM=1, --parallel 2, -c 65536, -b 8192 -ub 2048,
+  --cache-ram 0, 4 GiB): A (20,489 tokens, slot 0, streamed) starts, B (11,892 tokens) arrives 3 s later and
+  waits as a processing slot outside the batch (phase prompt, processed 0). A disconnected at processed 9,420
+  (2nd 8192 chunk) → "aborted at layer 6/40, ubatch 3", 0.106 s after the cancel; `prompt_abort` for slot 0
+  only. B then completed: 72.6 s, output 820381c85335, no error — B alone afterwards (cache_prompt false):
+  47.8 s, output 820381c85335 → identical. (Before the fix the ret-2 branch released every processing slot,
+  so B would have got "Decode aborted."; not re-run on the old binary.) Peak RSS 9766 MB, swap Δ 0 MB.

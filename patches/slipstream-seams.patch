@@ -1713,7 +1713,7 @@ index 900aef614..e9a3990c7 100644
          self.add_bool(Keys.LLM.NORM_BEFORE_RESIDUAL.format(arch=self.arch), value)
  
 diff --git a/include/llama.h b/include/llama.h
-index 9cc17a82b..2c1b3c7bc 100644
+index 9cc17a82b..633a705fe 100644
 --- a/include/llama.h
 +++ b/include/llama.h
 @@ -358,6 +358,20 @@ extern "C" {
@@ -1755,7 +1755,7 @@ index 9cc17a82b..2c1b3c7bc 100644
      // Get the model's RoPE frequency scaling factor
      LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
  
-@@ -1137,6 +1155,14 @@ extern "C" {
+@@ -1137,6 +1155,23 @@ extern "C" {
      // Set abort callback
      LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
  
@@ -1767,10 +1767,19 @@ index 9cc17a82b..2c1b3c7bc 100644
 +    // dropped unless no layer had run yet (then the memory is exactly as before the call).
 +    LLAMA_API void llama_set_layer_major_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 +
++    // Slipstream: progress of a layer-major prefill (env PGRN_LAYER_MAJOR=1) only. A layer-major decode runs every
++    // ubatch through layer 0, then layer 1, ... so the whole prompt is one llama_decode call. The callback is called
++    // on the decoding thread after every (layer, ubatch) step has been submitted, with n_done / n_total in units of
++    // (layer x token): n_total = n_layer * n_tokens of the batch, n_done grows monotonically and equals n_total after
++    // the last step. n_done / n_total is the fraction of the prompt's compute done. Host side only; it adds no sync
++    // and never changes the outputs. The normal decode path never calls it.
++    typedef void (*llama_layer_major_progress_callback)(void * data, int64_t n_done, int64_t n_total);
++    LLAMA_API void llama_set_layer_major_progress_callback(struct llama_context * ctx, llama_layer_major_progress_callback cb, void * data);
++
      // Wait until all computations are finished
      // This is automatically done when using one of the functions below to obtain the computation results
      // and is not necessary to call it explicitly in most cases
-@@ -1580,6 +1606,16 @@ extern "C" {
+@@ -1580,6 +1615,16 @@ extern "C" {
                 const llama_token * trigger_tokens,
                              size_t num_trigger_tokens);
  
@@ -1787,7 +1796,7 @@ index 9cc17a82b..2c1b3c7bc 100644
  
      /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
      LLAMA_API struct llama_sampler * llama_sampler_init_penalties(
-@@ -1718,6 +1754,32 @@ extern "C" {
+@@ -1718,6 +1763,32 @@ extern "C" {
          int32_t n_reused;   // number of times a ggml compute graph had been reused
          int32_t n_reallocs_same; // number of graph reallocations during inference with an unchanged graph size
          int32_t n_reallocs_diff; // number of graph reallocations during inference with a changed graph size
@@ -1921,7 +1930,7 @@ index 74ca69fe7..8d297c669 100644
      LLM_TENSOR_CLS_OUT,
      LLM_TENSOR_CLS_NORM,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 93f8a72ed..3302d8211 100644
+index 93f8a72ed..7b61b118c 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -13,6 +13,8 @@
@@ -1979,13 +1988,24 @@ index 93f8a72ed..3302d8211 100644
  }
  
  llama_context::~llama_context() {
-@@ -1405,6 +1439,18 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
+@@ -1405,6 +1439,29 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
      }
  }
  
 +void llama_context::set_layer_major_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data) {
 +    lm_abort_callback      = abort_callback;
 +    lm_abort_callback_data = abort_callback_data;
++}
++
++void llama_context::set_layer_major_progress_callback(llama_layer_major_progress_callback cb, void * data) {
++    lm_progress_callback      = cb;
++    lm_progress_callback_data = data;
++}
++
++void llama_context::lm_progress(int64_t n_done) const {
++    if (lm_progress_callback != nullptr && lm_progress_total > 0) {
++        lm_progress_callback(lm_progress_callback_data, std::min(n_done, lm_progress_total), lm_progress_total);
++    }
 +}
 +
 +bool llama_context::lm_abort_requested() const {
@@ -1998,7 +2018,7 @@ index 93f8a72ed..3302d8211 100644
  void llama_context::set_embeddings(bool value) {
      LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
  
-@@ -1612,6 +1658,185 @@ bool llama_context::h_nextn_dev_alloc() {
+@@ -1612,6 +1669,194 @@ bool llama_context::h_nextn_dev_alloc() {
      return true;
  }
  
@@ -2122,6 +2142,9 @@ index 93f8a72ed..3302d8211 100644
 +}
 +
 +int llama_context::lm_fail(llama_memory_context_i * mctx, ggml_status status, bool touched) {
++    // the previous (layer, ubatch) step may still be in flight on the GPU (graph compute is asynchronous): wait for
++    // it before the scratch hold is released and the memory is rewound / removed under it
++    ggml_backend_sched_synchronize(sched.get());
 +    // layers already processed parts of this batch while the metadata may say otherwise, and recurrent
 +    // state cannot be removed partially: drop the whole sequence. Nothing ran yet (an abort before the first
 +    // graph): the rewind alone restores the memory exactly as it was before this call.
@@ -2139,7 +2162,8 @@ index 93f8a72ed..3302d8211 100644
 +}
 +
 +void llama_context::lm_end() {
-+    lm_active = false;
++    lm_active         = false;
++    lm_progress_total = 0;
 +    lm_seq    = -1;
 +    lm_il0    = 0;
 +    lm_il1    = -1;
@@ -2147,8 +2171,11 @@ index 93f8a72ed..3302d8211 100644
 +}
 +
 +int llama_context::decode_layer_major_prepasses(llama_memory_context_i * mctx) {
-+    const int n_layer = (int) model.hparams.n_layer();
++    const int     n_layer  = (int) model.hparams.n_layer();
++    const int64_t n_tokens = (int64_t) balloc->get_n_tokens();
++    lm_progress_total = (int64_t) n_layer * n_tokens;
 +    for (int il = 0; il < n_layer - 1; ++il) {
++        int64_t n_done_layer = 0;   // tokens of this layer already submitted
 +        if (il > 0) {
 +            mctx->lm_rewind();   // memory metadata back to "before ubatch 0", cursor = 0
 +        }
@@ -2174,6 +2201,8 @@ index 93f8a72ed..3302d8211 100644
 +            if (!res) {
 +                return lm_fail(mctx, status);
 +            }
++            n_done_layer += ubatch.n_tokens;
++            lm_progress((int64_t) il * n_tokens + n_done_layer);
 +        } while (mctx->next());
 +        ++pgrn_lm_passes;
 +    }
@@ -2184,7 +2213,7 @@ index 93f8a72ed..3302d8211 100644
  bool llama_context::set_embeddings_nextn_dev(bool value) {
      LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
  
-@@ -1847,7 +2072,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+@@ -1847,7 +2092,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
          res->reset();
  
          ggml_backend_sched_reset(sched.get());
@@ -2197,7 +2226,7 @@ index 93f8a72ed..3302d8211 100644
  
          //const auto t_start_us = ggml_time_us();
  
-@@ -1880,7 +2109,22 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+@@ -1880,7 +2129,22 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
          //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
      }
  
@@ -2220,7 +2249,7 @@ index 93f8a72ed..3302d8211 100644
      if (status != GGML_STATUS_SUCCESS) {
          LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
          ret = status;
-@@ -2350,6 +2594,29 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2350,6 +2614,29 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
          ggml_backend_event_wait(h_nextn_backend, ev_h_nextn_read.get());
      }
  
@@ -2250,7 +2279,7 @@ index 93f8a72ed..3302d8211 100644
      do {
          const auto & ubatch = mctx->get_ubatch();
  
-@@ -2369,10 +2636,20 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2369,10 +2656,20 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
              n_outputs = n_outputs_new;
          }
  
@@ -2271,8 +2300,15 @@ index 93f8a72ed..3302d8211 100644
          if (!res) {
              // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
              llama_pos pos_min[LLAMA_MAX_SEQ];
-@@ -2537,6 +2814,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2535,8 +2832,17 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+ 
+         n_outputs_prev += n_outputs;
          n_tokens_prev  += ubatch.n_tokens;
++
++        if (lm_active) {
++            // final pass: layer n_layer-1 (+ head) of tokens [0, n_tokens_prev) is submitted
++            lm_progress(lm_progress_total - (int64_t) n_tokens_all + n_tokens_prev);
++        }
      } while (mctx->next());
  
 +    if (lm_active) {
@@ -2282,7 +2318,7 @@ index 93f8a72ed..3302d8211 100644
      if (layer_inp_dev && ev_layer_inp_written) {
          ggml_backend_event_record(ev_layer_inp_written.get(), layer_inp_backend);
      }
-@@ -3076,6 +3357,9 @@ llm_graph_params llama_context::graph_params(
+@@ -3076,6 +3382,9 @@ llm_graph_params llama_context::graph_params(
          /*.layer_inp_src =*/ supports_embd_row() ? cparams.ctx_other->get_layer_inp_dev() : nullptr,
          /*.h_nextn_dev   =*/ cparams.embeddings_nextn_dev ? h_nextn_dev : nullptr,
          /*.h_nextn_src   =*/ supports_state_row() ? cparams.ctx_state_src->get_h_nextn_dev() : nullptr,
@@ -2292,7 +2328,7 @@ index 93f8a72ed..3302d8211 100644
          /*.samplers    =*/ sampling.samplers,
          /*.n_outputs   =*/ n_outputs,
          /*.cb          =*/ graph_get_cb(),
-@@ -3231,6 +3515,177 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -3231,6 +3540,177 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
      return true;
  }
  
@@ -2470,7 +2506,7 @@ index 93f8a72ed..3302d8211 100644
  llm_graph_cb llama_context::graph_get_cb() const {
      return [&](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
          if (il >= 0) {
-@@ -4116,6 +4571,30 @@ llama_perf_context_data llama_context::perf_get_data() const {
+@@ -4116,6 +4596,30 @@ llama_perf_context_data llama_context::perf_get_data() const {
      data.n_p_eval    = std::max(1, n_p_eval);
      data.n_eval      = std::max(1, n_eval);
      data.n_reused    = std::max(0, n_reused);
@@ -2501,7 +2537,7 @@ index 93f8a72ed..3302d8211 100644
  
      data.n_reallocs_same = n_reallocs_same;
      data.n_reallocs_diff = n_reallocs_diff;
-@@ -4130,6 +4609,11 @@ void llama_context::perf_reset() {
+@@ -4130,6 +4634,11 @@ void llama_context::perf_reset() {
      n_reused    = 0;
  
      // note: the reallocation counters are not reset - they track the lifetime totals for this context
@@ -2513,7 +2549,7 @@ index 93f8a72ed..3302d8211 100644
  }
  
  llama_memory_breakdown llama_context::memory_breakdown() const {
-@@ -4588,6 +5072,22 @@ llama_context * llama_init_from_model(
+@@ -4588,6 +5097,22 @@ llama_context * llama_init_from_model(
              LLAMA_LOG_INFO("%s: n_ctx_train adjusted to %u\n", __func__, model->hparams.n_ctx_train);
          }
  
@@ -2536,7 +2572,7 @@ index 93f8a72ed..3302d8211 100644
          return ctx;
      } catch (const std::exception & err) {
          LLAMA_LOG_ERROR("%s: failed to initialize the context: %s\n", __func__, err.what());
-@@ -4659,6 +5159,10 @@ void llama_set_abort_callback(llama_context * ctx, bool (*abort_callback)(void *
+@@ -4659,6 +5184,14 @@ void llama_set_abort_callback(llama_context * ctx, bool (*abort_callback)(void *
      ctx->set_abort_callback(abort_callback, abort_callback_data);
  }
  
@@ -2544,10 +2580,14 @@ index 93f8a72ed..3302d8211 100644
 +    ctx->set_layer_major_abort_callback(abort_callback, abort_callback_data);
 +}
 +
++void llama_set_layer_major_progress_callback(llama_context * ctx, llama_layer_major_progress_callback cb, void * data) {
++    ctx->set_layer_major_progress_callback(cb, data);
++}
++
  void llama_set_embeddings(llama_context * ctx, bool embeddings) {
      ctx->set_embeddings(embeddings);
  }
-@@ -5120,6 +5624,37 @@ void llama_perf_context_print(const llama_context * ctx) {
+@@ -5120,6 +5653,37 @@ void llama_perf_context_print(const llama_context * ctx) {
      LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
      LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
      LLAMA_LOG_INFO("%s:   graph reallocs = %10d    / %5d        (same size) / (changed size)\n", __func__, data.n_reallocs_same, data.n_reallocs_diff);
@@ -2586,18 +2626,19 @@ index 93f8a72ed..3302d8211 100644
  
  void llama_perf_context_reset(llama_context * ctx) {
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 3e3921c7d..a7dfea1a8 100644
+index 3e3921c7d..3e1367a82 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -119,6 +119,7 @@ struct llama_context {
+@@ -119,6 +119,8 @@ struct llama_context {
      void set_n_threads(int32_t n_threads, int32_t n_threads_batch);
  
      void set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
 +    void set_layer_major_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
++    void set_layer_major_progress_callback(llama_layer_major_progress_callback cb, void * data);
  
      void set_embeddings (bool value);
      void set_embeddings_nextn(bool value, bool masked);
-@@ -264,6 +265,16 @@ private:
+@@ -264,6 +266,17 @@ private:
      // (re)allocate the device buffer for cparams.embeddings_nextn_dev, false if it does not fit
      bool h_nextn_dev_alloc();
  
@@ -2610,11 +2651,12 @@ index 3e3921c7d..a7dfea1a8 100644
 +    int  lm_fail(llama_memory_context_i * mctx, ggml_status status, bool touched = true);
 +    bool lm_abort_requested() const;
 +    void lm_end();
++    void lm_progress(int64_t n_done) const;
 +
      ggml_backend_t backend_from_dev(ggml_backend_dev_t dev) const;
  
      //
-@@ -318,6 +329,8 @@ private:
+@@ -318,6 +331,8 @@ private:
  
      // ggml_backend_sched realloc callback, counts and traces the graph reallocations of this context
      static void sched_graph_realloc(ggml_backend_sched_t sched, ggml_cgraph * gf, bool backend_ids_changed, bool graph_size_changed, void * user_data);
@@ -2623,7 +2665,7 @@ index 3e3921c7d..a7dfea1a8 100644
  
      // disable auto fused ops (Flash Attention, Gated Delta Net) whose op lands on a device
      // that differs from the layer it belongs to (usually due to missing backend support)
-@@ -338,6 +351,50 @@ private:
+@@ -338,6 +353,50 @@ private:
  
      llama_cparams cparams;
  
@@ -2674,12 +2716,15 @@ index 3e3921c7d..a7dfea1a8 100644
      llama_adapter_cvec_ptr  cvec;
      llama_adapter_loras_ptr loras;
  
-@@ -442,6 +499,8 @@ private:
+@@ -442,6 +501,11 @@ private:
  
      ggml_abort_callback abort_callback      = nullptr;
      void *              abort_callback_data = nullptr;
 +    ggml_abort_callback lm_abort_callback      = nullptr;   // layer-major only, host side (never sent to backends)
 +    void *              lm_abort_callback_data = nullptr;
++    llama_layer_major_progress_callback lm_progress_callback      = nullptr;   // layer-major only, host side
++    void *                              lm_progress_callback_data = nullptr;
++    int64_t                             lm_progress_total         = 0;         // n_layer * n_tokens of the running decode
  
      std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
  
@@ -10684,7 +10729,7 @@ index c1a0f4dca..ccbd60722 100644
      // note: must be signed - they are subtracted before the later ones are set
      int64_t t_start       = 0;
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 2f927d74f..caa65696c 100644
+index 2f927d74f..d7c552731 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -6,6 +6,7 @@
@@ -10784,7 +10829,7 @@ index 2f927d74f..caa65696c 100644
  
          SLT_INF(*this,
                  "  graph reallocs = %10d    / %5d        (same size) / (changed size)\n",
-@@ -1099,6 +1157,17 @@ private:
+@@ -1099,6 +1157,33 @@ private:
  
      llama_context * ctx_tgt = nullptr;
  
@@ -10799,20 +10844,37 @@ index 2f927d74f..caa65696c 100644
 +        return static_cast<server_context_impl *>(data)->decode_cancelled.load(std::memory_order_relaxed);
 +    }
 +
++    // Slipstream: layer-major prefill progress (llama_set_layer_major_progress_callback). The callback runs on the
++    // decoding (main) thread inside yield_to_queue; it maps the (layer x token) fraction to prompt tokens of the slot
++    // whose prompt is the only content of the running decode, streams prompt_progress events and logs a progress
++    // line. /slots (served by the queue worker meanwhile) reads the two atomics.
++    int     lm_prog_slot   = -1;   // slot of the running single-slot prompt decode, else -1
++    int32_t lm_prog_base   = 0;    // the slot's processed prompt tokens (incl. cached) before this decode
++    int32_t lm_prog_n      = 0;    // prompt tokens of the slot in this decode
++    int64_t lm_prog_t_send = 0;    // last streamed progress event (us)
++    int64_t lm_prog_t_log  = 0;    // last progress log line (us)
++    std::atomic<int>     lm_prog_slot_id{-1};
++    std::atomic<int32_t> lm_prog_processed{0};
++
++    static void decode_progress_cb(void * data, int64_t n_done, int64_t n_total) {
++        static_cast<server_context_impl *>(data)->on_decode_progress(n_done, n_total);
++    }
++
      server_batch batch;
  
      llama_model   * model_dft = nullptr;
-@@ -1338,6 +1407,9 @@ private:
+@@ -1338,6 +1423,10 @@ private:
              return false;
          }
  
 +        // host-side only: never reaches the backends, and only the layer-major prefill polls it
 +        llama_set_layer_major_abort_callback(ctx_tgt, decode_abort_cb, this);
++        llama_set_layer_major_progress_callback(ctx_tgt, decode_progress_cb, this);
 +
          vocab = llama_model_get_vocab(model_tgt);
  
          try {
-@@ -1347,6 +1419,20 @@ private:
+@@ -1347,6 +1436,20 @@ private:
              return false;
          }
  
@@ -10833,7 +10895,7 @@ index 2f927d74f..caa65696c 100644
          n_ctx = llama_n_ctx(ctx_tgt);
  
          add_bos_token = llama_vocab_get_add_bos(vocab);
-@@ -1358,6 +1444,7 @@ private:
+@@ -1358,6 +1461,7 @@ private:
  
              {
                  common_params params_dft = common_base_params_to_speculative(params_base);
@@ -10841,7 +10903,7 @@ index 2f927d74f..caa65696c 100644
  
                  // progress callback
                  params_dft.load_progress_callback           = load_progress_callback;
-@@ -1519,7 +1606,10 @@ private:
+@@ -1519,7 +1623,10 @@ private:
                  spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
              } catch (const std::exception & e) {
                  SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
@@ -10853,7 +10915,7 @@ index 2f927d74f..caa65696c 100644
                      return false;
                  }
              }
-@@ -1551,6 +1641,8 @@ private:
+@@ -1551,6 +1658,8 @@ private:
              slot.mem.init(ctx_tgt, ctx_dft);
              slot.spec    = spec.get();
              slot.n_ctx   = n_ctx_slot();
@@ -10862,7 +10924,27 @@ index 2f927d74f..caa65696c 100644
  
              slot.mctx                   = mctx;
              slot.prompt.tokens.has_mtmd = mctx != nullptr;
-@@ -2387,6 +2479,8 @@ private:
+@@ -2329,7 +2438,9 @@ private:
+         queue_results.send(std::move(res));
+     }
+ 
+-    void send_partial_response(server_slot & slot, const completion_token_output & tkn, bool is_progress, bool is_begin = false) {
++    // n_processed >= 0: the prompt tokens processed so far, for progress inside one decode call (layer-major)
++    void send_partial_response(server_slot & slot, const completion_token_output & tkn, bool is_progress, bool is_begin = false,
++                               int32_t n_processed = -1) {
+         auto res = std::make_unique<server_task_result_cmpl_partial>();
+ 
+         res->id    = slot.task->id;
+@@ -2339,7 +2450,7 @@ private:
+             res->is_progress        = true;
+             res->progress.total     = slot.task->n_tokens();
+             res->progress.cache     = slot.stats.n_prompt_cached;
+-            res->progress.processed = slot.prompt.tokens.size();
++            res->progress.processed = n_processed >= 0 ? n_processed : (int32_t) slot.prompt.tokens.size();
+             res->progress.time_ms   = slot.stats.t_elapsed_us() / 1000;
+         }
+         if (is_begin) {
+@@ -2387,6 +2498,8 @@ private:
      void send_final_response(server_slot & slot) {
          auto res = std::make_unique<server_task_result_cmpl_final>();
  
@@ -10871,7 +10953,7 @@ index 2f927d74f..caa65696c 100644
          res->id      = slot.task->id;
          res->id_slot = slot.id;
  
-@@ -2980,6 +3074,15 @@ private:
+@@ -2980,6 +3093,17 @@ private:
      // returns false to decline the task, it is offered again after the decode is done
      bool process_single_task(server_task && task, bool is_yielding) {
          // while yielding, an encode / decode is running and only reading the server state is safe
@@ -10881,13 +10963,114 @@ index 2f927d74f..caa65696c 100644
 +            // still declined; it is handled again after the decode returns.
 +            if (!decode_cancelled.exchange(true)) {
 +                decode_cancel_us.store(ggml_time_us());
-+                SRV_INF("cancel of id_task = %d during its decode: requesting a layer-major abort\n", task.id_target);
++                // only a layer-major prefill polls the flag; any other decode simply finishes first
++                SRV_INF("cancel of id_task = %d during its decode: flagged (a layer-major prefill stops at its next layer step)\n",
++                        task.id_target);
 +            }
 +        }
          if (is_yielding && task.type != SERVER_TASK_TYPE_METRICS && task.type != SERVER_TASK_TYPE_SLOT_GET) {
              SRV_DBG("decoding, decline task, id_task = %d\n", task.id);
              return false;
-@@ -3896,6 +3999,45 @@ private:
+@@ -3175,7 +3299,9 @@ private:
+                             n_idle_slots++;
+                         }
+ 
+-                        slots_data.push_back(slot.to_json(slots_debug == 0));
++                        json js = slot.to_json(slots_debug == 0);
++                        slot_phase_json(slot, js);
++                        slots_data.push_back(std::move(js));
+                     }
+                     SRV_DBG("n_idle_slots = %d\n", n_idle_slots);
+ 
+@@ -3417,6 +3543,60 @@ private:
+         }
+     }
+ 
++    // Slipstream: /slots "phase" (idle | waiting | prompt | generating) and, while the prompt is processed,
++    // "prompt_progress" {total, cache, processed, time_ms} (same fields as the streamed prompt_progress)
++    void slot_phase_json(const server_slot & slot, json & js) const {
++        const char * phase = "idle";
++        switch (slot.state) {
++            case SLOT_STATE_IDLE:              phase = "idle";       break;
++            case SLOT_STATE_WAIT_OTHER:        phase = "waiting";    break;
++            case SLOT_STATE_STARTED:
++            case SLOT_STATE_PROCESSING_PROMPT:
++            case SLOT_STATE_DONE_PROMPT:       phase = "prompt";     break;
++            case SLOT_STATE_GENERATING:        phase = "generating"; break;
++        }
++        js["phase"] = phase;
++        if (slot.task && (slot.state == SLOT_STATE_STARTED || slot.state == SLOT_STATE_PROCESSING_PROMPT ||
++                          slot.state == SLOT_STATE_DONE_PROMPT)) {
++            const int32_t processed = lm_prog_slot_id.load() == slot.id
++                ? lm_prog_processed.load()
++                : (int32_t) (slot.stats.n_prompt_cached + slot.stats.n_prompt_processed);
++            js["prompt_progress"] = {
++                {"total",     slot.task->n_tokens()},
++                {"cache",     slot.stats.n_prompt_cached},
++                {"processed", processed},
++                {"time_ms",   slot.stats.is_set() ? slot.stats.t_elapsed_us() / 1000 : 0},
++            };
++        }
++    }
++
++    void on_decode_progress(int64_t n_done, int64_t n_total) {
++        if (lm_prog_slot < 0 || n_total <= 0) {
++            return;
++        }
++        server_slot & slot = slots[lm_prog_slot];
++        if (!slot.task) {
++            return;
++        }
++        const int32_t processed = lm_prog_base + (int32_t) ((double) lm_prog_n * (double) n_done / (double) n_total);
++        lm_prog_processed.store(processed);
++        if (n_done >= n_total) {
++            return;   // the regular progress event / log follows once the decode has returned
++        }
++        const int64_t t_now = ggml_time_us();
++        if (slot.task->params.stream && slot.task->params.return_progress && t_now - lm_prog_t_send >= 250000) {
++            lm_prog_t_send = t_now;
++            send_partial_response(slot, {}, true, false, processed);
++        }
++        if (t_now - lm_prog_t_log >= 3000000) {
++            lm_prog_t_log = t_now;
++            const int32_t total = slot.task->n_tokens();
++            LOG_INF("slot prompt_progress: id %2d | task %d | n_processed = %d, n_prompt = %d, progress = %.3f, t = %.0f ms\n",
++                    slot.id, slot.task->id, processed, total, total > 0 ? (double) processed / total : 0.0,
++                    slot.stats.is_set() ? slot.stats.t_elapsed_us() / 1e3 : 0.0);
++        }
++    }
++
+     void abort_all_slots(const std::string & reason) {
+         for (auto & slot : slots) {
+             if (slot.is_processing()) {
+@@ -3427,6 +3607,7 @@ private:
+     }
+ 
+     // @ngxson : for debugging only
++    int     decode_aborted_slot = -1;   // set by decode() when a cancelled layer-major prefill ended one slot
+     int64_t t_pre_decode  = 0;
+     int64_t t_decode      = 0;
+     int64_t t_post_decode = 0;
+@@ -3622,6 +3803,18 @@ private:
+                 llama_synchronize(ctx_tgt);
+ #endif
+ 
++                if (ok && decode_aborted_slot >= 0) {
++                    // a cancelled layer-major prefill ended one slot: later views of this batch must not hold its
++                    // tokens (its memory is gone); that only happens after a n_batch retry, then stop everything
++                    const int id_aborted = decode_aborted_slot;
++                    decode_aborted_slot = -1;
++                    for (int i = off + n_tokens; i < batch.size(); ++i) {
++                        if (batch.tokens[i].id_slot == id_aborted) {
++                            throw std::runtime_error("aborted slot has tokens in a later sub-batch");
++                        }
++                    }
++                }
++
+                 if (ok) {
+                     // move the head of the batch forward with the number of tokens we just processed
+                     off_next = off + n_tokens;
+@@ -3896,6 +4089,45 @@ private:
              });
          }
  
@@ -10933,7 +11116,17 @@ index 2f927d74f..caa65696c 100644
          // make checkpoints if needed
          iterate(drafting, [&](server_slot & slot) {
              auto & draft = slot.spec_draft;
-@@ -4651,6 +4793,35 @@ private:
+@@ -4279,6 +4511,9 @@ private:
+                         slot.stats.n_prompt_cached    = n_past;
+                         slot.stats.n_prompt_processed = 0;
+ 
++                        LOG_INF("slot prompt_start: id %2d | task %d | n_prompt = %d, n_cached = %d, n_process = %d\n",
++                                slot.id, slot.task->id, slot.task->n_tokens(), n_past, slot.task->n_tokens() - n_past);
++
+                         metrics.add_prompt_cached(n_past);
+ 
+                         slot.prompt.tokens.keep_first(n_past);
+@@ -4651,6 +4886,35 @@ private:
              }
          }
  
@@ -10969,14 +11162,14 @@ index 2f927d74f..caa65696c 100644
          bool has_output = false;
          for (int i = off; i < off + batch.view.size(); ++i) {
              has_output |= batch.tokens[i].output;
-@@ -4659,12 +4830,46 @@ private:
+@@ -4659,12 +4923,94 @@ private:
          // yield to the queue, so we can still handle metrics tasks while decoding
          // note: the sync is done here too, so that the wait is also covered by the yield
          int ret = 0;
 +        const uint64_t lm_decodes_before = llama_perf_context(ctx_tgt).pgrn_lm_decodes;
++        // the cancel target of this decode: only when every token belongs to one slot's task
++        int id_task = -1;
 +        {
-+            // the cancel target of this decode: only when every token belongs to one slot's task
-+            int id_task = -1;
 +            for (int i = off; i < off + batch.view.size(); ++i) {
 +                const int32_t id_slot = batch.tokens[i].id_slot;
 +                const int     id      = (id_slot >= 0 && id_slot < (int32_t) slots.size() && slots[id_slot].task)
@@ -10990,6 +11183,30 @@ index 2f927d74f..caa65696c 100644
 +            }
 +            decode_cancelled.store(false);
 +            decode_task_id.store(id_task);
++
++            // progress target: one slot's prompt is the whole view (the layer-major prefill reports per layer step)
++            lm_prog_slot = -1;
++            if (id_task >= 0) {
++                const int32_t id_slot = batch.tokens[off].id_slot;
++                int32_t n_view = 0, n_tail = 0;
++                bool all_prompt = true;
++                for (int i = off; i < off + batch.view.size(); ++i) {
++                    all_prompt = all_prompt && batch.tokens[i].is_prompt;
++                    ++n_view;
++                }
++                for (int i = off + batch.view.size(); i < batch.size(); ++i) {
++                    n_tail += batch.tokens[i].id_slot == id_slot;
++                }
++                if (all_prompt) {
++                    lm_prog_slot   = id_slot;
++                    lm_prog_n      = n_view;
++                    lm_prog_base   = (int32_t) slots[id_slot].prompt.n_tokens() - n_tail - n_view;
++                    lm_prog_t_send = ggml_time_us();
++                    lm_prog_t_log  = lm_prog_t_send;
++                    lm_prog_processed.store(lm_prog_base);
++                    lm_prog_slot_id.store(id_slot);
++                }
++            }
 +        }
          queue_tasks.yield_to_queue([&]() {
              ret = llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch.view.get());
@@ -10998,11 +11215,35 @@ index 2f927d74f..caa65696c 100644
              }
          });
 +        decode_task_id.store(-1);
-+        if (ret == 2 && decode_cancelled.load()) {
++        lm_prog_slot = -1;
++        lm_prog_slot_id.store(-1);
++        const bool cancelled = decode_cancelled.load();
++        if (ret == 2 && cancelled) {
 +            SRV_WRN("layer-major prefill aborted %.3f s after the cancel of its task\n",
 +                    (ggml_time_us() - decode_cancel_us.load()) / 1e6);
 +        }
 +        decode_cancelled.store(false);
++
++        if (ret == 2 && cancelled && id_task >= 0) {
++            // Slipstream: a cancelled layer-major prefill. Every token of this view belongs to the cancelled task's
++            // slot and llama_context::lm_fail dropped only that sequence: end that slot alone (its cached prompt is
++            // gone) and let the other slots continue with the next update_slots iteration. Do not throw.
++            if (routing != nullptr) {
++                routing->abort_batch();
++            }
++            for (auto & slot : slots) {
++                if (slot.task && slot.task->id == id_task) {
++                    LOG_INF("slot prompt_abort: id %2d | task %d | n_prompt = %d, t = %.0f ms\n",
++                            slot.id, slot.task->id, slot.task->n_tokens(),
++                            slot.stats.is_set() ? slot.stats.t_elapsed_us() / 1e3 : 0.0);
++                    send_error(slot, "Decode aborted.");
++                    slot.release();
++                    slot.prompt_clear();
++                    decode_aborted_slot = slot.id;
++                }
++            }
++            return true;   // the view is consumed
++        }
 +
 +        if (routing != nullptr) {
 +            if (ret == 0) {
@@ -11016,7 +11257,7 @@ index 2f927d74f..caa65696c 100644
  
          if (ret != 0) {
              {
-@@ -4685,7 +4890,12 @@ private:
+@@ -4685,7 +5031,12 @@ private:
                      err = "Compute error.";
                  }
  
@@ -11030,7 +11271,7 @@ index 2f927d74f..caa65696c 100644
  
                  if (!err.empty()) {
                      SRV_ERR("%s off = %d, n_batch = %d, ret = %d\n", err.c_str(), off, n_batch, ret);
-@@ -4717,6 +4927,15 @@ private:
+@@ -4717,6 +5068,15 @@ private:
          } else {
              // success, apply batch metrics
              metrics_post_decode(off, batch.view.size(), has_output);
@@ -11046,6 +11287,17 @@ index 2f927d74f..caa65696c 100644
          }
  
          // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
+@@ -4859,6 +5219,10 @@ private:
+                 slot.stats.update_prompt_last();
+                 slot.t_print_last = t_now;
+                 slot.n_gen_last = 0;
++
++                LOG_INF("slot prompt_done: id %2d | task %d | n_prompt = %d, n_cached = %d, n_processed = %d, t = %.0f ms, tps = %.1f\n",
++                        slot.id, slot.task->id, slot.task->n_tokens(), (int) slot.stats.n_prompt_cached,
++                        (int) slot.stats.n_prompt_processed, slot.stats.t_prompt_ms(), slot.stats.n_prompt_tps());
+             }
+ 
+             slot.stats.update_gen_last();
 diff --git a/tools/server/server.cpp b/tools/server/server.cpp
 index e022355dc..628ef03bb 100644
 --- a/tools/server/server.cpp
