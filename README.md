@@ -141,7 +141,7 @@ The streamed file (PGRN) belongs on your fastest disk. The GGUF gets read once a
 
 ## Compatible models
 
-Slipstream streams experts, so it needs a MoE architecture with Q4_K, Q5_K or Q6_K expert tensors that mainline llama.cpp can read. Dense models have no experts to stream. IQ, Q2, Q3, Q8_0 and MXFP4 expert quants don't work.
+Slipstream streams experts, so it needs a MoE architecture (a model that only uses a few "experts" per word) that mainline llama.cpp can read, with Q4_K, Q5_K, Q6_K, Q4_0, Q4_1, Q5_0, Q5_1 or Q8_0 expert tensors. Dense models have no experts to stream. IQ, Q2, Q3 and MXFP4 expert quants don't work yet.
 
 Interactive tier, small active parameter counts, the daily drivers:
 
@@ -152,6 +152,8 @@ Interactive tier, small active parameter counts, the daily drivers:
 | DeepSeek-V2-Lite | 16B / 2.4B | smallest, lowest RAM |
 | GLM-4.5-Air | 106B / 12B | strong quality |
 | Laguna S 2.1 | 118B / 8B | DFlash speculative decoding |
+| LFM2.5-24B-A2B | 24B / 2B | verified v0.4.1, lookahead +20 % at 8 GiB |
+| JetBrains Mellum2.1-12B-A2.5B | 12B / 2.5B | verified v0.4.1, small code model, ~23 tok/s at 8 GiB |
 
 XL streaming tier, verified against mainline llama.cpp. These are 240-466 GB at Q4 and need a big fast SSD:
 
