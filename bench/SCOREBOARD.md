@@ -8,11 +8,12 @@ recorded result in `bench/RESULTS.md`.
 |---|---|---|---|---|---|
 | 1a | TTFT cold first turn, 39.5k-token agent prompt (app regime, 4 GiB) | ≤ 150 s | 183 s default; ~154 s with Fast prompt reading (opt-in); was 235 s | v0.4.1 | RESULTS 2026-11-26 |
 | 1b | TTFT follow-up agent turn (append-only) after an interleaved request | < 3 s | **0.8 s** (was 229 s) | v0.4.1 | RESULTS E1 2026-11-26 |
+| 1c | TTFT new agent conversation, same system prompt + tools (app regime, 4 GiB) | < 5 s | **2.1 s** (was 190 s) | v0.5 dev | RESULTS E4 2026-11-27 |
 | 2 | Decode, lossless default, 4 / 10 GiB | ≥ 12 / ≥ 20 tok/s | 10.3 / 17.5 | v0.4.0 | RESULTS 2026-11-25 |
 | 3 | Decode, Turbo, 4 / 10 GiB | ≥ 16 / ≥ 22 tok/s | 14.5 / 19.6 | v0.4.0 | RESULTS 2026-11-25 |
 | 4 | Turbo quality (decode KLD / same top-1) | ≤ 0.02 / ≥ 93 % | 0.020 / 92.5 % | v0.4.0 | RESULTS 2026-11-25 |
 | 5 | Lossless parity (e2e nmse, output hash) | exact | exact | v0.4.0 | ctest 14/14 |
-| 6 | First run: clicks until model runs and editor is connected | ≤ 4 | 4 | v0.4.0 | app/ui-review/JOURNEY.md |
+| 6 | First run: clicks until model runs and editor is connected | ≤ 4 | **3** (was 5) | v0.5 dev | app/ui-review/JOURNEY.md 2026-11-28 |
 | 7 | Tests green (engine / Rust / Tauri / Python / UI) | all | 14 / 183 / 96 / 44 / 7 | v0.4.1 | RELEASE_0.4.1 |
 | 8 | Swap growth during any benchmark | 0 MB | 0 MB | v0.4.0 | RESULTS |
 | 9 | Release completeness (dmg + zip + node, verified) | complete | complete | v0.4.1 | RELEASE_0.4.1 |
