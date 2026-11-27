@@ -1211,6 +1211,110 @@ const JOURNEY_I18N = {
 };
 Object.keys(JOURNEY_I18N).forEach((l) => Object.assign(I18N[l], JOURNEY_I18N[l]));
 
+// v0.5 UX pass: plain words for what the engine is doing, start failures that
+// say why, disk/RAM needs up front, and a shorter first run.
+const UX05_I18N = {
+  en: {
+    "act.prefill": "Reading your prompt", "act.decode": "Writing the answer", "act.tokens": "tokens",
+    "act.prefillSub": "{pct} % · {tokens} tokens read in {secs} s · about {eta} left",
+    "act.prefillSubNoEta": "{tokens} tokens read in {secs} s",
+    "why.prefill": "Long prompts take a while the first time: a coding agent's first prompt (about 40,000 tokens) takes about 3 minutes{rate}. Follow-up turns in the same conversation start in about a second.",
+    "why.prefillRate": " (now {rate} tokens/s)",
+    "chat.waiting": "Waiting for the model… {secs} s",
+    "chat.reading": "Reading your prompt: {done} of {total} tokens ({pct} %) · {secs} s",
+    "chat.readingEta": " · about {eta} left",
+    "chat.readingCached": " · {cache} reused from earlier",
+    "chat.readingDone": "Prompt read in {secs} s — writing the answer…",
+    "chat.metaFirst": "first word after {secs} s",
+    "srv.startedLoading": "Starting — the model loads into memory (about a minute).",
+    "start.failed": "The model stopped while loading.",
+    "start.failRam": "Not enough free memory right now. Close some apps (browser tabs, Docker, other AI apps) or pick a smaller cache size in Settings, then press Start again.",
+    "start.failTooBig": "This model does not fit into this Mac's memory. Choose a smaller model.",
+    "start.failDisk": "The disk is full. Free up some space, then press Start again.",
+    "start.failGeneric": "Open Logs to see the engine's last message.",
+    "prep.startFailed": "The model could not start. The reason is below.",
+    "prep.diskNeed": "Needs about {need} GiB of free disk space ({dl} GiB download + {prep} GiB prepared copy) · {free} GiB free.",
+    "prep.diskNeedDense": "Needs about {need} GiB of free disk space · {free} GiB free.",
+    "prep.noDisk": "Not enough disk space: this model needs about {need} GiB, only {free} GiB are free. Free up space, choose a smaller model, or pick another folder under “Where models are stored”.",
+    "prep.noDiskBtn": "Not enough disk space",
+    "prep.lowRam": "Only {free} GiB of memory is free right now. Close some apps first so the model starts smoothly.",
+    "prep.dlEta": " · {speed} MB/s · about {eta} left",
+    "journey.step1Download": "Download the recommended model ({name}, about {need} GiB on disk)",
+    "journey.step1Busy": "Setting up the model… {pct}",
+    "journey.step1Done": "Model ready",
+    "journey.step2Running": "Running",
+    "journey.otherModel": "Choose a different model",
+    "journey.firstRunTip": "Everything stays on your Mac. The download and one-time preparation take a while; you can leave this window open and come back.",
+    "conv.working": "working",
+    "agent.patch": "Set up", "agent.tagPatch": "one click",
+    "obs.cache": "from RAM", "obs.rss": "memory",
+    "obs.upTip": "Speed of the last answer (tokens per second) · share of model parts found in RAM instead of the SSD · memory the engine uses",
+    "obs.downTip": "Engine stopped — speed, RAM share and memory show – until Start",
+    "restart.note": "Some settings changed. They apply when the model restarts.",
+    "restart.btn": "Restart now",
+    "toast.restarting": "Restarting with the new settings…",
+    "model.recommended": "recommended",
+    "compat.summary": "Which models work?",
+    "be.modelMissing": "The model file is missing. Download it again on the Model tab.",
+    "be.pgrnMissing": "The model is not prepared for SSD streaming yet. Press “Prepare for SSD streaming” on the Model tab.",
+    "be.running": "The model is already running. Stop it first.",
+    "be.dlRunning": "A download is already running.",
+    "be.pgrnExists": "This model is already prepared. To prepare it again, delete the .pgrn file first.",
+    "be.noConverter": "The preparation tool is missing from this app build. Reinstall Slipstream.",
+    "toast.convStarted": "Preparing the model for SSD streaming…",
+  },
+  de: {
+    "act.prefill": "Prompt wird gelesen", "act.decode": "Antwort wird geschrieben", "act.tokens": "Tokens",
+    "act.prefillSub": "{pct} % · {tokens} Tokens in {secs} s gelesen · noch etwa {eta}",
+    "act.prefillSubNoEta": "{tokens} Tokens in {secs} s gelesen",
+    "why.prefill": "Lange Prompts brauchen beim ersten Mal etwas: Der erste Prompt eines Coding-Agenten (etwa 40.000 Tokens) dauert rund 3 Minuten{rate}. Folgeanfragen im selben Gespräch starten in etwa einer Sekunde.",
+    "why.prefillRate": " (gerade {rate} Tokens/s)",
+    "chat.waiting": "Warte auf das Modell… {secs} s",
+    "chat.reading": "Lese deinen Prompt: {done} von {total} Tokens ({pct} %) · {secs} s",
+    "chat.readingEta": " · noch etwa {eta}",
+    "chat.readingCached": " · {cache} von vorhin wiederverwendet",
+    "chat.readingDone": "Prompt in {secs} s gelesen — Antwort wird geschrieben…",
+    "chat.metaFirst": "erstes Wort nach {secs} s",
+    "srv.startedLoading": "Startet — das Modell wird in den Speicher geladen (etwa eine Minute).",
+    "start.failed": "Das Modell hat beim Laden gestoppt.",
+    "start.failRam": "Gerade ist nicht genug Arbeitsspeicher frei. Schließe einige Apps (Browser-Tabs, Docker, andere KI-Apps) oder wähle in den Einstellungen einen kleineren Cache und drücke dann erneut Starten.",
+    "start.failTooBig": "Dieses Modell passt nicht in den Arbeitsspeicher dieses Macs. Wähle ein kleineres Modell.",
+    "start.failDisk": "Die Festplatte ist voll. Gib etwas Platz frei und drücke dann erneut Starten.",
+    "start.failGeneric": "Unter Logs steht die letzte Meldung der Engine.",
+    "prep.startFailed": "Das Modell konnte nicht starten. Der Grund steht darunter.",
+    "prep.diskNeed": "Braucht etwa {need} GiB freien Speicherplatz ({dl} GiB Download + {prep} GiB vorbereitete Kopie) · {free} GiB frei.",
+    "prep.diskNeedDense": "Braucht etwa {need} GiB freien Speicherplatz · {free} GiB frei.",
+    "prep.noDisk": "Nicht genug Speicherplatz: Dieses Modell braucht etwa {need} GiB, frei sind nur {free} GiB. Platz freigeben, ein kleineres Modell wählen oder unter „Speicherort der Modelle“ einen anderen Ordner wählen.",
+    "prep.noDiskBtn": "Nicht genug Speicherplatz",
+    "prep.lowRam": "Gerade sind nur {free} GiB Arbeitsspeicher frei. Schließe vorher einige Apps, damit das Modell sauber startet.",
+    "prep.dlEta": " · {speed} MB/s · noch etwa {eta}",
+    "journey.step1Download": "Empfohlenes Modell laden ({name}, etwa {need} GiB auf der SSD)",
+    "journey.step1Busy": "Modell wird eingerichtet… {pct}",
+    "journey.step1Done": "Modell bereit",
+    "journey.step2Running": "Läuft",
+    "journey.otherModel": "Anderes Modell wählen",
+    "journey.firstRunTip": "Alles bleibt auf deinem Mac. Download und einmalige Vorbereitung dauern eine Weile; du kannst das Fenster offen lassen und später zurückkommen.",
+    "conv.working": "läuft",
+    "agent.patch": "Einrichten", "agent.tagPatch": "ein Klick",
+    "obs.cache": "aus RAM", "obs.rss": "RAM",
+    "obs.upTip": "Tempo der letzten Antwort (Tokens pro Sekunde) · Anteil der Modellteile, die im RAM statt auf der SSD lagen · Arbeitsspeicher der Engine",
+    "obs.downTip": "Engine gestoppt — Tempo, RAM-Anteil und Speicher zeigen – bis Start",
+    "restart.note": "Einige Einstellungen wurden geändert. Sie gelten nach einem Neustart des Modells.",
+    "restart.btn": "Jetzt neu starten",
+    "toast.restarting": "Startet mit den neuen Einstellungen neu…",
+    "model.recommended": "empfohlen",
+    "compat.summary": "Welche Modelle funktionieren?",
+    "be.modelMissing": "Die Modelldatei fehlt. Lade sie im Tab Modell erneut.",
+    "be.pgrnMissing": "Das Modell ist noch nicht für SSD-Streaming vorbereitet. Im Tab Modell „Für SSD-Streaming vorbereiten“ drücken.",
+    "be.running": "Das Modell läuft bereits. Erst stoppen.",
+    "be.dlRunning": "Es läuft bereits ein Download.",
+    "be.pgrnExists": "Dieses Modell ist schon vorbereitet. Für eine neue Vorbereitung erst die .pgrn-Datei löschen.",
+    "be.noConverter": "Das Vorbereitungs-Werkzeug fehlt in diesem App-Build. Slipstream neu installieren.",
+    "toast.convStarted": "Modell wird für SSD-Streaming vorbereitet…",
+  },
+};
+Object.keys(UX05_I18N).forEach((l) => Object.assign(I18N[l], UX05_I18N[l]));
+
 let LANG = localStorage.getItem("slipstream.lang") ||
   (navigator.language || "en").slice(0, 2);
 if (!I18N[LANG]) LANG = "en";
@@ -1288,7 +1392,7 @@ const giB = (bytes) => `${dec(bytes / 1073741824, 1)} GiB`;
 const fmtGiB = (b) => dec(b / 1073741824, 1);
 function fmtEta(s) {
   s = Math.round(s);
-  return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+  return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`;
 }
 function pgrnOf(gguf) { return gguf.replace(/\.gguf$/i, ".pgrn"); }
 function modelDir() { return $("pDir").value.trim(); }
@@ -1371,7 +1475,8 @@ function fillModels() {
   xlGrp.label = t("models.group.xl");
   MODELS.forEach((m) => {
     const o = document.createElement("option");
-    o.value = m.id; o.textContent = m.soon ? `${m.name} — ${t("badge.soon")}` : m.name;
+    o.value = m.id; o.textContent = m.soon ? `${m.name} — ${t("badge.soon")}`
+      : m.id === DEFAULT_MODEL_ID ? `${m.name} — ${t("model.recommended")}` : m.name;
     if (m.soon) o.disabled = true;
     (m.xl ? xlGrp : recGrp).appendChild(o);
   });
@@ -1549,15 +1654,27 @@ async function refreshModel() {
     badge.className = "badge partial"; badge.textContent = t("badge.loading") + " " + pct.toFixed(0) + "%";
     dlStatus.textContent = t("st.dlRunning");
     dlBar.style.width = pct + "%";
-    dlNote.textContent = `${fmtGiB(st.gguf_bytes)} / ${state.remoteBytes ? fmtGiB(state.remoteBytes) : "?"} GiB · ${t("reco.free")}: ${st.disk_free_gib.toFixed(0)} GiB`;
+    // Speed and time left from successive polls (smoothed), so a long download is not a guess.
+    const now = Date.now(), prev = state.dlSample;
+    if (prev && st.gguf_bytes > prev.bytes && now > prev.t) {
+      const inst = (st.gguf_bytes - prev.bytes) / ((now - prev.t) / 1000);
+      state.dlRate = state.dlRate ? state.dlRate * 0.8 + inst * 0.2 : inst;
+    }
+    state.dlSample = { t: now, bytes: st.gguf_bytes };
+    const etaTxt = (state.dlRate > 0 && state.remoteBytes > st.gguf_bytes)
+      ? fillVars(t("prep.dlEta"), { speed: String(Math.round(state.dlRate / 1048576)), eta: fmtEta((state.remoteBytes - st.gguf_bytes) / state.dlRate) })
+      : "";
+    dlNote.textContent = `${fmtGiB(st.gguf_bytes)} / ${state.remoteBytes ? fmtGiB(state.remoteBytes) : "?"} GiB${etaTxt} · ${t("reco.free")}: ${st.disk_free_gib.toFixed(0)} GiB`;
   } else if (st.converting) {
+    state.dlSample = null; state.dlRate = 0;
     state.wasConverting = true;
     let cp = null;
     try { cp = await invoke("convert_progress"); } catch {}
     if (cp && cp.total_bytes > 0 && cp.phase && cp.phase !== "error") {
       // Real progress from the native converter's JSONL protocol.
       const pct = Math.min(100, (cp.done_bytes / cp.total_bytes) * 100);
-      const phase = t("conv." + cp.phase);
+      const phaseKey = "conv." + cp.phase;
+      const phase = t(phaseKey) === phaseKey ? t("conv.working") : t(phaseKey);
       badge.className = "badge partial"; badge.textContent = phase + " " + pct.toFixed(0) + "%";
       dlStatus.textContent = t("st.convRunning") + " — " + phase;
       dlBar.style.width = pct + "%";
@@ -1596,7 +1713,9 @@ async function refreshModel() {
     badge.className = "badge missing"; badge.textContent = t("badge.notLoaded");
     dlStatus.textContent = t("st.notThere");
     dlBar.style.width = "0%";
-    dlNote.textContent = `${t("reco.free")}: ${st.disk_free_gib.toFixed(0)} GiB`;
+    const d = diskNeed();
+    dlNote.textContent = fillVars(t(isDenseModel() ? "prep.diskNeedDense" : "prep.diskNeed"),
+      { need: String(d.need), dl: String(d.dl), prep: String(d.prep), free: st.disk_free_gib.toFixed(0) });
   }
 
   // power button reflects readiness when server is stopped
@@ -1604,7 +1723,7 @@ async function refreshModel() {
     ? st.gguf_bytes > 0
     : (st.pgrn_bytes > 0 && st.gguf_bytes > 0);
   state.modelReady = ready && !st.downloading && !st.converting;
-  if (!state.running) {
+  if (!state.running && !state.startPendingAt) {
     // Not ready is not a dead end: the button says what to do and goes there.
     const b = $("powerBtn");
     b.disabled = false;
@@ -1624,13 +1743,27 @@ function goToModelSetup() {
   const b = $("prepareBtn");
   if (b) b.focus();
 }
+/** Disk space the whole setup needs, in GiB: the download plus the prepared copy
+ *  for SSD streaming (about 0.9 × the download for the streamed MoE models). */
+function diskNeed() {
+  const q = currentQuant();
+  const dl = Math.ceil((q ? q.gb : state.model.gb) || 0);
+  const prep = isDenseModel() ? 0 : Math.ceil(dl * 0.9);
+  return { dl, prep, need: dl + prep };
+}
 function prepareState(st) {
   const m = state.model;
   if (m.soon) return "soon";
   if (!st) return "unknown";
   if (st.downloading || st.converting) return "busy";
   if (state.running) return state.pillMode === "loading" ? "starting" : "running";
-  if (state.modelReady) return "ready";
+  if (state.startPendingAt) return "starting";
+  if (state.modelReady) return state.startFailed ? "startFailed" : "ready";
+  // Refuse to start a download that cannot fit; the reason and the way out are shown.
+  const d = diskNeed();
+  const free = typeof st.disk_free_gib === "number" ? st.disk_free_gib : Infinity;
+  if (st.gguf_bytes <= 0 && free < d.need) return "noDisk";
+  if (st.gguf_bytes > 0 && !isDenseModel() && !(st.pgrn_bytes > 0) && free < d.prep) return "noDisk";
   // A download that stopped short (cancel, network) must not be "prepared".
   if (st.gguf_bytes > 0 && state.remoteBytes > 0 && st.gguf_bytes < state.remoteBytes * 0.999) return "incomplete";
   if (st.gguf_bytes > 0 && !isDenseModel()) return state.prepError ? "failed" : "convert";
@@ -1650,6 +1783,8 @@ function renderPrepare(st) {
     running: t("prep.connect"),
     starting: t("prep.wait"),
     ready: t("prep.start"),
+    startFailed: t("prep.retry"),
+    noDisk: t("prep.noDiskBtn"),
     incomplete: t("prep.resume"),
     failed: t("prep.retry"),
     convert: t("prep.prepare"),
@@ -1658,12 +1793,40 @@ function renderPrepare(st) {
   }[kind];
   b.textContent = label;
   b.dataset.kind = kind;
-  b.disabled = kind === "soon" || kind === "unknown" || kind === "starting";
-  b.className = "btn prepare-btn" + (kind === "busy" ? " btn-danger" : kind === "running" || kind === "starting" ? "" : " btn-primary");
+  b.disabled = kind === "soon" || kind === "unknown" || kind === "starting" || kind === "noDisk";
+  // The next step is always the primary button, including "Connect your editor".
+  b.className = "btn prepare-btn" + (kind === "busy" ? " btn-danger" : kind === "starting" || kind === "noDisk" ? "" : " btn-primary");
   // States the model-file status line cannot know about.
-  const status = { starting: "prep.starting", running: "prep.running", incomplete: "prep.incomplete", failed: "prep.failed" }[kind];
+  const status = { starting: "prep.starting", running: "prep.running", incomplete: "prep.incomplete", failed: "prep.failed", startFailed: "prep.startFailed" }[kind];
   if (status && $("dlStatus")) $("dlStatus").textContent = t(status);
   if ($("prepareBox")) $("prepareBox").dataset.kind = kind;
+  renderPrepWarn(kind, st);
+  renderJourneySteps(kind, st);
+}
+/** One extra line under the status: why a start failed, why a download cannot
+ *  begin, or that memory is short right now. Empty otherwise. */
+function renderPrepWarn(kind, st) {
+  const el = $("prepWarn");
+  if (!el) return;
+  let text = "", tone = "warn", detail = "";
+  if (kind === "startFailed") {
+    text = state.startFailed; detail = state.startFailedDetail || "";
+  } else if (kind === "noDisk") {
+    const d = diskNeed();
+    text = fillVars(t("prep.noDisk"), { need: String(st && st.gguf_bytes > 0 ? d.prep : d.need), free: (st.disk_free_gib || 0).toFixed(0) });
+  } else if (kind === "ready" && state.sys && typeof state.sys.free_gib === "number" && state.sys.free_gib < 8 && !isDenseModel()) {
+    text = fillVars(t("prep.lowRam"), { free: dec(state.sys.free_gib, 1) });
+  }
+  if (el.dataset.text === text + detail) return;
+  el.dataset.text = text + detail;
+  el.dataset.tone = tone;
+  el.hidden = !text;
+  el.textContent = text;
+  if (detail) {
+    const code = document.createElement("code");
+    code.textContent = detail;
+    el.append(document.createElement("br"), code);
+  }
 }
 function maybeAutoPrepare(st) {
   // A finished download chains straight into preparation — but only when the file
@@ -1681,7 +1844,7 @@ if ($("prepareBtn")) $("prepareBtn").onclick = () => {
   if (kind === "busy") { state.autoPrepare = false; $("dlCancel").click(); return; }
   if (kind === "starting") return;
   if (kind === "running") { showTab("connect"); return; }
-  if (kind === "ready") { startServer(); return; }
+  if (kind === "ready" || kind === "startFailed") { state.startFailed = null; startServer(); return; }
   if (kind === "convert" || kind === "failed") { state.prepError = false; $("convBtn").click(); return; }
   if (kind === "download" || kind === "needGguf" || kind === "incomplete") {
     state.autoPrepare = kind === "download" && !isDenseModel();
@@ -1695,7 +1858,7 @@ $("dlBtn").onclick = async () => {
   try {
     await invoke("start_download", { url, dest: ggufPath(), dir: modelDir() });
     toast(t("toast.dlStarted")); state.remoteBytes = 0; refreshModel();
-  } catch (e) { toast(e, true); }
+  } catch (e) { toast(backendMsg(e), true); }
 };
 $("convBtn").onclick = async () => {
   // Same PGRN resolution as status/start: the streamed sidecar belongs on the
@@ -1705,7 +1868,7 @@ $("convBtn").onclick = async () => {
   try {
     await invoke("start_convert", { gguf, pgrn, ioThreads: +$("io").value || 8, resume: false });
     toast(t("toast.convStarted")); refreshModel();
-  } catch (e) { toast(e, true); }
+  } catch (e) { toast(backendMsg(e), true); }
 };
 $("resumeBtn").onclick = async () => {
   const pgrn = $("pPgrn").value.trim() || pgrnOf(ggufPath());
@@ -2285,7 +2448,14 @@ async function startServer() {
     const profileNote = goingMlx && cfg.pgrn_profile === "contract"
       ? ` · ${t("toast.mlxContractProfile")}`
       : "";
-    toast(`${msg || t("srv.startedLoading")}${profileNote}`);
+    // The Metal start message comes back in German from the backend; say it in the
+    // UI language. MLX messages carry RAM/disk details worth showing as they are.
+    toast(`${goingMlx && msg ? msg : t("srv.startedLoading")}${profileNote}`);
+    state.startPendingAt = Date.now();
+    state.startSawUp = false;
+    state.startFailed = null;
+    state.startedCfg = engineSettingsSnapshot();
+    hideRestartNote();
     setPill("loading");
     applyBackendUi();
   } catch (e) {
@@ -2293,11 +2463,12 @@ async function startServer() {
     if (/MLX model directory is empty or missing config\.json/i.test(msg)) {
       toast(t("err.mlxDirLeaf"), true);
     } else {
-      toast(e, true);
+      toast(backendMsg(e), true);
     }
   }
 }
 async function stopServer() {
+  state.startPendingAt = null;
   resetLlamaToolPrime();
   await invoke("stop_server");
   state.resolvedBackend = null;
@@ -2307,7 +2478,7 @@ async function stopServer() {
   applyBackendUi();
 }
 $("powerBtn").onclick = () => {
-  if (state.running) return stopServer();
+  if (state.running || state.startPendingAt) return stopServer();
   if (state.modelReady === false) return goToModelSetup();
   return startServer();
 };
@@ -2333,6 +2504,77 @@ function setPill(mode) {
   const tip = $("startTip");
   if (tip) tip.hidden = mode !== "off";
   markJourney();
+}
+
+// Settings that only take effect at Start. While the model runs, changing one shows
+// a "Restart now" note in Settings instead of silently doing nothing.
+function engineSettingsSnapshot() {
+  const v = (id) => { const el = $(id); return el ? (el.type === "checkbox" ? el.checked : el.value) : null; };
+  return JSON.stringify({
+    cache: v("cache"), ctx: v("ctx"), io: v("io"), mtp: v("specMtp"), compact: v("compactSlots"),
+    grammar: v("grammarDraft"), thinking: v("thinking"), buffered: v("bufferedReads"), online: v("onlinePredict"),
+    lookahead: pgrnLookaheadFromUi(), steer: pgrnSteerFromUi(), layerMajor: pgrnLayerMajorFromUi(),
+    backend: state.backend, model: state.model && state.model.id, quant: currentFile(),
+  });
+}
+function hideRestartNote() { const n = $("restartNote"); if (n) n.hidden = true; }
+function checkRestartNeeded() {
+  const n = $("restartNote");
+  if (!n) return;
+  n.hidden = !(state.running && state.startedCfg && engineSettingsSnapshot() !== state.startedCfg);
+}
+function wireRestartNote() {
+  const panel = document.querySelector('.panel[data-panel="settings"]');
+  if (panel) {
+    panel.addEventListener("change", () => setTimeout(checkRestartNeeded, 0));
+    panel.addEventListener("click", () => setTimeout(checkRestartNeeded, 0));
+  }
+  const btn = $("restartBtn");
+  if (btn) btn.onclick = async () => {
+    hideRestartNote();
+    toast(t("toast.restarting"));
+    try { await stopServer(); } catch {}
+    setTimeout(() => { startServer(); }, 800);
+  };
+}
+
+// The backend answers some refusals in German only (main.rs); show them in the UI
+// language. Unknown messages pass through unchanged.
+function backendMsg(e) {
+  const s = String(e || "");
+  const map = [
+    [/Modell \(\.gguf\) fehlt|^GGUF fehlt/i, "be.modelMissing"],
+    [/PGRN-Sidecar fehlt/i, "be.pgrnMissing"],
+    [/Server läuft bereits/i, "be.running"],
+    [/Download läuft bereits/i, "be.dlRunning"],
+    [/PGRN existiert bereits/i, "be.pgrnExists"],
+    [/Converter-Binary fehlt/i, "be.noConverter"],
+  ];
+  const hit = map.find(([re]) => re.test(s));
+  return hit ? t(hit[1]) : s;
+}
+
+// A start that ends without the user pressing Stop gets a reason in plain words,
+// read from the engine's last log lines, instead of a silent "Stopped".
+function diagnoseStartFailure(log) {
+  const text = String(log || "");
+  if (/too large for this host/i.test(text)) return t("start.failTooBig");
+  if (/not the moment|reserve|exceeds the \d+ MiB that fits|out of memory|failed to allocate|insufficient memory|OutOfMemory/i.test(text)) return t("start.failRam");
+  if (/no space left/i.test(text)) return t("start.failDisk");
+  return null;
+}
+async function reportStartFailure() {
+  state.startPendingAt = null;
+  let log = "";
+  try { log = await invoke("read_log", { maxLines: 80 }); } catch {}
+  const reason = diagnoseStartFailure(log);
+  // The engine's own refusal ("[peregrine] …") names the numbers; prefer it over generic lines.
+  const lines = String(log).split("\n");
+  const lastErr = lines.filter((l) => /\[peregrine\].*(error|refus|fits|reserve)/i.test(l)).pop()
+    || lines.filter((l) => /error|failed|refused|abort/i.test(l)).pop() || "";
+  state.startFailed = `${t("start.failed")} ${reason || t("start.failGeneric")}`;
+  state.startFailedDetail = lastErr.trim().slice(0, 300);
+  toast(state.startFailed, true);
 }
 
 // First-run steps reflect where the user actually is: done steps get a check,
@@ -2636,7 +2878,8 @@ function parseActivity(text) {
   for (const l of lines) {
     let m = l.match(/prompt processing, n_tokens =\s*(\d+), progress =\s*([\d.]+)(?:, t =\s*([\d.]+) s \/\s*([\d.]+) tokens per second)?/);
     if (m) { phase = "prefill"; pp = { tokens: +m[1], progress: +m[2], t: m[3] ? +m[3] : null, rate: m[4] ? +m[4] : null }; continue; }
-    m = l.match(/n_decoded =\s*(\d+), tg =\s*([\d.]+)/);
+    // The engine prints "n_gen = N, tg = X t/s" (older builds: "n_decoded = N, tg = X").
+    m = l.match(/n_(?:gen|decoded) =\s*(\d+), tg =\s*([\d.]+)/);
     if (m) { phase = "decode"; dec = { tokens: +m[1], tps: +m[2] }; continue; }
     if (/prompt eval time =/.test(l) && phase === "prefill") { phase = "decode"; }
     if (/release:|stop processing|total time =/.test(l)) { phase = "idle"; pp = null; dec = null; }
@@ -2647,20 +2890,21 @@ function parseActivity(text) {
 function updateActivity(a) {
   const el = $("activity");
   if (a.phase === "prefill" && a.pp) {
-    const total = a.pp.progress > 0 ? Math.round(a.pp.tokens / a.pp.progress) : a.pp.tokens;
+    // "progress" counts reused (cached) tokens too, "n_tokens" only the ones read
+    // now, so the remaining time comes from elapsed time and progress, not tokens.
     const p = Math.round(a.pp.progress * 100);
-    const eta = (a.pp.rate && a.pp.progress > 0) ? Math.max(0, Math.round((total - a.pp.tokens) / a.pp.rate)) : null;
+    const eta = (a.pp.t && a.pp.progress > 0 && a.pp.progress < 1) ? a.pp.t * (1 - a.pp.progress) / a.pp.progress : null;
     el.hidden = false;
     el.className = "activity prefill";
-    $("actTitle").textContent = t("act.prefill");
-    $("actSub").textContent = `${a.pp.tokens.toLocaleString()} / ${total.toLocaleString()} Tokens`
-      + (a.pp.rate ? ` · ${a.pp.rate.toFixed(0)} tok/s` : "")
-      + (eta != null ? ` · ETA ~${eta}s` : "");
+    if ($("actTitle").textContent !== t("act.prefill")) $("actTitle").textContent = t("act.prefill");
+    const vars = { pct: String(p), tokens: a.pp.tokens.toLocaleString(LANG), secs: String(Math.round(a.pp.t || 0)),
+      eta: eta != null ? fmtEta(eta) : "" };
+    $("actSub").textContent = fillVars(t(eta != null ? "act.prefillSub" : "act.prefillSubNoEta"), vars);
     $("actBar").style.width = p + "%"; $("actPct").textContent = p + "%";
   } else if (a.phase === "decode") {
     el.hidden = false;
     el.className = "activity decode";
-    $("actTitle").textContent = t("act.decode");
+    if ($("actTitle").textContent !== t("act.decode")) $("actTitle").textContent = t("act.decode");
     $("actSub").textContent = a.dec ? `${a.dec.tokens} ${t("act.tokens")} · ${tps(a.dec.tps)}` : t("act.running");
     $("actBar").style.width = "100%"; $("actPct").textContent = "";
   } else {
@@ -2788,6 +3032,29 @@ async function poll() {
   let sstate = "down";
   try { sstate = await invoke("server_state"); } catch {}
   state.running = sstate !== "down";
+  if (state.startPendingAt) {
+    if (state.running) {
+      state.startSawUp = true;
+      if (sstate === "ready") {
+        state.startPendingAt = null;
+        // First run: the model just came up and no editor is connected yet, so the
+        // next step opens by itself — unless the user went somewhere else meanwhile.
+        const tab = localStorage.getItem("slipstream.tab") || "chat";
+        if (localStorage.getItem("slipstream.editorConnected") !== "1" && (tab === "models" || tab === "chat")
+            && !(chat && chat.history && chat.history.length)) {
+          showTab("connect");
+          const first = document.querySelector("#agentList .agent button");
+          if (first) first.focus({ preventScroll: true });
+        }
+      }
+    } else if (!state.startSawUp && Date.now() - state.startPendingAt < 10000) {
+      // The engine needs a moment before it answers at all; that is not a stop.
+      refreshModel();
+      return;
+    } else {
+      await reportStartFailure();
+    }
+  }
 
   // The log still answers two things the collector cannot: which phase the engine
   // is in right now (for the strip) and how large the KV cache turned out (for
@@ -2798,6 +3065,9 @@ async function poll() {
       const log = await invoke("read_log", { maxLines: 400 });
       const p = parseLog(log);
       const act = parseActivity(log);
+      // The engine logs no line when prompt reading ends, so the last "prompt
+      // processing" line lingers into the answer. Chat knows better for its own requests.
+      if (act.phase === "prefill" && state.chatAnswering) { act.phase = "decode"; act.pp = null; }
       state.activity = act;
       updateActivity(act);
       ARENA.active = act.phase === "decode" || act.phase === "prefill";
@@ -4159,6 +4429,8 @@ function chatAddBubble(role, text) {
 function chatFinalizeAssistantBubble(ui) {
   if (!ui || !ui.body || !ui.wrap) return;
   ui.body.classList.remove("streaming");
+  // A wait message ("Reading your prompt…") is not an answer.
+  if (ui.body.classList.contains("chat-pending") && !ui.body.classList.contains("chat-err")) ui.body.textContent = "";
   const hasText = !!(ui.body.textContent && ui.body.textContent.trim());
   const hasExtras = !!(ui.col && ui.col.querySelector(".chat-tool, .chat-reasoning"));
   if (!hasText && !hasExtras && !ui.body.classList.contains("chat-err")) {
@@ -4295,6 +4567,9 @@ function buildChatRequestBody(messages, opts) {
     temperature: think ? 0.6 : 0,
     chat_template_kwargs: { enable_thinking: think },
   };
+  // llama-server streams prompt_progress {total, cache, processed, time_ms} while it
+  // reads a long prompt, so Chat can show progress instead of a silent wait.
+  if (effectiveBackend() !== "mlx") body.return_progress = true;
   const userText = (opts && opts.userText) || "";
   if (toolsEnabledForRequest(userText)) {
     body.tools = DEMO_TOOLS;
@@ -4356,11 +4631,16 @@ async function streamChatCompletion(messages, ui, opts) {
         if (j.usage && typeof j.usage.completion_tokens === "number") {
           usageCompletion = j.usage.completion_tokens;
         }
+        if (j.prompt_progress && ui.body.classList.contains("chat-pending")) {
+          ui.progress = j.prompt_progress;
+          renderChatWait(ui);
+        }
         const delta = j.choices?.[0]?.delta || {};
         if (delta.reasoning_content) {
           reasoning += delta.reasoning_content;
           chatAddReasoning(ui.col, reasoning);
         }
+        if ((delta.content || delta.reasoning_content) && !ui.firstAt) { ui.firstAt = performance.now(); state.chatAnswering = true; }
         if (delta.content) {
           answer += delta.content;
           tokens++;
@@ -4369,10 +4649,12 @@ async function streamChatCompletion(messages, ui, opts) {
           $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
           // Live wall tok/s while streaming (throttle DOM writes).
           const now = performance.now();
+          // Speed counts from the first word: the prompt-reading wait is shown
+          // separately ("first word after N s") and must not drag the rate down.
           if (meta && tokens >= 2 && now - lastMetaAt > 250) {
-            const secs = (now - t0) / 1000;
+            const secs = (now - (ui.firstAt || t0)) / 1000;
             if (secs > 0) {
-              meta.textContent = `${tps(tokens / secs)} · ${tokens} tokens · ${t("chat.metaLive")}`;
+              meta.textContent = `${tps(tokens / secs)} · ${tokens} tokens · ${chatFirstWordNote(ui, t0)}${t("chat.metaLive")}`;
               lastMetaAt = now;
             }
           }
@@ -4445,6 +4727,9 @@ async function sendChat() {
   const t0 = performance.now();
   let tokens = 0;
   chat.abort = new AbortController();
+  ui.t0 = t0;
+  // Until the first word arrives, the bubble says what is happening and for how long.
+  ui.waitTimer = setInterval(() => renderChatWait(ui), 1000);
   try {
     // Tool roundtrips: stream → execute demo tools → stream again (max 3 loops).
     let messages = chat.history.slice();
@@ -4481,6 +4766,7 @@ async function sendChat() {
         }
         ui.body.textContent = "";
         ui.body.classList.add("chat-pending");
+        ui.progress = null;
         continue;
       }
       finalAnswer = out.answer;
@@ -4498,21 +4784,60 @@ async function sendChat() {
     if (!(last && last.role === "assistant" && last.content === finalAnswer && !last.tool_calls)) {
       chat.history.push(asst);
     }
-    const secs = (performance.now() - t0) / 1000;
+    const secs = (performance.now() - (ui.firstAt || t0)) / 1000;
     if (meta && secs > 0 && tokens > 0) {
-      meta.textContent = `${tps(tokens / secs)} · ${tokens} tokens · ${t("chat.metaLast")}`;
+      meta.textContent = `${tps(tokens / secs)} · ${tokens} tokens · ${chatFirstWordNote(ui, t0)}${t("chat.metaLast")}`;
     }
   } catch (e) {
     if (e.name !== "AbortError") {
+      clearInterval(ui.waitTimer);
+      const hadAnswer = !ui.body.classList.contains("chat-pending") && ui.body.textContent;
       ui.body.classList.remove("chat-pending");
-      ui.body.textContent = ui.body.textContent || (t("err.prefix") + (e.message || e));
+      ui.body.textContent = hadAnswer ? ui.body.textContent : (t("err.prefix") + (e.message || e));
       ui.body.classList.add("chat-err");
     }
   } finally {
+    clearInterval(ui.waitTimer);
+    state.chatAnswering = false;
     chatFinalizeAssistantBubble(ui);
     setChatBusy(false);
     chat.abort = null;
   }
+}
+
+/** "first word after 12 s · " when the wait was long enough to matter. */
+function chatFirstWordNote(ui, t0) {
+  if (!ui.firstAt) return "";
+  const s = (ui.firstAt - t0) / 1000;
+  return s >= 2 ? fillVars(t("chat.metaFirst"), { secs: dec(s, s < 10 ? 1 : 0) }) + " · " : "";
+}
+
+/** Status text inside the pending assistant bubble while no word has arrived yet. */
+function renderChatWait(ui) {
+  if (!ui || !ui.body || !ui.body.classList.contains("chat-pending")) return;
+  const secs = Math.round((performance.now() - ui.t0) / 1000);
+  const p = ui.progress;
+  let text;
+  if (p && p.total > 0) {
+    const done = Math.min(p.processed || 0, p.total);
+    const fresh = Math.max(0, done - (p.cache || 0));
+    if (done >= p.total) {
+      text = fillVars(t("chat.readingDone"), { secs: String(Math.round((p.time_ms || 0) / 1000) || secs) });
+    } else {
+      text = fillVars(t("chat.reading"), {
+        done: done.toLocaleString(LANG), total: p.total.toLocaleString(LANG),
+        pct: String(Math.floor((done / p.total) * 100)), secs: String(secs),
+      });
+      const rate = p.time_ms > 0 ? fresh / (p.time_ms / 1000) : 0;
+      if (rate > 0 && fresh > 0) text += fillVars(t("chat.readingEta"), { eta: fmtEta((p.total - done) / rate) });
+      if (p.cache > 0) text += fillVars(t("chat.readingCached"), { cache: p.cache.toLocaleString(LANG) });
+    }
+  } else if (secs >= 2) {
+    text = fillVars(t("chat.waiting"), { secs: String(secs) });
+  } else {
+    return;
+  }
+  ui.body.textContent = text;
 }
 
 /** Calm first-launch empty state — 3-step CTA (see PRODUCT_CLICK_JOURNEY.md). */
@@ -4527,6 +4852,7 @@ function chatEmptyHtml() {
     + '<li><button type="button" class="journey-step" id="journeyStep3" data-journey="prompt">'
     + '<span class="journey-n" aria-hidden="true">3</span><span data-i18n="journey.step3"></span></button></li>'
     + '</ol>'
+    + '<button type="button" class="journey-other" id="journeyOther" data-i18n="journey.otherModel" hidden></button>'
     + '<p class="chat-empty-tip" data-i18n="journey.codingTip"></p>'
     + '</div>';
 }
@@ -4539,13 +4865,51 @@ function journeyStartServer() {
 }
 function wireJourney() {
   const s1 = $("journeyStep1");
-  if (s1) s1.onclick = () => { goToModelSetup(); };
+  // On a fresh Mac step 1 *is* the download of the recommended model (its name and
+  // disk need are on the button); every other state opens the Model tab.
+  if (s1) s1.onclick = () => {
+    const pb = $("prepareBtn");
+    if (pb && pb.dataset.kind === "download") { pb.click(); return; }
+    goToModelSetup();
+  };
+  const other = $("journeyOther");
+  if (other) other.onclick = () => { goToModelSetup(); };
   const s2 = $("journeyStep2");
   if (s2) s2.onclick = () => { journeyStartServer(); };
   const s3 = $("journeyStep3");
   if (s3) s3.onclick = () => { showTab("connect"); };
 }
 function wireJourneyCta() { wireJourney(); }
+/** Step labels follow the prepare card, so the first screen says exactly what a click does. */
+function renderJourneySteps(kind, st) {
+  const label = (id) => { const b = $(id); return b ? b.querySelector("span:not(.journey-n)") : null; };
+  const l1 = label("journeyStep1"), l2 = label("journeyStep2");
+  const other = $("journeyOther");
+  if (!l1) return;
+  let s1 = t("journey.step1");
+  if (kind === "download") {
+    s1 = fillVars(t("journey.step1Download"), { name: state.model.name.replace(/\s*\(.*\)\s*$/, ""), need: String(diskNeed().need) });
+  } else if (kind === "busy") {
+    // Same words as the Model tab ("Download running…" / "Preparing…") plus the percentage.
+    const w = ($("dlBar") && $("dlBar").style.width) || "";
+    const what = ($("dlStatus") && $("dlStatus").textContent.split(" — ")[0]) || t("journey.step1Busy");
+    s1 = `${what} ${w ? `${Math.round(parseFloat(w))} %` : ""}`.trim();
+  } else if (kind === "ready" || kind === "running" || kind === "starting" || kind === "startFailed") {
+    s1 = t("journey.step1Done");
+  }
+  if (l1.textContent !== s1) { l1.removeAttribute("data-i18n"); l1.textContent = s1; }
+  if (l2) {
+    const s2 = kind === "starting" ? t("prep.wait") : kind === "running" ? t("journey.step2Running") : t("journey.step2");
+    if (l2.textContent !== s2) { l2.removeAttribute("data-i18n"); l2.textContent = s2; }
+  }
+  if (other) other.hidden = kind !== "download";
+  // While setting up, the tip under the steps says the wait is expected.
+  const tip = document.querySelector("#chatEmpty .chat-empty-tip");
+  if (tip) {
+    const key = kind === "download" || kind === "busy" ? "journey.firstRunTip" : "journey.codingTip";
+    if (tip.dataset.i18n !== key) { tip.dataset.i18n = key; tip.textContent = t(key); }
+  }
+}
 function renderChatEmpty() {
   const wrap = $("chatMessages");
   if (!wrap) return;
@@ -5074,6 +5438,7 @@ async function boot() {
     renderInstalled();
   };
   renderAgents();
+  wireRestartNote();
   $("lang").onchange = (e) => { applyLang(e.target.value); setPill(state.running ? "loading" : "off"); };
   applyLang(LANG);
   renderSpeed();
