@@ -10,6 +10,7 @@ mod mlx;
 mod p2p;
 mod runtime;
 mod servestats;
+mod slotstate;
 mod storage;
 mod sysstats;
 mod teardown;
@@ -38,6 +39,8 @@ struct AppState {
     emb: Mutex<Option<Child>>,
     qdrant: Mutex<Option<Child>>,
     setup: Mutex<Option<Child>>,
+    /// Prompt-state file key of the running llama-server (restart persistence, slotstate.rs).
+    slot_key: Mutex<Option<(u16, String)>>,
 }
 
 /// The readings the menubar poller takes, held where the window can read them
@@ -456,6 +459,15 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         // Serving counters for the menubar's Serving Stats submenu.
         "--metrics",
     ]);
+    // Restart persistence: the agent context is written here before a stop and restored after
+    // the next start (slotstate.rs, bench E5).
+    let slot_dir = slotstate::slot_dir();
+    let slot_key = if std::fs::create_dir_all(&slot_dir).is_ok() {
+        cmd.arg("--slot-save-path").arg(&slot_dir);
+        Some(slotstate::slot_key(&cfg.model, &cfg.pgrn, cfg.ctx, &cfg.kv_quant, file_size(&cfg.model)))
+    } else {
+        None
+    };
     if has_pgrn {
         cmd.args([
             "--pgrn", &cfg.pgrn,
@@ -537,6 +549,12 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
     cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log_err));
     let child = cmd.spawn().map_err(|e| format!("Start fehlgeschlagen: {e}"))?;
     *guard = Some(child);
+    if let Some(key) = &slot_key {
+        slotstate::restore_in_background(cfg.port, key.clone());
+    }
+    if let Ok(mut k) = state.slot_key.lock() {
+        *k = slot_key.map(|key| (cfg.port, key));
+    }
     let load_msg = if has_pgrn {
         "Server gestartet - lädt Modell (~60s)..."
     } else {
@@ -709,6 +727,12 @@ fn vm_stat_free_inactive_gib() -> Option<f64> {
 }
 
 fn stop_server_impl(state: &AppState) {
+    // Keep the agent context for the next start (best effort, bounded; skipped while loading).
+    if let Some((port, key)) = state.slot_key.lock().ok().and_then(|mut k| k.take()) {
+        if state.server.lock().map(|g| g.is_some()).unwrap_or(false) {
+            let _ = slotstate::save(port, &key);
+        }
+    }
     // Owned PID → lockfile holder → port-scoped llama → lsof listeners.
     // No broad `pkill -f omlx-server` (CRASH_AVOIDANCE).
     teardown::stop_server(

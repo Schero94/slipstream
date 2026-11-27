@@ -249,3 +249,4 @@ e4 fresh peak_rss_mb=9775 swap_delta_mb=0
 20261128-000312	scale	label=lm	prompt_n=20020	prompt_s=61.4	lm=1
 20261128-000312	scale	label=lm	prompt_n=39019	prompt_s=132.7	lm=1
 20261128-000312	scale_fit	label=lm	a=13.2s	linear=67.0s	quadratic=52.6s	quad_share=40%
+20261128-000802	e5	label=default	S1_prompt_n=39517	S1_ttft_s=186.7	S1_out=a9f8c4863784	save_wall_s=0.61	save_ms=609	saved_tokens=39564	file_mb=1026	restore_wall_s=0.28	restored_tokens=39564	S2_prompt_n=33	S2_cache_n=39476	S2_ttft_s=2.2	S2_out=c4062b92a557	swap_delta_mb=0

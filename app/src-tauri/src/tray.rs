@@ -347,7 +347,11 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main(app),
             "stop" => stop_server_impl(&app.state::<AppState>()),
-            "quit" => app.exit(0),
+            "quit" => {
+                // Save the agent context before quitting (restart persistence).
+                stop_server_impl(&app.state::<AppState>());
+                app.exit(0)
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {

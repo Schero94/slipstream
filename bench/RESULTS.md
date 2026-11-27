@@ -3804,3 +3804,17 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 - Verdict: the cold first turn is close to the M3 Pro's compute limits; attention cannot be cut
   losslessly. The big wins for agents are reuse (follow-up 0.8 s, new conversation 2.1 s) and
   keeping that state across restarts (E5).
+
+## E5 — agent context survives a server restart (slot save/restore) — KEEP — 2026-11-28
+
+- Method: `bench/fetchwall/e5_restart.sh`. Server 1 (app regime, 4 GiB, ub 4096, --cache-ram 2048,
+  --slot-save-path on the internal SSD) answers S1 (system 39.4k tokens + task 1), then
+  `/slots/0?action=save`, then is stopped. Server 2 starts, `/slots/0?action=restore`, answers S2
+  (same system prompt, new task). Qwen3.6-35B-A3B Q4 from ~/Modelle.
+- S1 39,517 tokens 186.7 s · save 0.61 s, 39,564 tokens, file 1,026 MB · restore 0.28 s
+  (3 context checkpoints restored) · S2 prompt_n 33, cache_n 39,476, **2.2 s** · swap 0 MB.
+- Output identity: S2 c4062b92a557 = fresh control (E4_FRESH) = in-RAM reuse (E4).
+- App: slotstate.rs saves slot 0 before every stop/quit (only if the server is ready and ≥ 24 GB
+  disk stays free; newest 2 files kept, keyed by model/sidecar/ctx/KV type/model size) and
+  restores it in the background once the next server is ready. First request after a restart
+  ~187 s → ~2 s.
