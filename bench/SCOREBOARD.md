@@ -6,9 +6,10 @@ recorded result in `bench/RESULTS.md`.
 
 | # | Metric | Target | Current | Since | Source |
 |---|---|---|---|---|---|
-| 1a | TTFT cold first turn, 39.5k-token agent prompt (app regime, 4 GiB) | ≤ 150 s | 183 s default; ~154 s with Fast prompt reading (opt-in); was 235 s | v0.4.1 | RESULTS 2026-11-26 |
+| 1a | TTFT cold first turn, 39.5k-token agent prompt (app regime, 4 GiB) | ≤ 150 s | 183–190 s default; 137 s with Fast prompt reading (opt-in, chat API); was 235 s; ~40 % is attention (compute floor) | v0.5 dev | RESULTS E4 + scaling 2026-11-28 |
 | 1b | TTFT follow-up agent turn (append-only) after an interleaved request | < 3 s | **0.8 s** (was 229 s) | v0.4.1 | RESULTS E1 2026-11-26 |
 | 1c | TTFT new agent conversation, same system prompt + tools (app regime, 4 GiB) | < 5 s | **2.1 s** (was 190 s) | v0.5 dev | RESULTS E4 2026-11-27 |
+| 1d | TTFT first agent request after an app/server restart (app regime, 4 GiB) | < 5 s | **2.2 s** (was ~187 s) | v0.5 dev | RESULTS E5 2026-11-28 |
 | 2 | Decode, lossless default, 4 / 10 GiB | ≥ 12 / ≥ 20 tok/s | 10.3 / 17.5 | v0.4.0 | RESULTS 2026-11-25 |
 | 3 | Decode, Turbo, 4 / 10 GiB | ≥ 16 / ≥ 22 tok/s | 14.5 / 19.6 | v0.4.0 | RESULTS 2026-11-25 |
 | 4 | Turbo quality (decode KLD / same top-1) | ≤ 0.02 / ≥ 93 % | 0.020 / 92.5 % | v0.4.0 | RESULTS 2026-11-25 |
