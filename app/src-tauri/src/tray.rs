@@ -388,7 +388,16 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
                 .as_deref()
                 .and_then(crate::servestats::parse_omlx_extras)
                 .unwrap_or_default();
-            let status = tray_status_line();
+            // Engine phase + prompt progress (Slipstream /slots). Only asked when /metrics
+            // answered: a server busy with a normal prompt batch answers neither, and the
+            // window then falls back to the log lines.
+            let slots_url = format!("http://127.0.0.1:{SERVER_PORT}/slots");
+            let activity = body
+                .as_ref()
+                .and_then(|_| crate::http_body_timeout(&slots_url, 1))
+                .as_deref()
+                .and_then(crate::slotactivity::parse_slots);
+            let status = tray_status_line(activity.as_ref());
             let experts = expert_cache(&handle.state::<AppState>()).or_else(|| {
                 extras.has_pgrn().then(|| ExpertCache {
                     hits: extras.pgrn_hits.unwrap_or(0),
@@ -415,6 +424,13 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
                     .api_extras
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = extras;
+                if let Some(a) = activity {
+                    *live
+                        .slots
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                        Some((std::time::Instant::now(), a));
+                }
                 // A no-op unless the total moved, so an idle server writes nothing.
                 store.persist();
                 store.clone()

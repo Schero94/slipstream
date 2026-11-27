@@ -3,7 +3,8 @@
     python3 app/ui-review/mock/serve.py [port]    # default 4317
 
 Open http://127.0.0.1:4317/ and drive it with Playwright. Knobs live on window.__M
-(see tauri_mock.js): freeRam, diskFree, speed, startCrash, prefillTokens.
+(see tauri_mock.js): freeRam, diskFree, speed, startCrash, startErr, prefillTokens,
+editorRequest({total, cached, slots}) for /slots + log prompt progress of an editor request.
 """
 import http.server, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))

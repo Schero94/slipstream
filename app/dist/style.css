@@ -303,6 +303,11 @@ main { padding: var(--sp-4) var(--sp-4) 56px; width: 100%; max-width: 1080px; ma
 .activity.prefill .act-meter .meter-fill { background: var(--accent); }
 .act-pct { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; flex: none; min-width: 40px; text-align: right; color: var(--accent-ink); }
 .act-pct:empty { display: none; }
+/* Final prompt chunk: no finer progress from the engine, so the bar breathes instead of
+   standing still at a frozen percentage. Reduced motion keeps a static, lighter bar. */
+.activity.finishing .act-meter .meter-fill { animation: actFinish 1.6s ease-in-out infinite; }
+@keyframes actFinish { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .activity.finishing .act-meter .meter-fill { animation: none; opacity: .6; } }
 
 /* ---- Engine cockpit (Live view hero) ----------------------------------- */
 .cockpit { padding: 20px; }

@@ -1,15 +1,20 @@
 // Stateful __TAURI__ stub for UI journey review (fresh Mac → download → prepare → start → chat).
 // Knobs (set before or during the walk via window.__M):
 //   __M.freeRam (GiB), __M.diskFree (GiB), __M.totalRam, __M.speed (sim multiplier)
-//   __M.startErr = "Modell (.gguf) fehlt - erst herunterladen." to force a start failure
+//   __M.startErr = "[model_missing] The model file (.gguf) is missing. Download it first." to force a
+//                  start failure (main.rs ui_err format; try "[low_memory free=5.0 need=9.0 fit=2] ...")
 //   __M.prefillTokens = 40000  → chat request simulates a long prompt read
 //   __M.startCrash = true      → engine exits while loading (RAM admission refusal in the log)
+//   __M.editorRequest({ total: 39517, cached: 0, slots: true })  → a request from an editor
+//        (Kilo/OpenCode): /slots phase + prompt_progress (live_stats.slot_activity) and the
+//        engine log lines prompt_start / prompt_progress / print_timing tail / prompt_done /
+//        n_gen / release. slots:false = log-only fallback. Ticks at 1 s / __M.speed.
 (() => {
   const GiB = 1073741824;
   const M = window.__M = Object.assign({
     phase: "fresh", srv: "down", freeRam: 21, totalRam: 36, diskFree: 412, speed: 1,
     gguf: 0, pgrn: 0, remote: 21 * GiB, pgrnTotal: 19 * GiB, convDone: 0, startErr: null,
-    prefillTokens: 0, log: "", calls: [], lastChatBody: null,
+    prefillTokens: 0, log: "", calls: [], lastChatBody: null, slotAct: null,
   }, window.__M || {});
   let timer = null, tick = 0, misses = 120000;
   const run = () => M.srv === "ready";
@@ -37,6 +42,7 @@
       serving_available: run(), session: sess, alltime: sess,
       last_tps: run() ? 12.4 : null,
       experts: run() ? { hit_rate: 78, misses } : null,
+      slot_activity: run() ? M.slotAct : null,
       rss_bytes: run() ? 17.2 * GiB : null, pgrn_high_water_bytes: run() ? 10.1 * GiB : null,
       system: { memory: mem(), e_core_usage: 0.18, p_core_usage: run() ? 0.42 : 0.08, gpu_usage: run() ? 0.61 : 0.02,
         gpu_memory_bytes: run() ? 15 * GiB : null, thermal: "Nominal", load_average: [3.1, 2.8, 2.4], uptime_seconds: 93000 },
@@ -53,7 +59,7 @@
       gguf_bytes: M.gguf, pgrn_bytes: M.phase === "converting" ? M.pgrn * 0.5 : M.pgrn, ready: M.phase === "ready",
       disk_free_gib: M.diskFree, resume: null }),
     remote_size: () => M.remote,
-    start_download: () => { if (M.phase === "downloading") throw "Download läuft bereits."; M.phase = "downloading"; return null; },
+    start_download: () => { if (M.phase === "downloading") throw "[download_running] A download is already running."; M.phase = "downloading"; return null; },
     cancel_download: () => { if (M.phase === "downloading") M.phase = "fresh-partial"; return null; },
     cancel_convert: () => { if (M.phase === "converting") { M.phase = "downloaded"; M.pgrn = 0; } return null; },
     start_convert: () => { M.phase = "converting"; M.convDone = 0; return null; },
@@ -86,6 +92,48 @@
     mlx_runtime_status: () => "{}",
     patch_kilo_config: ({ cfg }) => `/Users/demo/.config/${cfg.target || "kilo"}/config.json`,
   };
+  // Editor request simulation: layer-major prompt read (~290 tok/s, progress every tick on
+  // /slots, every 3rd tick in the log), then the final checkpoint chunk (no /slots answer, one
+  // print_timing line, ~4 ticks), prompt_done, answer, release.
+  let editorTask = 100;
+  M.editorRequest = ({ total = 39517, cached = 0, slots = true, rate = 2900 } = {}) => {
+    const task = ++editorTask, lmEnd = Math.floor(total * 0.93);
+    let processed = cached, tms = 0, n = 0, tail = 0, gen = 0;
+    const line = (l) => { M.log += l + "\n"; };
+    M.log = "";
+    line(`I slot launch_slot_: id  0 | task ${task} | processing task, is_child = 0`);
+    line(`I slot prompt_start: id  0 | task ${task} | n_prompt = ${total}, n_cached = ${cached}, n_process = ${total - cached}`);
+    const pp = () => ({ phase: "prompt", slot: 0, task, total, cache: cached, processed, time_ms: tms, n_decoded: null });
+    M.slotAct = slots ? pp() : null;
+    const iv = setInterval(() => {
+      n++;
+      if (processed < lmEnd) {
+        tms += 1000 * 10; processed = Math.min(lmEnd, processed + rate);   // one tick = 10 s of engine time
+        if (slots) M.slotAct = pp();
+        line(`I slot prompt_progress: id  0 | task ${task} | n_processed = ${processed}, n_prompt = ${total}, progress = ${(processed / total).toFixed(3)}, t = ${tms} ms`);
+        if (processed >= lmEnd) {
+          line(`I slot print_timing: id  0 | task ${task} | prompt processing, n_tokens = ${processed - cached}, progress = ${(processed / total).toFixed(2)}, t = ${(tms / 1000).toFixed(2)} s / ${((processed - cached) / (tms / 1000)).toFixed(2)} tokens per second`);
+          M.slotAct = null;   // the server does not answer /slots during a normal batch
+        }
+      } else if (tail < 4) {
+        tail++;
+      } else if (gen === 0) {
+        processed = total; gen = 1;
+        line(`I slot prompt_done: id  0 | task ${task} | n_prompt = ${total}, n_cached = ${cached}, n_processed = ${total - cached}, t = ${tms + 15000} ms, tps = 290.0`);
+        if (slots) M.slotAct = { phase: "generating", slot: 0, task, total: null, cache: null, processed: null, time_ms: null, n_decoded: 0 };
+      } else if (gen < 6) {
+        gen++;
+        line(`I slot print_timing: id  0 | task ${task} | n_gen = ${gen * 25}, tg = 13.10 t/s, tg_3s = 12.80 t/s`);
+        if (slots) M.slotAct = { ...M.slotAct, n_decoded: gen * 25 };
+      } else {
+        line(`I slot      release: id  0 | task ${task} | stop processing: n_tokens = ${total + 150}, truncated = 0`);
+        M.slotAct = slots ? { phase: "idle", slot: 0, task: -1 } : null;
+        clearInterval(iv);
+      }
+    }, 1000 / M.speed);
+    return task;
+  };
+
   window.__TAURI__ = {
     core: { invoke: async (cmd, args) => { M.calls.push(cmd); const f = h[cmd]; if (!f) { if (/^p2p_/.test(cmd)) return null; throw new Error("mock: " + cmd); } return f(args || {}); } },
     dialog: { open: async () => null },

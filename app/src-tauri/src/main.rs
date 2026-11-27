@@ -10,6 +10,7 @@ mod mlx;
 mod p2p;
 mod runtime;
 mod servestats;
+mod slotactivity;
 mod slotstate;
 mod storage;
 mod sysstats;
@@ -51,7 +52,13 @@ struct Live {
     system: Mutex<sysstats::SysSnapshot>,
     /// oMLX `/api/status` extras (PGRN hit-rate, RSS) — filled by the tray poller.
     api_extras: Mutex<servestats::ApiExtras>,
+    /// Last `/slots` reading (phase + prompt progress) and when it was taken — tray poller.
+    slots: Mutex<Option<(std::time::Instant, slotactivity::SlotActivity)>>,
 }
+
+/// A `/slots` reading older than this is not shown: the server did not answer (it does not
+/// while a normal prompt batch runs), so the window falls back to the log lines.
+const SLOTS_FRESH_MS: u128 = 7000;
 
 /// Everything the Status panel draws, in one call.
 #[tauri::command]
@@ -82,6 +89,17 @@ fn live_stats(live: State<Live>, state: State<AppState>) -> Value {
             extras,
         )
     };
+    let slot_activity = live
+        .slots
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .filter(|(at, _)| at.elapsed().as_millis() < SLOTS_FRESH_MS)
+        .map(|(at, a)| {
+            let mut v = json!(a);
+            v["age_ms"] = json!(at.elapsed().as_millis() as u64);
+            v
+        });
     // Metal: last decode line from the engine log. MLX: lifetime avg from /api/status
     // when the log has no eval-time / output= line.
     let last_tps = last_tps().or(extras.avg_generation_tps);
@@ -121,6 +139,8 @@ fn live_stats(live: State<Live>, state: State<AppState>) -> Value {
         "rss_source": rss_source,
         "pgrn_high_water_bytes": extras.pgrn_high_water_bytes,
         "pgrn_mx_size": extras.pgrn_mx_size,
+        // Engine phase + live prompt progress from /slots (None when stale or a stock server).
+        "slot_activity": slot_activity,
     })
 }
 
@@ -200,8 +220,14 @@ fn http_status(url: &str) -> u16 {
 /// Body of a GET, or None if the request failed. Same curl route as
 /// `http_status` so there is one HTTP mechanism in this app, not two.
 fn http_body(url: &str) -> Option<String> {
+    http_body_timeout(url, 2)
+}
+
+/// `http_body` with its own timeout in seconds (the /slots probe uses 1 s so a server busy
+/// with a normal prompt batch does not hold up the menubar tick).
+fn http_body_timeout(url: &str, secs: u32) -> Option<String> {
     let out = Command::new("curl")
-        .args(["-s", "-m", "2", "--fail", url])
+        .args(["-s", "-m", &secs.to_string(), "--fail", url])
         .output()
         .ok()?;
     out.status
@@ -283,9 +309,11 @@ struct ServerConfig {
     /// 0 = off (exact routing). -> PGRN_STEER
     #[serde(default)]
     pgrn_steer: f64,
-    /// Layer-major prefill (opt-in, lossless): each expert read once per long prompt.
-    /// Streamed runs only: --batch-size = ctx (<= 40960) + PGRN_LAYER_MAJOR=1.
-    #[serde(default)]
+    /// Layer-major prefill ("Fast prompt reading", default on, lossless): each expert is read
+    /// once per long prompt. Bit-identical output, cancellable, live progress; first agent turn
+    /// 190 -> 137 s (RESULTS E4). Streamed runs only: --batch-size = ctx (<= 40960) +
+    /// PGRN_LAYER_MAJOR=1, ubatch 2048.
+    #[serde(default = "default_true")]
     pgrn_layer_major: bool,
     #[serde(default = "default_true")]
     pgrn_compact: bool,  // default-on: zero-copy compact slots -> +13-24% decode at moderate cache, swap-safe (measured)
@@ -347,11 +375,91 @@ fn default_backend() -> String { "auto".into() }
 fn default_pgrn_profile() -> String { "balanced".into() }
 fn default_pgrn_residency() -> String { "touch".into() }
 
+/// Error text for the window: `[code k=v ...] English message`. The code is stable and the
+/// frontend maps it to EN/DE (`backendMsg` in app.js); the English text is what anything
+/// that does not know the code (logs, older windows) shows.
+fn ui_err(code: &str, vars: &[(&str, String)], msg: impl Into<String>) -> String {
+    let mut head = code.to_string();
+    for (k, v) in vars {
+        head.push(' ');
+        head.push_str(k);
+        head.push('=');
+        head.push_str(&v.replace([' ', ']'], "_"));
+    }
+    format!("[{head}] {}", msg.into())
+}
+
+const GIB_F: f64 = 1073741824.0;
+/// Measurement noise allowed before refusing (free memory moves while the engine loads).
+const ADMIT_TOLERANCE_GIB: f64 = 0.5;
+
+/// Metal start pre-check against free + inactive memory (the engine's own admission basis,
+/// peregrine_admission.c RESERVE_AT_RISK). `need` is a lower bound of what the engine plans:
+/// non-expert weights (GGUF - PGRN) + the expert cache (capped at the PGRN size, like the
+/// engine) + the reserve. It leaves out KV, compute buffers and staging, so it only refuses
+/// starts the engine would refuse too.
+fn metal_memory_check(free_gib: f64, gguf_bytes: u64, pgrn_bytes: u64, cache_gb: f64, headroom_gb: f64) -> Result<(), String> {
+    if !(free_gib > 0.0) || pgrn_bytes == 0 {
+        return Ok(()); // unknown reading: let the engine decide
+    }
+    let resident = gguf_bytes.saturating_sub(pgrn_bytes) as f64 / GIB_F;
+    let cache = cache_gb.max(0.0).min(pgrn_bytes as f64 / GIB_F);
+    let reserve = headroom_gb.max(0.0);
+    let need = resident + cache + reserve;
+    if free_gib + ADMIT_TOLERANCE_GIB >= need {
+        return Ok(());
+    }
+    let fit = (free_gib - resident - reserve).floor();
+    let mut vars = vec![("free", format!("{free_gib:.1}")), ("need", format!("{need:.1}"))];
+    let hint = if fit >= 2.0 {
+        vars.push(("fit", format!("{fit:.0}")));
+        format!(" Close other apps, or lower the expert cache to {fit:.0} GiB or less.")
+    } else {
+        " Close other apps and try again.".to_string()
+    };
+    Err(ui_err("low_memory", &vars, format!(
+        "Not enough free memory: {free_gib:.1} GiB free, {need:.1} GiB needed \
+         (model {resident:.1} + expert cache {cache:.1} + reserve {reserve:.1} GiB).{hint}")))
+}
+
+#[cfg(test)]
+mod ui_msg_tests {
+    use super::*;
+    const G: u64 = 1073741824;
+
+    #[test]
+    fn error_codes_have_a_stable_head_and_english_text() {
+        assert_eq!(ui_err("server_running", &[], "Stop it first."), "[server_running] Stop it first.");
+        assert_eq!(ui_err("low_memory", &[("free", "5.2".into()), ("need", "9.8".into())], "x"),
+            "[low_memory free=5.2 need=9.8] x");
+    }
+
+    #[test]
+    fn memory_check_refuses_only_clear_shortfalls() {
+        // 35B Q4: GGUF ~21 GiB, PGRN ~19 GiB -> 2 GiB resident; 4 GiB cache + 3 reserve = 9.
+        assert!(metal_memory_check(20.0, 21 * G, 19 * G, 4.0, 3.0).is_ok());
+        assert!(metal_memory_check(8.6, 21 * G, 19 * G, 4.0, 3.0).is_ok(), "within tolerance");
+        let e = metal_memory_check(5.0, 21 * G, 19 * G, 4.0, 3.0).unwrap_err();
+        assert!(e.starts_with("[low_memory free=5.0 need=9.0]"), "{e}");
+        assert!(e.contains("5.0 GiB free, 9.0 GiB needed"), "{e}");
+        let e = metal_memory_check(10.0, 21 * G, 19 * G, 10.0, 3.0).unwrap_err();
+        assert!(e.contains("fit=5") && e.contains("5 GiB or less"), "{e}");
+    }
+
+    #[test]
+    fn memory_check_skips_unknown_readings_and_caps_the_cache() {
+        assert!(metal_memory_check(0.0, 21 * G, 19 * G, 4.0, 3.0).is_ok());
+        assert!(metal_memory_check(5.0, 21 * G, 0, 4.0, 3.0).is_ok());
+        // a cache request above the expert size counts only the experts (engine does the same)
+        assert!(metal_memory_check(10.0, 6 * G, 5 * G, 24.0, 3.0).is_ok());
+    }
+}
+
 #[tauri::command]
 fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>) -> Result<String, String> {
     let mut guard = state.server.lock().map_err(|e| e.to_string())?;
     if guard.is_some() {
-        return Err("Server läuft bereits - erst stoppen.".into());
+        return Err(ui_err("server_running", &[], "The model server is already running. Stop it first."));
     }
     let mlx_model_dir = {
         let trimmed = cfg.mlx_dir.trim();
@@ -368,18 +476,26 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         return Ok(annotate_auto_backend(&cfg.backend, effective, msg));
     }
     if file_size(&cfg.model) == 0 {
-        return Err("Modell (.gguf) fehlt - erst herunterladen.".into());
+        return Err(ui_err("model_missing", &[], "The model file (.gguf) is missing. Download it first."));
     }
     let has_pgrn = file_size(&cfg.pgrn) > 0;
     if !has_pgrn && !cfg.dense {
-        return Err("PGRN-Sidecar fehlt - erst konvertieren.".into());
+        return Err(ui_err("pgrn_missing", &[], "The model is not prepared for SSD streaming yet (.pgrn missing). Prepare it first."));
+    }
+    // Same free-memory check the engine runs at load (free + inactive pages), done before it
+    // starts so a refusal is a clear message instead of an engine that exits after a minute.
+    if has_pgrn && !cfg.dense {
+        if let Some(free) = vm_stat_free_inactive_gib() {
+            metal_memory_check(free, gguf_total_bytes(&cfg.model), file_size(&cfg.pgrn),
+                cfg.cache_gb, cfg.headroom_gb)?;
+        }
     }
     let log = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(LOG_PATH)
-        .map_err(|e| format!("Log-Fehler: {e}"))?;
+        .map_err(|e| ui_err("log_error", &[], format!("Could not open the engine log: {e}")))?;
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
 
     let mut cmd = Command::new(&cfg.server);
@@ -548,7 +664,7 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         cmd.args(["--reasoning", "off", "--temp", "0"]);
     }
     cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log_err));
-    let child = cmd.spawn().map_err(|e| format!("Start fehlgeschlagen: {e}"))?;
+    let child = cmd.spawn().map_err(|e| ui_err("start_failed", &[], format!("The engine could not be started: {e}")))?;
     *guard = Some(child);
     let generation = slotstate::bump_generation();
     if let Some(key) = &slot_key {
@@ -558,9 +674,9 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
         *k = slot_key.map(|key| (cfg.port, key));
     }
     let load_msg = if has_pgrn {
-        "Server gestartet - lädt Modell (~60s)..."
+        "Server started - loading the model (~60 s)..."
     } else {
-        "Server gestartet - dense Metal Vollast (~15–30s)..."
+        "Server started - loading the full model into memory (~15-30 s)..."
     };
     Ok(annotate_auto_backend(
         &cfg.backend,
@@ -641,7 +757,7 @@ fn start_mlx_server(
         .write(true)
         .truncate(true)
         .open(LOG_PATH)
-        .map_err(|e| format!("Log-Fehler: {e}"))?;
+        .map_err(|e| ui_err("log_error", &[], format!("Could not open the engine log: {e}")))?;
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
     cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log_err));
     if streaming && !mlx::python_runtime_available() {
@@ -752,7 +868,7 @@ fn stop_server_impl(state: &AppState) {
 #[tauri::command(async)]
 fn stop_server(state: State<'_, AppState>) -> Result<String, String> {
     stop_server_impl(&state);
-    Ok("Server gestoppt.".into())
+    Ok("Server stopped.".into())
 }
 
 /// Last decode tok/s parsed from the server log tail (llama.cpp "eval time").
@@ -763,11 +879,13 @@ fn last_tps() -> Option<f64> {
 }
 
 /// Compact menubar status line: state plus last decode speed when running.
-fn tray_status_line() -> String {
+/// An active `/slots` reading (prompt read / answer) takes precedence over the last speed.
+fn tray_status_line(activity: Option<&slotactivity::SlotActivity>) -> String {
     match http_status(&format!("http://127.0.0.1:{SERVER_PORT}/health")) {
-        200 => match last_tps() {
-            Some(v) => format!("Slipstream · {v:.0} tok/s"),
-            None => "Slipstream · bereit".into(),
+        200 => match (activity.and_then(slotactivity::status_text), last_tps()) {
+            (Some(text), _) => text,
+            (None, Some(v)) => format!("Slipstream · {v:.0} tok/s"),
+            (None, None) => "Slipstream · bereit".into(),
         },
         0 => "Slipstream · gestoppt".into(),
         _ => "Slipstream · lädt…".into(),
@@ -1002,9 +1120,9 @@ fn remote_size(url: String) -> u64 {
 #[tauri::command]
 fn start_download(url: String, dest: String, dir: String, state: State<AppState>) -> Result<String, String> {
     if alive(&state.dl) {
-        return Err("Download läuft bereits.".into());
+        return Err(ui_err("download_running", &[], "A download is already running."));
     }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Ordner: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| ui_err("folder_error", &[], format!("Could not create the folder: {e}")))?;
     let log = OpenOptions::new().create(true).write(true).truncate(true).open(DL_LOG)
         .map_err(|e| e.to_string())?;
     // Sharded XL models: one curl per shard, sequential, each resumable (-C -).
@@ -1031,9 +1149,9 @@ fn start_download(url: String, dest: String, dir: String, state: State<AppState>
             .stderr(Stdio::from(log))
             .spawn()
     }
-    .map_err(|e| format!("curl-Start: {e}"))?;
+    .map_err(|e| ui_err("download_failed", &[], format!("Could not start the download: {e}")))?;
     *state.dl.lock().map_err(|e| e.to_string())? = Some(child);
-    Ok("Download gestartet.".into())
+    Ok("Download started.".into())
 }
 
 /// Minimal POSIX single-quote escaping for a shell argument.
@@ -1071,19 +1189,19 @@ fn convert_bin(app: &tauri::AppHandle) -> String {
 #[tauri::command]
 fn start_convert(app: tauri::AppHandle, gguf: String, pgrn: String, io_threads: u32, resume: bool, state: State<AppState>) -> Result<String, String> {
     if alive(&state.conv) {
-        return Err("Konvertierung läuft bereits.".into());
+        return Err(ui_err("convert_running", &[], "The preparation for SSD streaming is already running."));
     }
     if file_size(&gguf) == 0 {
-        return Err("GGUF fehlt - erst herunterladen.".into());
+        return Err(ui_err("model_missing", &[], "The model file (.gguf) is missing. Download it first."));
     }
     if file_size(&pgrn) > 0 {
-        return Err("PGRN existiert bereits - erst löschen, dann neu konvertieren.".into());
+        return Err(ui_err("pgrn_exists", &[], "The model is already prepared (.pgrn exists). Delete it first to prepare it again."));
     }
     let partial = format!("{pgrn}.partial");
     let journal = format!("{partial}.journal");
     let state_before = conv_resume(&pgrn);
     if resume && !state_before.resumable {
-        return Err("Keine fortsetzbare Konvertierung gefunden - bitte neu starten.".into());
+        return Err(ui_err("no_resume", &[], "There is no interrupted preparation to continue. Start it again."));
     }
     if !resume {
         // Starting over: drop the interrupted work explicitly. Safe here because
@@ -1093,7 +1211,7 @@ fn start_convert(app: tauri::AppHandle, gguf: String, pgrn: String, io_threads: 
     }
     let bin = convert_bin(&app);
     if file_size(&bin) == 0 {
-        return Err("Converter-Binary fehlt (pgrn-convert nicht gebündelt?).".into());
+        return Err(ui_err("no_converter", &[], "The preparation tool (pgrn-convert) is missing from this app build."));
     }
     let threads = io_threads.clamp(1, 16).to_string();
     // Resuming appends to the log so the earlier attempt stays readable.
@@ -1115,13 +1233,13 @@ fn start_convert(app: tauri::AppHandle, gguf: String, pgrn: String, io_threads: 
         .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
         .stderr(Stdio::from(log))
         .spawn()
-        .map_err(|e| format!("Converter-Start: {e}"))?;
+        .map_err(|e| ui_err("convert_failed", &[], format!("Could not start the preparation tool: {e}")))?;
     *state.conv.lock().map_err(|e| e.to_string())? = Some(child);
     Ok(if resume {
-        format!("Konvertierung fortgesetzt ({} von {} Experten bereits fertig).",
+        format!("Preparation resumed ({} of {} experts already done).",
                 state_before.records_done, state_before.records_total)
     } else {
-        "Konvertierung gestartet.".into()
+        "Preparation started.".into()
     })
 }
 
@@ -1129,12 +1247,12 @@ fn start_convert(app: tauri::AppHandle, gguf: String, pgrn: String, io_threads: 
 #[tauri::command]
 fn discard_convert(pgrn: String, state: State<AppState>) -> Result<String, String> {
     if alive(&state.conv) {
-        return Err("Konvertierung läuft - erst abbrechen.".into());
+        return Err(ui_err("convert_busy", &[], "The preparation is running. Cancel it first."));
     }
     let partial = format!("{pgrn}.partial");
     let _ = std::fs::remove_file(format!("{partial}.journal"));
     let _ = std::fs::remove_file(&partial);
-    Ok("Angehaltene Konvertierung verworfen.".into())
+    Ok("Interrupted preparation discarded.".into())
 }
 
 /// Last JSONL progress line the converter wrote (phase/done/total/mb_s/eta).
@@ -1357,7 +1475,7 @@ fn install_qdrant(dir: String, state: State<AppState>) -> Result<String, String>
     if alive(&state.setup) {
         return Err("Installation laeuft bereits.".into());
     }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Ordner: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| ui_err("folder_error", &[], format!("Could not create the folder: {e}")))?;
     let log = OpenOptions::new().create(true).write(true).truncate(true).open(QSETUP_LOG)
         .map_err(|e| e.to_string())?;
     let errlog = log.try_clone().map_err(|e| e.to_string())?;
@@ -1501,7 +1619,7 @@ fn patch_kilo_config(cfg: KiloConfig) -> Result<String, String> {
         "opencode" => (format!("{}/.config/opencode", cfg.home), "opencode.json"),
         _ => (format!("{}/.config/kilo", cfg.home), "kilo.jsonc"),
     };
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Ordner: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| ui_err("folder_error", &[], format!("Could not create the folder: {e}")))?;
     let path = format!("{dir}/{fname}");
 
     // Reuse the existing config if it parses as a JSON object; else start fresh.
@@ -1579,6 +1697,7 @@ fn main() {
                 serving: Mutex::new(servestats::Store::load()),
                 system: Mutex::new(sysstats::SysSnapshot::default()),
                 api_extras: Mutex::new(servestats::ApiExtras::default()),
+                slots: Mutex::new(None),
             });
             tray::install(app)?;
             Ok(())

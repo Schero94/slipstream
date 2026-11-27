@@ -1027,9 +1027,9 @@ const COCKPIT_I18N = {
     "adv.lookahead": "Lookahead prefetch",
     "adv.lossless": "lossless",
     "hint.lookahead": "Predicts which experts the next layers will route to and reads them from the SSD before they are needed. Output stays identical; a wrong guess costs some extra SSD reads.",
-    "adv.layermajor": "Fast prompt reading (layer-major)", "adv.experimental": "experimental",
-    "hint.layermajor": "Reads each expert from the SSD once per long prompt instead of once per batch: about 16 % faster first answer on top of the default (about 35 % vs. 0.4.0) on 40k-token agent prompts in our test, identical output. Experimental: a long prompt cannot be stopped while it is being read.",
-    "tip.layermajor": "Engine setting PGRN_LAYER_MAJOR=1 with a logical batch as large as the context (max 40,960 tokens). Only for models streamed from SSD. Off by default.",
+    "adv.layermajor": "Fast prompt reading", "adv.experimental": "experimental",
+    "hint.layermajor": "Reads a long prompt about a third faster, with the same answers. In our test a coding agent's first 40,000-token prompt took 137 s instead of 190 s. Only used when the model streams from the SSD. You can stop a long prompt at any time, and the progress is shown while it is read. On by default.",
+    "tip.layermajor": "Engine setting PGRN_LAYER_MAJOR=1 (layer-major prefill): each expert is read from the SSD once per long prompt instead of once per batch. Logical batch as large as the context (max 40,960 tokens), ubatch 2048. Output is bit-identical with it on or off.",
     "tip.lookahead": "Engine setting PGRN_LOOKAHEAD = layers ahead (default 2). Unlike predictive prefetch, which learns co-firing experts over time, lookahead predicts the next layer’s experts from the current one. Off by default.",
     "adv.steer": "Cache-steered routing (Turbo)",
     "adv.lossy": "changes output",
@@ -1063,9 +1063,9 @@ const COCKPIT_I18N = {
     "adv.lookahead": "Lookahead-Prefetch",
     "adv.lossless": "verlustfrei",
     "hint.lookahead": "Sagt voraus, welche Experten die nächsten Layer brauchen, und liest sie vorher von der SSD. Die Ausgabe bleibt identisch; ein falscher Tipp kostet zusätzliche SSD-Reads.",
-    "adv.layermajor": "Schnelles Prompt-Lesen (Layer-Major)", "adv.experimental": "experimentell",
-    "hint.layermajor": "Liest jeden Experten pro langem Prompt nur einmal von der SSD statt einmal pro Batch: in unserem Test etwa 16 % schnellere erste Antwort zusätzlich zum Standard (etwa 35 % gegenüber 0.4.0) bei 40k-Token-Agent-Prompts, identische Ausgabe. Experimentell: Ein langer Prompt lässt sich während des Lesens nicht abbrechen.",
-    "tip.layermajor": "Engine-Einstellung PGRN_LAYER_MAJOR=1 mit einem logischen Batch so groß wie der Kontext (max. 40.960 Tokens). Nur für Modelle, die von der SSD streamen. Standard aus.",
+    "adv.layermajor": "Schnelles Prompt-Lesen", "adv.experimental": "experimentell",
+    "hint.layermajor": "Liest einen langen Prompt etwa ein Drittel schneller, mit denselben Antworten. In unserem Test dauerte der erste 40.000-Token-Prompt eines Coding-Agenten 137 s statt 190 s. Nur aktiv, wenn das Modell von der SSD streamt. Ein langer Prompt lässt sich jederzeit abbrechen, und der Fortschritt wird beim Lesen angezeigt. Standardmäßig an.",
+    "tip.layermajor": "Engine-Einstellung PGRN_LAYER_MAJOR=1 (Layer-Major-Prefill): Jeder Experte wird pro langem Prompt einmal von der SSD gelesen statt einmal pro Batch. Logischer Batch so groß wie der Kontext (max. 40.960 Tokens), Ubatch 2048. Die Ausgabe ist mit und ohne bitgleich.",
     "tip.lookahead": "Engine-Einstellung PGRN_LOOKAHEAD = Layer voraus (Standard 2). Anders als Predictive Prefetch, das gemeinsam feuernde Experten über die Zeit lernt, sagt Lookahead die Experten des nächsten Layers aus dem aktuellen voraus. Standard aus.",
     "adv.steer": "Cache-gesteuertes Routing (Turbo)",
     "adv.lossy": "ändert Ausgabe",
@@ -1136,9 +1136,9 @@ const JOURNEY_I18N = {
     "adv.nextTitle": "Expert prefetch & Turbo",
     "adv.steer": "Turbo (experimental)",
     "hint.lookahead": "Reads the experts the next layer is predicted to need before it asks for them. Measured lossless, 29–33 % faster decoding at 4–8 GiB cache. On by default.",
-    "adv.layermajor": "Fast prompt reading (layer-major)", "adv.experimental": "experimental",
-    "hint.layermajor": "Reads each expert from the SSD once per long prompt instead of once per batch: about 16 % faster first answer on top of the default (about 35 % vs. 0.4.0) on 40k-token agent prompts in our test, identical output. Experimental: a long prompt cannot be stopped while it is being read.",
-    "tip.layermajor": "Engine setting PGRN_LAYER_MAJOR=1 with a logical batch as large as the context (max 40,960 tokens). Only for models streamed from SSD. Off by default.",
+    "adv.layermajor": "Fast prompt reading", "adv.experimental": "experimental",
+    "hint.layermajor": "Reads a long prompt about a third faster, with the same answers. In our test a coding agent's first 40,000-token prompt took 137 s instead of 190 s. Only used when the model streams from the SSD. You can stop a long prompt at any time, and the progress is shown while it is read. On by default.",
+    "tip.layermajor": "Engine setting PGRN_LAYER_MAJOR=1 (layer-major prefill): each expert is read from the SSD once per long prompt instead of once per batch. Logical batch as large as the context (max 40,960 tokens), ubatch 2048. Output is bit-identical with it on or off.",
     "tip.lookahead": "Engine setting PGRN_LOOKAHEAD. Unlike predictive prefetch, which learns co-firing experts over time, lookahead predicts the next layer’s experts from the current one. Output is identical with it on or off.",
     "adv.steerWarn": "About 38 % faster with a small cache, about 12 % with a large one. Answers can differ slightly from the unmodified model (same next token 93 % of the time; perplexity unchanged within noise in our test). Your prompt is always read exactly.",
     "tip.steer": "While generating, nudges the router toward experts that are already in RAM or being prefetched (engine settings PGRN_STEER = 0.02 with the prefetch-steered mark). Prompt reading stays exact. Off by default.",
@@ -1201,9 +1201,9 @@ const JOURNEY_I18N = {
     "adv.nextTitle": "Experten-Prefetch & Turbo",
     "adv.steer": "Turbo (experimentell)",
     "hint.lookahead": "Liest die Experten, die der nächste Layer voraussichtlich braucht, bevor er sie anfragt. Gemessen verlustfrei, 29–33 % schnelleres Decoding bei 4–8 GiB Cache. Standardmäßig an.",
-    "adv.layermajor": "Schnelles Prompt-Lesen (Layer-Major)", "adv.experimental": "experimentell",
-    "hint.layermajor": "Liest jeden Experten pro langem Prompt nur einmal von der SSD statt einmal pro Batch: in unserem Test etwa 16 % schnellere erste Antwort zusätzlich zum Standard (etwa 35 % gegenüber 0.4.0) bei 40k-Token-Agent-Prompts, identische Ausgabe. Experimentell: Ein langer Prompt lässt sich während des Lesens nicht abbrechen.",
-    "tip.layermajor": "Engine-Einstellung PGRN_LAYER_MAJOR=1 mit einem logischen Batch so groß wie der Kontext (max. 40.960 Tokens). Nur für Modelle, die von der SSD streamen. Standard aus.",
+    "adv.layermajor": "Schnelles Prompt-Lesen", "adv.experimental": "experimentell",
+    "hint.layermajor": "Liest einen langen Prompt etwa ein Drittel schneller, mit denselben Antworten. In unserem Test dauerte der erste 40.000-Token-Prompt eines Coding-Agenten 137 s statt 190 s. Nur aktiv, wenn das Modell von der SSD streamt. Ein langer Prompt lässt sich jederzeit abbrechen, und der Fortschritt wird beim Lesen angezeigt. Standardmäßig an.",
+    "tip.layermajor": "Engine-Einstellung PGRN_LAYER_MAJOR=1 (Layer-Major-Prefill): Jeder Experte wird pro langem Prompt einmal von der SSD gelesen statt einmal pro Batch. Logischer Batch so groß wie der Kontext (max. 40.960 Tokens), Ubatch 2048. Die Ausgabe ist mit und ohne bitgleich.",
     "tip.lookahead": "Engine-Einstellung PGRN_LOOKAHEAD. Anders als Predictive Prefetch, das gemeinsam feuernde Experten über die Zeit lernt, sagt Lookahead die Experten des nächsten Layers aus dem aktuellen voraus. Die Ausgabe ist mit und ohne identisch.",
     "adv.steerWarn": "Etwa 38 % schneller bei kleinem Cache, etwa 12 % bei großem. Antworten können leicht vom unveränderten Modell abweichen (in 93 % der Fälle dasselbe nächste Token; Perplexity in unserem Test im Rauschen unverändert). Dein Prompt wird immer exakt gelesen.",
     "tip.steer": "Lenkt den Router beim Generieren leicht zu Experten, die schon im RAM liegen oder gerade vorgeladen werden (Engine-Einstellung PGRN_STEER = 0,02 mit Prefetch-Markierung). Der Prompt wird weiter exakt gelesen. Standard aus.",
@@ -1218,7 +1218,7 @@ const UX05_I18N = {
     "act.prefill": "Reading your prompt", "act.decode": "Writing the answer", "act.tokens": "tokens",
     "act.prefillSub": "{pct} % · {tokens} tokens read in {secs} s · about {eta} left",
     "act.prefillSubNoEta": "{tokens} tokens read in {secs} s",
-    "why.prefill": "Long prompts take a while the first time: a coding agent's first prompt (about 40,000 tokens) takes about 3 minutes{rate}. Follow-up turns in the same conversation start in about a second.",
+    "why.prefill": "Long prompts take a while the first time: a coding agent's first prompt (about 40,000 tokens) takes a bit over 2 minutes{rate}. Follow-up turns in the same conversation start in about a second.",
     "why.prefillRate": " (now {rate} tokens/s)",
     "chat.waiting": "Waiting for the model… {secs} s",
     "chat.reading": "Reading your prompt: {done} of {total} tokens ({pct} %) · {secs} s",
@@ -1261,13 +1261,29 @@ const UX05_I18N = {
     "be.dlRunning": "A download is already running.",
     "be.pgrnExists": "This model is already prepared. To prepare it again, delete the .pgrn file first.",
     "be.noConverter": "The preparation tool is missing from this app build. Reinstall Slipstream.",
+    "be.convRunning": "The preparation for SSD streaming is already running.",
+    "be.convBusy": "The preparation is running. Cancel it first.",
+    "be.noResume": "There is no interrupted preparation to continue. Start it again.",
+    "be.startFailed": "The engine could not be started: {detail}",
+    "be.logError": "Could not open the engine log: {detail}",
+    "be.folderError": "Could not create the models folder: {detail}",
+    "be.dlFailed": "Could not start the download: {detail}",
+    "be.convFailed": "Could not start the preparation tool: {detail}",
+    "be.lowMemory": "Not enough free memory to start: {free} GiB free, about {need} GiB needed.",
+    "be.lowMemoryFit": " Close other apps, or lower the expert cache to {fit} GiB or less (Settings → Advanced).",
+    "be.lowMemoryClose": " Close other apps and try again.",
+    "act.prefillOf": "{done} of {total} tokens ({pct} %) · about {eta} left",
+    "act.prefillOfNoEta": "{done} of {total} tokens ({pct} %)",
+    "act.reused": " · {cached} reused from earlier",
+    "act.finishing": "Almost done — finishing the last part (usually about 15 s more)",
+    "act.waiting": "Waiting for the current request to finish",
     "toast.convStarted": "Preparing the model for SSD streaming…",
   },
   de: {
     "act.prefill": "Prompt wird gelesen", "act.decode": "Antwort wird geschrieben", "act.tokens": "Tokens",
     "act.prefillSub": "{pct} % · {tokens} Tokens in {secs} s gelesen · noch etwa {eta}",
     "act.prefillSubNoEta": "{tokens} Tokens in {secs} s gelesen",
-    "why.prefill": "Lange Prompts brauchen beim ersten Mal etwas: Der erste Prompt eines Coding-Agenten (etwa 40.000 Tokens) dauert rund 3 Minuten{rate}. Folgeanfragen im selben Gespräch starten in etwa einer Sekunde.",
+    "why.prefill": "Lange Prompts brauchen beim ersten Mal etwas: Der erste Prompt eines Coding-Agenten (etwa 40.000 Tokens) dauert gut 2 Minuten{rate}. Folgeanfragen im selben Gespräch starten in etwa einer Sekunde.",
     "why.prefillRate": " (gerade {rate} Tokens/s)",
     "chat.waiting": "Warte auf das Modell… {secs} s",
     "chat.reading": "Lese deinen Prompt: {done} von {total} Tokens ({pct} %) · {secs} s",
@@ -1310,6 +1326,22 @@ const UX05_I18N = {
     "be.dlRunning": "Es läuft bereits ein Download.",
     "be.pgrnExists": "Dieses Modell ist schon vorbereitet. Für eine neue Vorbereitung erst die .pgrn-Datei löschen.",
     "be.noConverter": "Das Vorbereitungs-Werkzeug fehlt in diesem App-Build. Slipstream neu installieren.",
+    "be.convRunning": "Die Vorbereitung für SSD-Streaming läuft bereits.",
+    "be.convBusy": "Die Vorbereitung läuft. Erst abbrechen.",
+    "be.noResume": "Es gibt keine unterbrochene Vorbereitung zum Fortsetzen. Bitte neu starten.",
+    "be.startFailed": "Die Engine konnte nicht gestartet werden: {detail}",
+    "be.logError": "Das Engine-Log ließ sich nicht öffnen: {detail}",
+    "be.folderError": "Der Modellordner ließ sich nicht anlegen: {detail}",
+    "be.dlFailed": "Der Download ließ sich nicht starten: {detail}",
+    "be.convFailed": "Das Vorbereitungs-Werkzeug ließ sich nicht starten: {detail}",
+    "be.lowMemory": "Zu wenig freier Speicher zum Starten: {free} GiB frei, etwa {need} GiB nötig.",
+    "be.lowMemoryFit": " Andere Apps schließen oder den Experten-Cache auf {fit} GiB oder weniger senken (Einstellungen → Erweitert).",
+    "be.lowMemoryClose": " Andere Apps schließen und erneut versuchen.",
+    "act.prefillOf": "{done} von {total} Tokens ({pct} %) · noch etwa {eta}",
+    "act.prefillOfNoEta": "{done} von {total} Tokens ({pct} %)",
+    "act.reused": " · {cached} aus früheren Anfragen übernommen",
+    "act.finishing": "Fast fertig — der letzte Teil wird gelesen (meist noch etwa 15 s)",
+    "act.waiting": "Wartet, bis die laufende Anfrage fertig ist",
     "toast.convStarted": "Modell wird für SSD-Streaming vorbereitet…",
   },
 };
@@ -1875,14 +1907,14 @@ $("resumeBtn").onclick = async () => {
   try {
     await invoke("start_convert", { gguf: ggufPath(), pgrn, ioThreads: +$("io").value || 8, resume: true });
     toast(t("toast.resumed")); refreshModel();
-  } catch (e) { toast(e, true); }
+  } catch (e) { toast(backendMsg(e), true); }
 };
 $("resumeDiscard").onclick = async () => {
   const pgrn = $("pPgrn").value.trim() || pgrnOf(ggufPath());
   try {
     await invoke("discard_convert", { pgrn });
     toast(t("toast.discarded")); refreshModel();
-  } catch (e) { toast(e, true); }
+  } catch (e) { toast(backendMsg(e), true); }
 };
 $("dlCancel").onclick = async () => {
   await invoke("cancel_download"); await invoke("cancel_convert");
@@ -2276,20 +2308,32 @@ function pgrnSteerFromUi() {
     : localStorage.getItem("slipstream.pgrn.steer") === "1";
   return on ? STEER_ON : 0;
 }
+// Fast prompt reading (layer-major prefill) is ON by default since it is lossless
+// (bit-identical output), cancellable and shows progress; first agent turn 190 -> 137 s
+// (bench/RESULTS.md E4). Migration: no stored value -> on. A stored "1" stays on. A stored "0"
+// is kept: before this change one toggle wrote all three keys, so "0" may be a user's explicit
+// choice and we cannot tell it apart — their choice wins. From now on each toggle writes only
+// its own key (persistNextEngineSettings).
+function layerMajorPreference() {
+  let v = null;
+  try { v = localStorage.getItem("slipstream.pgrn.layermajor"); } catch {}
+  return v === null ? true : v === "1";
+}
 function pgrnLayerMajorFromUi() {
-  return $("pgrnLayerMajor") ? $("pgrnLayerMajor").checked
-    : localStorage.getItem("slipstream.pgrn.layermajor") === "1";
+  return $("pgrnLayerMajor") ? $("pgrnLayerMajor").checked : layerMajorPreference();
 }
 function syncNextEngineUi() { /* both options are plain toggles now */ }
-function persistNextEngineSettings() {
-  if ($("pgrnLookahead")) localStorage.setItem("slipstream.pgrn.lookahead", $("pgrnLookahead").checked ? "1" : "0");
-  if ($("pgrnSteer")) localStorage.setItem("slipstream.pgrn.steer", $("pgrnSteer").checked ? "1" : "0");
-  if ($("pgrnLayerMajor")) localStorage.setItem("slipstream.pgrn.layermajor", $("pgrnLayerMajor").checked ? "1" : "0");
+const NEXT_ENGINE_KEYS = { pgrnLookahead: "slipstream.pgrn.lookahead", pgrnSteer: "slipstream.pgrn.steer",
+  pgrnLayerMajor: "slipstream.pgrn.layermajor" };
+// Only the toggle the user changed is stored, so an untouched toggle keeps following its default.
+function persistNextEngineSettings(ev) {
+  const ids = ev && ev.target && NEXT_ENGINE_KEYS[ev.target.id] ? [ev.target.id] : Object.keys(NEXT_ENGINE_KEYS);
+  ids.forEach((id) => { if ($(id)) localStorage.setItem(NEXT_ENGINE_KEYS[id], $(id).checked ? "1" : "0"); });
 }
 function loadNextEngineSettings() {
   if ($("pgrnLookahead")) $("pgrnLookahead").checked = lookaheadPreference();
   if ($("pgrnSteer")) $("pgrnSteer").checked = localStorage.getItem("slipstream.pgrn.steer") === "1";
-  if ($("pgrnLayerMajor")) $("pgrnLayerMajor").checked = localStorage.getItem("slipstream.pgrn.layermajor") === "1";
+  if ($("pgrnLayerMajor")) $("pgrnLayerMajor").checked = layerMajorPreference();
 }
 function wireNextEngineSettings() {
   ["pgrnLookahead", "pgrnSteer", "pgrnLayerMajor"].forEach((id) => {
@@ -2448,8 +2492,8 @@ async function startServer() {
     const profileNote = goingMlx && cfg.pgrn_profile === "contract"
       ? ` · ${t("toast.mlxContractProfile")}`
       : "";
-    // The Metal start message comes back in German from the backend; say it in the
-    // UI language. MLX messages carry RAM/disk details worth showing as they are.
+    // The Metal start message is a fixed English line; say it in the UI language.
+    // MLX messages carry RAM/disk details worth showing as they are.
     toast(`${goingMlx && msg ? msg : t("srv.startedLoading")}${profileNote}`);
     state.startPendingAt = Date.now();
     state.startSawUp = false;
@@ -2540,18 +2584,35 @@ function wireRestartNote() {
 
 // The backend answers some refusals in German only (main.rs); show them in the UI
 // language. Unknown messages pass through unchanged.
+// Backend errors arrive as "[code k=v ...] English text" (main.rs ui_err). The code picks the
+// EN/DE string; k=v fill its {vars}; {detail} is the OS error after the first ": ". Unknown codes
+// and plain messages (MLX) show their English text.
+const BE_KEYS = {
+  server_running: "be.running", model_missing: "be.modelMissing", pgrn_missing: "be.pgrnMissing",
+  download_running: "be.dlRunning", pgrn_exists: "be.pgrnExists", no_converter: "be.noConverter",
+  convert_running: "be.convRunning", convert_busy: "be.convBusy", no_resume: "be.noResume",
+  start_failed: "be.startFailed", log_error: "be.logError", folder_error: "be.folderError",
+  download_failed: "be.dlFailed", convert_failed: "be.convFailed",
+};
+function parseBackendErr(e) {
+  const s = String((e && e.message) || e || "");
+  const m = s.match(/^\[([a-z_]+)((?: [a-z_]+=[^\s\]]*)*)\]\s*([\s\S]*)$/);
+  if (!m) return { code: null, vars: {}, text: s };
+  const vars = {};
+  m[2].trim().split(/\s+/).filter(Boolean).forEach((kv) => { const i = kv.indexOf("="); vars[kv.slice(0, i)] = kv.slice(i + 1); });
+  const i = m[3].indexOf(": ");
+  vars.detail = i >= 0 ? m[3].slice(i + 2) : "";
+  return { code: m[1], vars, text: m[3] };
+}
 function backendMsg(e) {
-  const s = String(e || "");
-  const map = [
-    [/Modell \(\.gguf\) fehlt|^GGUF fehlt/i, "be.modelMissing"],
-    [/PGRN-Sidecar fehlt/i, "be.pgrnMissing"],
-    [/Server läuft bereits/i, "be.running"],
-    [/Download läuft bereits/i, "be.dlRunning"],
-    [/PGRN existiert bereits/i, "be.pgrnExists"],
-    [/Converter-Binary fehlt/i, "be.noConverter"],
-  ];
-  const hit = map.find(([re]) => re.test(s));
-  return hit ? t(hit[1]) : s;
+  const { code, vars, text } = parseBackendErr(e);
+  if (code === "low_memory") {
+    const num = (x) => dec(+x || 0, 1);
+    return fillVars(t("be.lowMemory"), { free: num(vars.free), need: num(vars.need) }) +
+      (vars.fit ? fillVars(t("be.lowMemoryFit"), { fit: vars.fit }) : t("be.lowMemoryClose"));
+  }
+  const key = code && BE_KEYS[code];
+  return key ? fillVars(t(key), vars) : text;
 }
 
 // A start that ends without the user pressing Stop gets a reason in plain words,
@@ -2870,44 +2931,160 @@ function parseLog(text) {
   return { hitPct, hits, misses, tps, loaded, lastPrompt, lastComp, sumComp, kvMiB };
 }
 
-// Detect the server's current request phase from the log tail so we can show
-// a live "Prefill 42% / ETA" banner during the (slow) prompt read.
+// ---- request activity (banner + cockpit) ------------------------------------
+// One shape for both sources: { phase: idle|waiting|prefill|decode, task, src,
+//   pp: { total, cache, processed, timeMs, progress, tokens, t, rate, lm, tail }, dec: { tokens, tps } }
+// Preferred source: the engine's /slots (phase + prompt_progress, read by the menubar poller and
+// passed through live_stats.slot_activity). Fallback and transition source: the log lines
+// `slot prompt_start|prompt_progress|prompt_done|prompt_abort` plus upstream's print_timing lines.
+// Both cover requests from editors (Kilo, OpenCode), not only the app's own chat.
+const ACT_STAGE = { waiting: 1, prefill: 2, decode: 3, idle: 4 };
+const ACT_FINISH_STALL_MS = 6000;   // no progress for this long near the end = the final chunk
+const ACT_FINISH_FRACTION = 0.8;
 function parseActivity(text) {
-  const lines = text.split("\n");
-  let phase = "idle", pp = null, dec = null;
+  const lines = String(text || "").split("\n");
+  let phase = "idle", pp = null, dec = null, task = null;
+  const taskOf = (l) => { const m = l.match(/\|\s*task\s+(-?\d+)/); return m ? +m[1] : null; };
   for (const l of lines) {
-    let m = l.match(/prompt processing, n_tokens =\s*(\d+), progress =\s*([\d.]+)(?:, t =\s*([\d.]+) s \/\s*([\d.]+) tokens per second)?/);
-    if (m) { phase = "prefill"; pp = { tokens: +m[1], progress: +m[2], t: m[3] ? +m[3] : null, rate: m[4] ? +m[4] : null }; continue; }
+    let m = l.match(/slot prompt_start: id\s+(\d+)\s*\|\s*task\s+(\d+)\s*\|\s*n_prompt = (\d+), n_cached = (\d+), n_process = (\d+)/);
+    if (m) {
+      phase = "prefill"; task = +m[2]; dec = null;
+      pp = { total: +m[3], cache: +m[4], processed: +m[4], timeMs: 0, lm: false, tail: false };
+      continue;
+    }
+    m = l.match(/slot prompt_progress: id\s+(\d+)\s*\|\s*task\s+(\d+)\s*\|\s*n_processed = (\d+), n_prompt = (\d+), progress = ([\d.]+), t = ([\d.]+) ms/);
+    if (m) {
+      const same = pp && task === +m[2];
+      phase = "prefill"; task = +m[2]; dec = null;
+      pp = { total: +m[4], cache: same ? pp.cache : 0, processed: +m[3], timeMs: +m[6], lm: true, tail: false };
+      continue;
+    }
+    m = l.match(/prompt processing, n_tokens =\s*(\d+), progress =\s*([\d.]+)(?:, t =\s*([\d.]+) s \/\s*([\d.]+) tokens per second)?/);
+    if (m) {
+      const tk = taskOf(l), same = pp && tk != null && task === tk;
+      const progress = +m[2], tSec = m[3] ? +m[3] : null;
+      const next = { tokens: +m[1], progress, t: tSec, rate: m[4] ? +m[4] : null,
+        timeMs: tSec != null ? tSec * 1000 : (same ? pp.timeMs : null), lm: same ? pp.lm : false };
+      if (same && pp.total) {
+        next.total = pp.total; next.cache = pp.cache;
+        next.processed = Math.max(pp.processed || 0, Math.round(progress * pp.total));
+      }
+      // After the layer-major pass the server reads the last part of the prompt in normal
+      // batches (its checkpoint chunk): ~15 s with no finer progress.
+      next.tail = !!(next.lm && progress < 1);
+      phase = "prefill"; pp = next; dec = null; if (tk != null) task = tk;
+      continue;
+    }
+    m = l.match(/slot prompt_done: id\s+(\d+)\s*\|\s*task\s+(\d+)/);
+    if (m) { phase = "decode"; task = +m[2]; pp = null; continue; }
+    m = l.match(/slot prompt_abort: id\s+(\d+)\s*\|\s*task\s+(\d+)/);
+    if (m) { phase = "idle"; task = +m[2]; pp = null; dec = null; continue; }
     // The engine prints "n_gen = N, tg = X t/s" (older builds: "n_decoded = N, tg = X").
     m = l.match(/n_(?:gen|decoded) =\s*(\d+), tg =\s*([\d.]+)/);
-    if (m) { phase = "decode"; dec = { tokens: +m[1], tps: +m[2] }; continue; }
-    if (/prompt eval time =/.test(l) && phase === "prefill") { phase = "decode"; }
-    if (/release:|stop processing|total time =/.test(l)) { phase = "idle"; pp = null; dec = null; }
+    if (m) { phase = "decode"; dec = { tokens: +m[1], tps: +m[2] }; pp = null; const tk = taskOf(l); if (tk != null) task = tk; continue; }
+    if (/prompt eval time =/.test(l) && phase === "prefill") { phase = "decode"; pp = null; }
+    if (/release:|stop processing|total time =/.test(l)) {
+      phase = "idle"; pp = null; dec = null; const tk = taskOf(l); if (tk != null) task = tk;
+    }
   }
-  return { phase, pp, dec };
+  return { phase, pp, dec, task, src: "log" };
+}
+
+// live_stats.slot_activity (Rust slotactivity.rs) → the activity shape.
+function activityFromSlots(sa) {
+  if (!sa || !sa.phase) return null;
+  const phase = { prompt: "prefill", generating: "decode", waiting: "waiting", idle: "idle" }[sa.phase] || "idle";
+  const act = { phase, task: sa.task != null && sa.task >= 0 ? sa.task : null, pp: null, dec: null, src: "slots" };
+  if (phase === "prefill" && sa.total > 0) {
+    act.pp = { total: sa.total, cache: sa.cache || 0, processed: sa.processed != null ? sa.processed : (sa.cache || 0),
+      timeMs: sa.time_ms != null ? sa.time_ms : null, lm: false, tail: false };
+  }
+  if (phase === "decode" && sa.n_decoded != null) act.dec = { tokens: sa.n_decoded, tps: null };
+  return act;
+}
+
+// /slots wins for numbers; the log wins for transitions it already shows (it is read every
+// second, the /slots reading may be a few seconds old) and for the "finishing" tail.
+function mergeActivity(slotAct, logAct) {
+  if (!slotAct || slotAct.phase === "idle") return logAct;
+  // Without task ids on both sides the two cannot be matched; /slots is the preferred source.
+  if (!logAct || logAct.task == null || slotAct.task == null) return slotAct;
+  if (logAct.task !== slotAct.task) return logAct.task > slotAct.task ? logAct : slotAct;
+  if ((ACT_STAGE[logAct.phase] || 0) > (ACT_STAGE[slotAct.phase] || 0)) return logAct;
+  if (slotAct.phase === "prefill" && logAct.phase === "prefill" && logAct.pp) {
+    const sp = slotAct.pp, lp = logAct.pp;
+    if (!sp) return logAct;
+    const pp = { ...sp, lm: !!lp.lm, tail: !!lp.tail, rate: lp.rate };
+    if ((lp.processed || 0) > (sp.processed || 0)) { pp.processed = lp.processed; pp.timeMs = lp.timeMs; }
+    return { ...slotAct, pp };
+  }
+  if (slotAct.phase === "decode" && logAct.phase === "decode" && logAct.dec) return { ...slotAct, dec: logAct.dec };
+  return slotAct;
+}
+
+// Numbers the banner shows for a prompt read; `now` + `track` detect a stalled final chunk.
+function prefillView(pp, track, now) {
+  const v = { pct: 0, done: null, total: null, cache: 0, eta: null, finishing: false };
+  if (pp.total > 0 && pp.processed != null) {
+    v.total = pp.total; v.done = Math.min(pp.total, pp.processed); v.cache = pp.cache || 0;
+    v.pct = Math.max(0, Math.min(100, Math.floor((v.done / v.total) * 100)));
+    const secs = (pp.timeMs || 0) / 1000, read = v.done - v.cache;
+    if (secs >= 3 && read > 0 && v.done < v.total) v.eta = (v.total - v.done) / (read / secs);
+  } else if (pp.progress != null) {
+    v.pct = Math.round(pp.progress * 100);
+    if (pp.t && pp.progress > 0 && pp.progress < 1) v.eta = pp.t * (1 - pp.progress) / pp.progress;
+  }
+  const frac = v.pct / 100;
+  const stalled = track && now - track.since >= ACT_FINISH_STALL_MS && frac >= ACT_FINISH_FRACTION;
+  v.finishing = !!(pp.tail || stalled || (v.total && v.done >= v.total));
+  if (v.finishing) v.eta = null;
+  return v;
 }
 
 function updateActivity(a) {
   const el = $("activity");
   if (a.phase === "prefill" && a.pp) {
-    // "progress" counts reused (cached) tokens too, "n_tokens" only the ones read
-    // now, so the remaining time comes from elapsed time and progress, not tokens.
-    const p = Math.round(a.pp.progress * 100);
-    const eta = (a.pp.t && a.pp.progress > 0 && a.pp.progress < 1) ? a.pp.t * (1 - a.pp.progress) / a.pp.progress : null;
+    // Stall tracking: same task, same processed count → since when.
+    const key = `${a.task}:${a.pp.processed != null ? a.pp.processed : a.pp.progress}`;
+    const now = Date.now();
+    if (!state.ppTrack || state.ppTrack.key !== key) state.ppTrack = { key, since: now };
+    const v = prefillView(a.pp, state.ppTrack, now);
     el.hidden = false;
-    el.className = "activity prefill";
+    el.className = "activity prefill" + (v.finishing ? " finishing" : "");
     if ($("actTitle").textContent !== t("act.prefill")) $("actTitle").textContent = t("act.prefill");
-    const vars = { pct: String(p), tokens: a.pp.tokens.toLocaleString(LANG), secs: String(Math.round(a.pp.t || 0)),
-      eta: eta != null ? fmtEta(eta) : "" };
-    $("actSub").textContent = fillVars(t(eta != null ? "act.prefillSub" : "act.prefillSubNoEta"), vars);
-    $("actBar").style.width = p + "%"; $("actPct").textContent = p + "%";
+    let sub;
+    if (v.finishing) {
+      sub = t("act.finishing");
+    } else if (v.total) {
+      const vars = { done: v.done.toLocaleString(LANG), total: v.total.toLocaleString(LANG), pct: String(v.pct),
+        eta: v.eta != null ? fmtEta(v.eta) : "" };
+      sub = fillVars(t(v.eta != null ? "act.prefillOf" : "act.prefillOfNoEta"), vars);
+      if (v.cache > 0) sub += fillVars(t("act.reused"), { cached: v.cache.toLocaleString(LANG) });
+    } else {
+      const vars = { pct: String(v.pct), tokens: (a.pp.tokens || 0).toLocaleString(LANG), secs: String(Math.round(a.pp.t || 0)),
+        eta: v.eta != null ? fmtEta(v.eta) : "" };
+      sub = fillVars(t(v.eta != null ? "act.prefillSub" : "act.prefillSubNoEta"), vars);
+    }
+    $("actSub").textContent = sub;
+    $("actBar").style.width = (v.finishing ? 100 : v.pct) + "%";
+    $("actPct").textContent = v.finishing ? "…" : v.pct + "%";
+  } else if (a.phase === "waiting") {
+    state.ppTrack = null;
+    el.hidden = false;
+    el.className = "activity prefill waiting";
+    if ($("actTitle").textContent !== t("act.waiting")) $("actTitle").textContent = t("act.waiting");
+    $("actSub").textContent = ""; $("actBar").style.width = "0%"; $("actPct").textContent = "";
   } else if (a.phase === "decode") {
+    state.ppTrack = null;
     el.hidden = false;
     el.className = "activity decode";
     if ($("actTitle").textContent !== t("act.decode")) $("actTitle").textContent = t("act.decode");
-    $("actSub").textContent = a.dec ? `${a.dec.tokens} ${t("act.tokens")} · ${tps(a.dec.tps)}` : t("act.running");
+    $("actSub").textContent = a.dec
+      ? (a.dec.tps ? `${a.dec.tokens} ${t("act.tokens")} · ${tps(a.dec.tps)}` : `${a.dec.tokens} ${t("act.tokens")}`)
+      : t("act.running");
     $("actBar").style.width = "100%"; $("actPct").textContent = "";
   } else {
+    state.ppTrack = null;
     // Idle status already lives in the topbar pill — keep this strip out of the
     // chrome so it cannot read as a second, empty navbar.
     el.hidden = true;
@@ -3064,8 +3241,10 @@ async function poll() {
     try {
       const log = await invoke("read_log", { maxLines: 400 });
       const p = parseLog(log);
-      const act = parseActivity(log);
-      // The engine logs no line when prompt reading ends, so the last "prompt
+      // /slots (fresh reading from live_stats) preferred, log lines as fallback/transitions.
+      const slotAct = state.slotActAt && Date.now() - state.slotActAt < 3000 ? activityFromSlots(state.slotAct) : null;
+      const act = mergeActivity(slotAct, parseActivity(log));
+      // Older engines log no line when prompt reading ends, so the last "prompt
       // processing" line lingers into the answer. Chat knows better for its own requests.
       if (act.phase === "prefill" && state.chatAnswering) { act.phase = "decode"; act.pp = null; }
       state.activity = act;
@@ -3089,7 +3268,10 @@ async function poll() {
     setPill("off");
     state.lastMisses = null;
     state.kvMiB = null;
+    // A stopped engine reads nothing: the strip must not keep its last request on screen.
+    if (state.activity || !$("activity").hidden) updateActivity({ phase: "idle" });
     state.activity = null;
+    state.slotAct = null;
     state.ssdPeak = 0;
     if (state.runningCfg) { state.runningCfg = null; try { updateReco(); } catch {} }
     ARENA.active = false;
@@ -3490,6 +3672,9 @@ async function refreshStatus() {
 // source (a `vm_stat` subprocess on its own timer) and could therefore contradict
 // the bar it sits next to; it takes this tick now.
 function absorbLive(live) {
+  // Engine phase + prompt progress from /slots; poll() merges it with the log.
+  state.slotAct = live.slot_activity || null;
+  state.slotActAt = Date.now();
   const cache = live.experts;
   const now = performance.now() / 1000;
   let ssd = 0;
