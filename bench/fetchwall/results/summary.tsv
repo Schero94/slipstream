@@ -237,3 +237,11 @@ e2 ship-ub4096-cram2048 peak_rss_mb=16954 swap_delta_mb=0
 20261126-102900	srv	label=lmapp-ub2048	cache=4	decode_tps=7.91	prompt_n=39515	ttft_s=147.2	prefill_tps=268.5	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8941	lm_decodes=1	out=54edf738c5a8	env=PGRN_LAYER_MAJOR=1
 20261126-103838	srv	label=bundle041-default	cache=4	decode_tps=9.91	prompt_n=57	ttft_s=2.8	prefill_tps=20.1	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8080	lm_decodes=0	out=38b5b06864f1	env=
 20261126-104025	srv	label=bundle041-layermajor	cache=4	decode_tps=9.84	prompt_n=57	ttft_s=2.8	prefill_tps=20.4	draft_acc=None/None	swap_delta_mb=-133.43	peak_rss_mb=7652	lm_decodes=0	out=38b5b06864f1	env=PGRN_LAYER_MAJOR=1
+20261127-234347	e4	label=default	S1_prompt_n=39517	S1_ttft_s=190.2	B_prompt_n=23	S2_prompt_n=33	S2_cache_n=39476	S2_ttft_s=2.2	S1_out=a9f8c4863784	S2_out=c4062b92a557
+e4 default peak_rss_mb=10226 swap_delta_mb=0
+20261127-234904	e4	label=lm	S1_prompt_n=39517	S1_ttft_s=137.1	B_prompt_n=23	S2_prompt_n=33	S2_cache_n=39476	S2_ttft_s=2.1	S1_out=a9f8c4863784	S2_out=c4062b92a557
+e4 lm peak_rss_mb=10471 swap_delta_mb=0
+20261127-235316	lmabort	label=lm4g	kill_after_s=20	abort_seen_s=0.32	short_ref_s=1.8	short_after_s=0.4	short_same=True	short_out=5dd272b4f316	srv="decode: layer-major prefill aborted 0.062 s after the cancel of its task"	eng="layer-major prefill aborted at layer 7/40, ubatch 10 (7 layer passes done)"
+lmabort lm4g peak_rss_mb=9333 swap_delta_mb=0
+20261127-235904	e4fresh	label=fresh	S2_prompt_n=39509	S2_ttft_s=186.9	S2_out=c4062b92a557
+e4 fresh peak_rss_mb=9775 swap_delta_mb=0

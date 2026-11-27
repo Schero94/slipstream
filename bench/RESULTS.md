@@ -3773,3 +3773,21 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   lower -b / PGRN_LAYER_MAJOR_MAX_TOKENS cap needed on < 24 GB; app unchanged. Caveat: whole-run
   peak RSS in the 36 GB e4 regime is mixed (E4: LM 10471 vs default 10226 MB; earlier gate: 9207
   vs 9720 MB) — prompt cache / checkpoint noise, within the 1 GiB reserve; not measured on a 16 GB Mac.
+
+## E4 — new agent conversation reuses the shared system prompt — KEEP (no code change) — 2026-11-27
+
+- Method: `bench/fetchwall/e4_newconv.sh`, /v1/chat/completions like real agents. S1 = system
+  (instructions + source files, 39.4k tokens) + task 1; then an unrelated short request (title);
+  then S2 = same system + a different task (new conversation). App regime: llama-server, 4 GiB
+  cache, -c 40960, -fa on, --jinja, --cache-ram 2048; default arm ub 4096 / -b 4096, layer-major
+  arm PGRN_LAYER_MAJOR=1 ub 2048 / -b 40960. Qwen3.6-35B-A3B Q4 from ~/Modelle, M3 Pro 36 GB.
+- default: S1 39,517 tokens 190.2 s · S2 prompt_n 33, cache_n 39,476, **2.2 s** · peak RSS 10.2 GB.
+- layer-major: S1 **137.1 s** (−28 % vs 190.2 s) · S2 prompt_n 33, **2.1 s** · peak RSS 10.5 GB.
+- Output identity: S1 a9f8c4863784 in both arms; S2 c4062b92a557 in both arms and in the fresh
+  control (E4_FRESH: S2 alone on a fresh server, 39,509 tokens, 186.9 s, same hash). Swap 0 MB.
+- Why it works: upstream llama-server checkpoints at user-message starts and keeps them with the
+  --cache-ram state, so the hybrid (DeltaNet) state is restored at the system/user boundary.
+- Caveat: agents that put changing text (date, cwd) at the top of the system prompt move the
+  divergence to the start; then nothing is reused. Not yet tested with real Kilo/OpenCode prompts.
+- Note: the layer-major arm ran the newer binary with the cancellable layer-major change (31712b2,
+  built 23:48:56); the default arm the 08:31 binary. Outputs identical across both.

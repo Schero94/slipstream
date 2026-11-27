@@ -21,7 +21,7 @@ trap 'kill $PID 2>/dev/null; sleep 1; kill -9 $PID 2>/dev/null' EXIT INT TERM
 for i in $(seq 1 600); do curl -sf http://127.0.0.1:$PORT/health >/dev/null && break; kill -0 $PID 2>/dev/null || break; sleep 1; done
 kill -0 $PID 2>/dev/null || { echo "e4: server not healthy, see $LOG" >&2; exit 1; }
 python3 - "$HERE/prompt_30k.txt" "$PORT" "$LABEL" "$STAMP" <<'PY' | tee -a "$OUT/summary.tsv"
-import json, sys, urllib.request, hashlib
+import json, sys, os, urllib.request, hashlib
 pf, port, label, stamp = sys.argv[1:5]
 raw = open(pf).read()
 body = raw.split("<|im_start|>user\n", 1)[1].rsplit("\n\nTask:", 1)[0]
@@ -34,6 +34,12 @@ def chat(msgs, n):
     j = json.load(urllib.request.urlopen(r, timeout=3600))
     t = j["timings"]; c = j["choices"][0]["message"]["content"] or ""
     return t["prompt_n"], t.get("cache_n", 0), t["prompt_ms"] / 1000, hashlib.sha256(c.encode()).hexdigest()[:12]
+if os.environ.get("E4_FRESH"):
+    # control: S2 alone on a fresh server (no cached S1) - its output hash must equal the reused S2
+    s2 = chat([{"role": "system", "content": system},
+               {"role": "user", "content": "List the three Tauri commands that start or stop the llama-server process, with one line each."}], 48)
+    print(f"{stamp}\te4fresh\tlabel={label}\tS2_prompt_n={s2[0]}\tS2_ttft_s={s2[2]:.1f}\tS2_out={s2[3]}")
+    sys.exit(0)
 s1 = chat([{"role": "system", "content": system},
            {"role": "user", "content": "Find where the PGRN cache hit-rate is computed for the UI and explain in two sentences how it flows from the engine to the app."}], 48)
 b = chat([{"role": "user", "content": "Write a five-word title for a chat about caching."}], 8)
