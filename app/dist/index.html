@@ -47,7 +47,7 @@
   <div id="activity" class="activity idle" hidden>
     <div class="act-dot"></div>
     <div class="act-body">
-      <div class="act-title" id="actTitle"></div>
+      <div class="act-title" id="actTitle" role="status" aria-live="polite"></div>
       <div class="act-sub" id="actSub"></div>
       <div class="act-why" id="actWhy"></div>
       <div class="meter act-meter"><div id="actBar" class="meter-fill"></div></div>
@@ -102,6 +102,7 @@
                   </button>
                 </li>
               </ol>
+              <button type="button" class="journey-other" id="journeyOther" data-i18n="journey.otherModel" hidden>Anderes Modell wählen</button>
               <p class="chat-empty-tip" data-i18n="journey.codingTip">Coding: Thinking aus, greedy (temp 0).</p>
             </div>
           </div>
@@ -167,10 +168,12 @@
                original download / convert / cancel buttons stay under "Manual
                steps" with their ids and handlers; the prepare button clicks them. -->
           <div class="prepare" id="prepareBox">
-            <div class="dl-info" aria-live="polite">
-              <div id="dlStatus" class="dl-status">–</div>
+            <div class="dl-info">
+              <!-- Only the status sentence is announced; the byte counter below changes every second. -->
+              <div id="dlStatus" class="dl-status" role="status" aria-live="polite">–</div>
               <div class="meter"><div id="dlBar" class="meter-fill dl"></div></div>
               <div id="dlNote" class="tile-note"></div>
+              <div id="prepWarn" class="prep-warn" aria-live="polite" hidden></div>
             </div>
             <button type="button" id="prepareBtn" class="btn btn-primary prepare-btn">…</button>
           </div>
@@ -214,7 +217,11 @@
             </div>
           </details>
         </div>
-        <div class="note-card" data-i18n-html="compat.text"></div>
+        <!-- Background for people bringing their own model; collapsed so the first-run screen stays short. -->
+        <details class="note-card compat-more">
+          <summary data-i18n="compat.summary">Welche Modelle funktionieren?</summary>
+          <div data-i18n-html="compat.text"></div>
+        </details>
       </section>
 
       <!-- ============ CONNECT EDITOR ============ -->
@@ -677,6 +684,10 @@
             <div class="reco-actions">
               <button id="applyReco" class="btn btn-primary" data-i18n="btn.applyBest">Beste anwenden</button>
             </div>
+          </div>
+          <div class="restart-note" id="restartNote" role="status" aria-live="polite" hidden>
+            <span data-i18n="restart.note">Einige Einstellungen wurden geändert. Sie gelten nach einem Neustart des Modells.</span>
+            <button type="button" id="restartBtn" class="btn btn-primary" data-i18n="restart.btn">Jetzt neu starten</button>
           </div>
           <!-- Everything below is tuning. The recommendation above is applied at
                Start until the user changes one of these themselves. -->

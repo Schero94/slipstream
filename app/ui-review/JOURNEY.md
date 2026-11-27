@@ -1,5 +1,88 @@
 # First-run journey review
 
+## v0.5 review (2026-11-27): 5 clicks → 3, and the engine always says what it is doing
+
+**Goal of the user:** "I have a Mac. I want a fast local coding model running and connected to my editor —
+and I want to know what it is doing while I wait."
+
+### How to run the UI without the native app
+
+```sh
+python3 app/ui-review/mock/serve.py 4317     # serves app/dist with mock/tauri_mock.js injected
+```
+
+Open `http://127.0.0.1:4317/` (Playwright MCP: `browser_navigate`, `browser_click`, `browser_take_screenshot`).
+The mock is stateful: a fresh Mac (nothing downloaded) → download → prepare → start → running, plus a
+llama-server HTTP mock for `/v1/models` and streamed `/v1/chat/completions` (incl. `prompt_progress`
+when the request asks for `return_progress`, and engine-format log lines for the activity banner).
+Knobs on `window.__M`: `freeRam`, `diskFree`, `speed`, `prefillTokens` (e.g. 40000), `startCrash`
+(engine exits while loading with a RAM-admission refusal in the log), `startErr` (backend refuses Start).
+`app/scripts/browser_click_walk.js` passes against it (`browser_run_code_unsafe` with that file).
+Screenshots: `journey/v05-before-en-*.png` and `journey/v05-after-{en,de}-*.png` (1200×800).
+
+### Before (v0.4.1): 5 clicks on 3 screens
+
+| # | Click | Screen |
+|---|---|---|
+| 1 | "Set up a model" | Chat → Model |
+| 2 | "Download & prepare · ~21 GiB" | Model (wait: download, then preparation) |
+| 3 | "Start" | Model (wait ~1 min) |
+| 4 | "Connect your editor →" | Model → Connect editor |
+| 5 | "Patch in" (Kilo Code / OpenCode) or "Copy config" | Connect editor |
+
+### After: 3 clicks, 2 screens, no decisions forced
+
+| # | Click | What happens |
+|---|---|---|
+| 1 | Chat step 1: **"Download the recommended model (Qwen3.6-35B-A3B, about 40 GiB on disk)"** | Download starts right from the first screen; step 1 shows "Download running… 13 %", then "Preparing for SSD streaming… 50 %"; the tip under the steps says the wait is expected. "Choose a different model" link for people who want to pick. |
+| — | wait | Step 1 turns into "✓ Model ready", step 2 is highlighted. |
+| 2 | Chat step 2: **"Start it"** (or Start top right) | "Starting…" everywhere; after the model is up, **Connect editor opens by itself** (first run only, only if the user is still on Chat/Model and has not chatted) with keyboard focus on the first "Set up" button. |
+| 3 | **"Set up"** (Kilo Code / OpenCode) or "Copy config" | Editor configured; step 3 gets its check mark. |
+
+Scoreboard row 6 (≤ 4 clicks): **3** (was 4–5 depending on how the editor click was counted; strictly 5).
+
+### Findings
+
+Fixed (in `app/dist`, commit on `feat/ux-v05`):
+
+| # | Finding (as a newcomer) | Fix |
+|---|---|---|
+| F1 | **A 40k-token prompt is ~150–180 s of silence in Chat.** The assistant bubble was an empty dot; nothing said the prompt is being read or how long it takes. | Chat sends `return_progress: true` (Metal/llama-server only) and shows (mock values) *"Reading your prompt: 12,288 of 40,000 tokens (30 %) · 4 s · about 8 s left · 6,000 reused from earlier"*, then *"Prompt read in N s — writing the answer…"*. Before progress arrives: *"Waiting for the model… N s"*. Wait text never ends up as an answer or hides an error. |
+| F2 | **Chat speed was wrong**: tok/s divided by time incl. prompt reading (0.6 tok/s shown for a 12 tok/s answer). | Speed counts from the first word; *"first word after 12 s"* shown next to it. |
+| F3 | **Activity banner's decode state never appeared**: the regex expected `n_decoded = N, tg = X`, the engine prints `n_gen = N, tg = X t/s`. | Matches both. |
+| F4 | Banner at prefill start showed **"0 / 0 Tokens"**, a token total computed from a progress value that includes cached tokens, jargon "Prefill — reading the prompt … Decode speed …", and the explanation was cut off after one line. | "Reading your prompt · 31 % · 12,288 tokens read in 4 s · about 8 s left"; ETA from elapsed time and progress; plain explanation with the recorded numbers (40k agent prompt ≈ 3 min the first time, follow-ups ≈ 1 s), wraps to two lines. Title is a polite live region (announced once per phase, not per second). |
+| F5 | **Start that dies is a silent dead end.** If the engine exits while loading (RAM admission refuses, model too big), the app went Starting → Stopped with no reason. Also: `server_state` is "down" until the HTTP port opens, so the pill could flip Starting/Stopped and the top button read "Start" while starting. | 10 s grace before "down" counts; Stop works during it. A start that ends without Stop reads the log and says why in plain words — not enough free memory (with what to do), model too large for this Mac, disk full — plus the engine's own line (`[peregrine] … would break the 3072 MiB reserve …`). Button: "Try again". |
+| F6 | **English UI showed German toasts**: "Auto → metal: Server gestartet - lädt Modell (~60s)...", "Modell (.gguf) fehlt - erst herunterladen.", etc. (backend strings). | Metal start toast uses the UI string; known German backend refusals (model/PGRN missing, already running, download running, PGRN exists, converter missing) are mapped to EN/DE. MLX start messages (English, carry RAM/disk numbers) still pass through. |
+| F7 | **Disk need hidden**: the button promised "~21 GiB" but the setup writes ~40 GiB (download + prepared copy). No check before a 21 GiB download. | Status line: "Needs about 40 GiB of free disk space (21 GiB download + 19 GiB prepared copy) · 412 GiB free." If it cannot fit, the button reads "Not enough disk space" (disabled) with the way out (free space, smaller model, other folder). Same check before preparation. |
+| F8 | Download showed only bytes, no speed or time left. | e.g. "4.2 / 21.0 GiB · 310 MB/s · about 55 s left" (smoothed). |
+| F9 | Low free RAM had no warning before Start (the app picks a 4 GiB cache and starts). | Under 8 GiB free: "Only 6.0 GiB of memory is free right now. Close some apps first so the model starts smoothly." (warning only; admission stays in the engine). |
+| F10 | **Settings changed while running did nothing visible** (e.g. turning Turbo on); only a general sentence said "Changes apply at the next Start". | A "Some settings changed. They apply when the model restarts. [Restart now]" note appears only when a start-relevant setting differs from what the engine was started with; Restart now = stop + start. Turning the setting back hides it. |
+| F11 | "Connect your editor →" (the next step) was a grey button. | Primary button. |
+| F12 | Jargon on everyday screens: "Patch in", top bar "cache 78% · RSS 17 GiB", unknown converter phase leaked as raw key (`conv.<phase>`), "Conversion started" toast, compatibility box (MoE, Q4_K, IQ/Q2/Q3/Q8_0/MXFP4) always open under the model card, 13 models with no hint which one to take. | "Set up" / "one click"; top bar "from RAM 78% · memory 17 GiB" (DE "aus RAM · RAM") with a plain tooltip; unknown phases read "working"; "Preparing the model for SSD streaming…"; compatibility note collapsed under "Which models work?"; default model labelled "— recommended". |
+| F13 | Download progress status was one live region with the byte counter, so screen readers would hear it every second. | Only the status sentence is a live region; the new warning line is its own polite region. |
+
+Open (with reason):
+
+| # | Finding | Why not fixed here / what is needed |
+|---|---|---|
+| O1 | **Editor requests (Kilo/OpenCode) get no progress for the first ~15 s of a long prompt**: the engine logs its first "prompt processing" line only after one full 4096-token batch (and only if ≥ 3 s), and **logs nothing when prompt reading ends**; decode lines start only after 100 generated tokens. The banner therefore starts late and, for editor requests, can keep showing "Reading your prompt 9x %" while the answer is already being written (Chat requests are corrected by the app). | Engine/backend: log an INFO line at prompt start (with total tokens) and at prompt end, and a decode line before 100 tokens — or expose per-slot state via `/slots` and let `live_stats` (main.rs) report `{phase, processed, total}`. |
+| O2 | **With "Fast prompt reading (layer-major)" on, there is no progress at all** while the prompt is read: the whole prompt is one decode call, so neither the log nor `prompt_progress` updates until it is done. | Engine: progress callback per layer in layer-major mode (layers done / total) surfaced in the log or `/slots`. Until then the setting's hint already says a long prompt cannot be stopped; it could also say it cannot show progress. |
+| O3 | Backend messages are German-only (`main.rs`: start/stop/download/convert/embedder/qdrant toasts and errors). The frontend maps the common ones; the rest still show German in English. | main.rs (not touched by this pass): return error codes or English text and let the UI translate. |
+| O4 | No real RAM pre-check on Metal Start in the app: `start_server` spawns and relies on the engine's admission, which exits; the app now explains the exit (F5), but the user still waits for a failed start. | main.rs: run the admission plan (or a dry run) before spawning and return a typed "not enough memory: X free, Y needed" error. |
+| O5 | Download speed/ETA comes from polling file size once a second; it is smoothed but rough on slow or resumed downloads. | Backend: report bytes/s from the downloader. |
+| O6 | The model list still offers 400B–744B "XL" models on a 36 GB Mac (in their own group). | Product decision: hide or grey them out by RAM; left as is. |
+| O7 | MLX settings (env names such as `SLIPSTREAM_PGRN_*`, `iogpu.wired_limit_mb`) are visible under Advanced even when MLX is not installed. | Low impact (inside Advanced); could be hidden until the MLX runtime is installed. |
+| O8 | The disk-need estimate uses 0.9 × the download for the prepared copy (measured 19.0 / 21.0 GiB for the default); other models may differ slightly. | Catalog could carry the real `.pgrn` size per quant. |
+| O9 | `journey.*` strings for Chinese and Spanish fall back to English (as before). | Translation pass. |
+
+Tests after this pass: `node app/scripts/test_*.mjs` — all 7 green (a11y click contract, api parity, cross-engine,
+metal peak reco, native runtime UI, prefer local P2P, server setup); `browser_click_walk.js` — 0 failures, no
+console errors.
+
+---
+
+## v0.4 review (history)
+
 **Goal of the user:** "I have a Mac. I want a fast local coding model running and connected to my editor."
 
 Walked with Playwright against `app/dist` and a stateful `__TAURI__` stub. The stub simulates a fresh
