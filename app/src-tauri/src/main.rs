@@ -464,7 +464,8 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
     let slot_dir = slotstate::slot_dir();
     let slot_key = if std::fs::create_dir_all(&slot_dir).is_ok() {
         cmd.arg("--slot-save-path").arg(&slot_dir);
-        Some(slotstate::slot_key(&cfg.model, &cfg.pgrn, cfg.ctx, &cfg.kv_quant, file_size(&cfg.model)))
+        Some(slotstate::slot_key(&cfg.model, &cfg.pgrn, cfg.ctx, &cfg.kv_quant,
+            &slotstate::file_stamp(&cfg.model), &slotstate::file_stamp(&cfg.server)))
     } else {
         None
     };
@@ -549,8 +550,9 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
     cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log_err));
     let child = cmd.spawn().map_err(|e| format!("Start fehlgeschlagen: {e}"))?;
     *guard = Some(child);
+    let generation = slotstate::bump_generation();
     if let Some(key) = &slot_key {
-        slotstate::restore_in_background(cfg.port, key.clone());
+        slotstate::restore_in_background(cfg.port, key.clone(), generation);
     }
     if let Ok(mut k) = state.slot_key.lock() {
         *k = slot_key.map(|key| (cfg.port, key));
@@ -727,7 +729,10 @@ fn vm_stat_free_inactive_gib() -> Option<f64> {
 }
 
 fn stop_server_impl(state: &AppState) {
-    // Keep the agent context for the next start (best effort, bounded; skipped while loading).
+    // A pending restore of this start must not fire into whatever runs next.
+    slotstate::bump_generation();
+    // Keep the agent context for the next start (best effort, ~1 s; skipped while loading or
+    // generating so Stop never waits for an answer that is about to be killed anyway).
     if let Some((port, key)) = state.slot_key.lock().ok().and_then(|mut k| k.take()) {
         if state.server.lock().map(|g| g.is_some()).unwrap_or(false) {
             let _ = slotstate::save(port, &key);
@@ -744,8 +749,8 @@ fn stop_server_impl(state: &AppState) {
     );
 }
 
-#[tauri::command]
-fn stop_server(state: State<AppState>) -> Result<String, String> {
+#[tauri::command(async)]
+fn stop_server(state: State<'_, AppState>) -> Result<String, String> {
     stop_server_impl(&state);
     Ok("Server gestoppt.".into())
 }

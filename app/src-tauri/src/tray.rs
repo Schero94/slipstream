@@ -348,9 +348,13 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
             "open" => show_main(app),
             "stop" => stop_server_impl(&app.state::<AppState>()),
             "quit" => {
-                // Save the agent context before quitting (restart persistence).
-                stop_server_impl(&app.state::<AppState>());
-                app.exit(0)
+                // Save the agent context, stop the engine, then quit — off the main thread so
+                // the menu bar never freezes (restart persistence, slotstate.rs).
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    stop_server_impl(&app.state::<AppState>());
+                    app.exit(0);
+                });
             }
             _ => {}
         })
