@@ -389,6 +389,68 @@ static double lm_max_abs(const std::vector<float> & a, const std::vector<float> 
     return m;
 }
 
+// T2: cancellation. The layer-major abort check fires before step `fire_after` (one step = one (layer, ubatch)
+// graph); the decode must return 2, the memory must be either untouched (abort before the first graph) or the
+// sequence dropped, and the next decode on the same context must match the uninterrupted normal run bitwise.
+struct lm_abort_state { int calls = 0; int fire_after = 0; };
+static bool lm_abort_cb(void * data) {
+    auto * st = static_cast<lm_abort_state *>(data);
+    return st->calls++ >= st->fire_after;
+}
+
+struct lm_abort_case { std::string what; bool ok; };
+
+static void lm_abort_test(llama_context * ctx, const llama_model * model, int n_prompt, int n_prefix, int fire_after,
+        const lm_run & normal, std::vector<lm_abort_case> & out) {
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const auto tokens = lm_fixture_tokens(n_prefix + n_prompt, n_vocab);
+    llama_memory_t mem = llama_get_memory(ctx);
+    llama_memory_clear(mem, true);
+    if (n_prefix > 0) {
+        if (!ctx->set_layer_major(false)) throw std::runtime_error("set_layer_major failed");
+        common_batch prefix(ctx);
+        for (int i = 0; i < n_prefix; ++i) prefix.add(tokens[(size_t) i], i, 0, i + 1 == n_prefix);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, prefix.get()) != 0) throw std::runtime_error("prefix decode failed");
+    }
+    const std::vector<uint8_t> before = lm_state_seq(ctx, 0);
+    if (!ctx->set_layer_major(true)) throw std::runtime_error("set_layer_major failed");
+    lm_abort_state st;
+    st.fire_after = fire_after;
+    llama_set_layer_major_abort_callback(ctx, lm_abort_cb, &st);
+    common_batch prompt(ctx);
+    for (int i = 0; i < n_prompt; ++i) prompt.add(tokens[(size_t) (n_prefix + i)], n_prefix + i, 0, true);
+    const int ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, prompt.get());
+    llama_set_layer_major_abort_callback(ctx, nullptr, nullptr);
+    const std::string tag = " (prefix " + std::to_string(n_prefix) + ", abort before step " + std::to_string(fire_after) + ")";
+    out.push_back({ "abort returns 2" + tag, ret == 2 });
+    out.push_back({ "abort fired exactly once" + tag, st.calls == fire_after + 1 });
+    const llama_pos pmax = llama_memory_seq_pos_max(mem, 0);
+    if (fire_after == 0) {
+        // nothing ran: the memory must be exactly as before, so the prompt continues on the kept prefix
+        out.push_back({ "untouched memory kept" + tag, pmax == n_prefix - 1 && lm_state_seq(ctx, 0) == before });
+    } else {
+        out.push_back({ "touched sequence dropped" + tag, pmax == -1 });
+        llama_memory_clear(mem, true);
+        if (n_prefix > 0) {
+            if (!ctx->set_layer_major(false)) throw std::runtime_error("set_layer_major failed");
+            common_batch prefix(ctx);
+            for (int i = 0; i < n_prefix; ++i) prefix.add(tokens[(size_t) i], i, 0, i + 1 == n_prefix);
+            if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, prefix.get()) != 0) throw std::runtime_error("prefix decode failed");
+            if (!ctx->set_layer_major(true)) throw std::runtime_error("set_layer_major failed");
+        }
+    }
+    // the retry (layer-major again, no abort) must equal the uninterrupted normal run
+    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, prompt.get()) != 0) throw std::runtime_error("retry decode failed");
+    std::vector<float> logits;
+    for (int i = 0; i < n_prompt; ++i) {
+        const float * l = llama_get_logits_ith(ctx, i);
+        logits.insert(logits.end(), l, l + n_vocab);
+    }
+    out.push_back({ "retry prompt logits == normal" + tag, lm_bitwise(logits, normal.prompt_logits) });
+    out.push_back({ "retry seq state == normal" + tag, lm_state_seq(ctx, 0) == normal.state_seq });
+    llama_memory_clear(mem, true);
+}
+
 // T1: normal vs layer-major prefill on the fixture, resident and streamed, every token an output; once on an
 // empty memory and once after a normally decoded prefix (non-empty KV and recurrent state)
 static int layer_major_fixture(const char * gguf, const char * pgrn, bool gpu) {
@@ -396,6 +458,7 @@ static int layer_major_fixture(const char * gguf, const char * pgrn, bool gpu) {
     const uint32_t n_ubatch = 4;
     const int prefixes[] = { 0, 5 };
     lm_run res_n[2], res_l[2], str_n[2], str_l[2];
+    std::vector<lm_abort_case> aborts;
     int n_attn = 0, n_recr = 0, n_layer = 0;
     for (int streamed = 0; streamed < 2; ++streamed) {
         llama_model_params mp = llama_model_default_params();
@@ -433,6 +496,14 @@ static int layer_major_fixture(const char * gguf, const char * pgrn, bool gpu) {
             if (n.lm_decodes != 0 || l.lm_decodes != 1) throw std::runtime_error("layer-major path did not run exactly once");
             if ((int) l.lm_passes != n_layer - 1) throw std::runtime_error("unexpected number of layer passes");
         }
+        // cancellation: before the first graph, mid pre-pass (layer 1, ubatch 2) and in the final pass
+        const int n_ub = (n_prompt + (int) n_ubatch - 1) / (int) n_ubatch;
+        for (int p = 0; p < 2; ++p) {
+            const lm_run & n = streamed ? str_n[p] : res_n[p];
+            for (int fire : { 0, n_ub + 2, n_ub * (n_layer - 1) + 1 }) {
+                lm_abort_test(ctx.get(), model.get(), n_prompt, prefixes[p], fire, n, aborts);
+            }
+        }
     }
     struct check { std::string what; bool ok; };
     std::vector<check> checks;
@@ -459,6 +530,12 @@ static int layer_major_fixture(const char * gguf, const char * pgrn, bool gpu) {
     for (const auto & c : checks) {
         if (!c.ok) { std::fprintf(stderr, "PGR_LM_CHECK_FAIL: %s\n", c.what.c_str()); ok = false; }
     }
+    bool abort_ok = !aborts.empty();
+    for (const auto & c : aborts) {
+        if (!c.ok) { std::fprintf(stderr, "PGR_LM_ABORT_FAIL: %s\n", c.what.c_str()); abort_ok = false; }
+    }
+    std::printf("PGR_LM_ABORT_%s checks=%zu\n", abort_ok ? "OK" : "FAIL", aborts.size());
+    ok = ok && abort_ok;
     std::printf("PGR_MODEL_PARITY_OK mode=layer_major device=%s layers=%d attn=%d recr=%d prompt=%d ubatch=%u prefixes=0,5 "
                 "checks=%zu max_abs=%.9g max_abs_follow=%.9g resident_vs_streamed=%.9g staged_normal=%llu staged_lm=%llu "
                 "held_skips=%llu bitwise=%s\n",

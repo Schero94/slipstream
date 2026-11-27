@@ -103,6 +103,7 @@ def main() -> int:
             lm_parity = run([str(args.driver), str(q35_gguf), str(q35_pgrn), *lm_args], cwd=args.repo_root)
             if (
                 "PGR_LM_REWIND_OK" not in lm_parity.stdout
+                or "PGR_LM_ABORT_OK" not in lm_parity.stdout
                 or "mode=layer_major" not in lm_parity.stdout
                 or f"device={expected_device}" not in lm_parity.stdout
                 or "bitwise=yes" not in lm_parity.stdout

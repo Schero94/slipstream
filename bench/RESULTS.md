@@ -3726,3 +3726,50 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   uses ub 2048 with layer-major. App default (no layer-major, ub 4096) 183.2 s → ~154 s (−16 %);
   vs 0.4.0's default (ub 2048) ~235 s: −35 %. The 134 s figure is the bare server without -fa
   on / prompt cache / checkpoints.
+
+## Cancellable layer-major prefill + 16 GB RAM check — KEEP (prerequisites for default-on) — 2026-11-28
+
+- Problem: a layer-major prefill is ONE llama_decode call for the whole prompt (~140 s for 39.5k
+  tokens @4 GiB) and llama-server set no abort callback, so a closed client / cancel could not stop it.
+- Engine: new `llama_set_layer_major_abort_callback()` — a host-side check polled before every
+  (layer, ubatch) step of the layer-major pre-passes and every ubatch of the final pass; the regular
+  `abort_callback` is also checked there. It is deliberately NOT forwarded to the ggml backends:
+  with a backend abort callback the Metal backend stops committing command buffers >= 2 in
+  `encode_async` (ggml-metal-context.m), so wiring the server through `llama_set_abort_callback`
+  would change the normal decode path. Abort → `lm_fail` → `lm_rewind`, ret 2; the sequence is
+  dropped (recurrent state cannot be trimmed), except when nothing ran yet (memory then exactly as
+  before). The normal path is unchanged (never calls the new callback).
+- Server: while a decode is yielded, a CANCEL task whose target is the only task in the running
+  batch raises an atomic flag the callback reads (the task is still declined and handled after the
+  decode); ret 2 then takes the existing "clear slot prompt state" path.
+- Test (CI, test-peregrine-model --layer-major, CPU + Metal, resident + streamed, prefix 0 and 5):
+  abort before step 0 / mid pre-pass (layer 1, ubatch 2) / in the final pass → ret 2, fired once,
+  memory kept (step 0) or seq dropped, and the next layer-major decode equals the uninterrupted
+  normal run bitwise (prompt logits + llama_state_seq). `PGR_LM_ABORT_OK` required by the e2e test.
+  ctest -R peregrine 14/14 (abort checks extend the existing e2e test) — binary 23:48:56 > newest source 23:47:22. engine_sync
+  --verify PASS (exit 0).
+- Real run (bench/fetchwall/lm_abort.sh, e4 flags, LM=1 -b 40960 -ub 2048, 4 GiB, --cache-ram 2048,
+  Qwen3.6-35B-A3B Q4 from ~/Modelle): 39.5k prompt via /completion, curl killed after 20 s →
+  server "cancel task" 1.19.525 → engine "aborted at layer 7/40, ubatch 10" 1.19.587 →
+  "aborted 0.062 s after the cancel of its task"; end-to-end kill → abort line seen 0.32 s.
+  Short request before / after: same output hash 5dd272b4f316 ("Paris"), 1.8 s / 0.4 s.
+  Peak RSS 9333 MB, swap Δ 0 MB.
+- No-cancel parity on the real model: the concurrent E4 run's layer-major arm (20261127-234904,
+  started on this binary) produced S1 a9f8c4863784 / S2 c4062b92a557 — identical to the default arm
+  (older binary, 20261127-234347).
+- 16 GB check (memprobe, llama-server -lv 4, 4 GiB cache, --cache-ram 1024, scratch 562 MiB in all):
+
+  | config | MTL0 compute | CPU compute | lm_resid | sum |
+  |---|---|---|---|---|
+  | ctx 16384, normal -b 4096 -ub 4096 (app today) | 864 MiB | 256 MiB | — | 1120 MiB |
+  | ctx 16384, layer-major -b 16384 -ub 2048 | 432 MiB | 128 MiB | 128 MiB | 688 MiB |
+  | ctx 40960, normal -b 4096 -ub 4096 | 1056 MiB | 448 MiB | — | 1504 MiB |
+  | ctx 40960, layer-major -b 40960 -ub 2048 | 528 MiB | 224 MiB | 320 MiB | 1072 MiB |
+
+  Layer-major needs ~430 MiB LESS than today's streamed default (the 2048 ubatch halves the compute
+  buffers, more than the residual rows add); idle RSS identical (8403 vs 8404 MB @16k). computeReco
+  caps ctx at 16384 on < 20 GiB total and already reserves 1 GiB for the 4096 prefill buffer;
+  lm_resid_alloc also refuses the buffer if it does not fit next to the PGRN headroom. Verdict: no
+  lower -b / PGRN_LAYER_MAJOR_MAX_TOKENS cap needed on < 24 GB; app unchanged. Caveat: whole-run
+  peak RSS in the 36 GB e4 regime is mixed (E4: LM 10471 vs default 10226 MB; earlier gate: 9207
+  vs 9720 MB) — prompt cache / checkpoint noise, within the 1 GiB reserve; not measured on a 16 GB Mac.

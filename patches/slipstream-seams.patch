@@ -1713,7 +1713,7 @@ index 900aef614..e9a3990c7 100644
          self.add_bool(Keys.LLM.NORM_BEFORE_RESIDUAL.format(arch=self.arch), value)
  
 diff --git a/include/llama.h b/include/llama.h
-index 9cc17a82b..46f9066dd 100644
+index 9cc17a82b..2c1b3c7bc 100644
 --- a/include/llama.h
 +++ b/include/llama.h
 @@ -358,6 +358,20 @@ extern "C" {
@@ -1755,7 +1755,22 @@ index 9cc17a82b..46f9066dd 100644
      // Get the model's RoPE frequency scaling factor
      LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
  
-@@ -1580,6 +1598,16 @@ extern "C" {
+@@ -1137,6 +1155,14 @@ extern "C" {
+     // Set abort callback
+     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
+ 
++    // Slipstream: host-side abort check for the layer-major prefill (env PGRN_LAYER_MAJOR=1) only.
++    // Polled on the host before every (layer, ubatch) step of a layer-major decode call, so a long prompt that is
++    // decoded in ONE call can still be stopped. Unlike llama_set_abort_callback it is NOT forwarded to the ggml
++    // backends (the Metal backend changes its command-buffer submission when a backend abort callback is set), and
++    // the normal decode path never calls it. When it returns true, llama_decode returns 2; the sequence's memory is
++    // dropped unless no layer had run yet (then the memory is exactly as before the call).
++    LLAMA_API void llama_set_layer_major_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
++
+     // Wait until all computations are finished
+     // This is automatically done when using one of the functions below to obtain the computation results
+     // and is not necessary to call it explicitly in most cases
+@@ -1580,6 +1606,16 @@ extern "C" {
                 const llama_token * trigger_tokens,
                              size_t num_trigger_tokens);
  
@@ -1772,7 +1787,7 @@ index 9cc17a82b..46f9066dd 100644
  
      /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
      LLAMA_API struct llama_sampler * llama_sampler_init_penalties(
-@@ -1718,6 +1746,32 @@ extern "C" {
+@@ -1718,6 +1754,32 @@ extern "C" {
          int32_t n_reused;   // number of times a ggml compute graph had been reused
          int32_t n_reallocs_same; // number of graph reallocations during inference with an unchanged graph size
          int32_t n_reallocs_diff; // number of graph reallocations during inference with a changed graph size
@@ -1906,7 +1921,7 @@ index 74ca69fe7..8d297c669 100644
      LLM_TENSOR_CLS_OUT,
      LLM_TENSOR_CLS_NORM,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 93f8a72ed..6b1e30341 100644
+index 93f8a72ed..3302d8211 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -13,6 +13,8 @@
@@ -1964,7 +1979,26 @@ index 93f8a72ed..6b1e30341 100644
  }
  
  llama_context::~llama_context() {
-@@ -1612,6 +1646,175 @@ bool llama_context::h_nextn_dev_alloc() {
+@@ -1405,6 +1439,18 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
+     }
+ }
+ 
++void llama_context::set_layer_major_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data) {
++    lm_abort_callback      = abort_callback;
++    lm_abort_callback_data = abort_callback_data;
++}
++
++bool llama_context::lm_abort_requested() const {
++    // the layer-major-only host check first (the server's cancel flag), then the regular abort callback, which
++    // the normal path only sees inside the backends
++    return (lm_abort_callback != nullptr && lm_abort_callback(lm_abort_callback_data)) ||
++           (abort_callback    != nullptr && abort_callback(abort_callback_data));
++}
++
+ void llama_context::set_embeddings(bool value) {
+     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+ 
+@@ -1612,6 +1658,185 @@ bool llama_context::h_nextn_dev_alloc() {
      return true;
  }
  
@@ -2087,11 +2121,12 @@ index 93f8a72ed..6b1e30341 100644
 +    return nullptr;
 +}
 +
-+int llama_context::lm_fail(llama_memory_context_i * mctx, ggml_status status) {
++int llama_context::lm_fail(llama_memory_context_i * mctx, ggml_status status, bool touched) {
 +    // layers already processed parts of this batch while the metadata may say otherwise, and recurrent
-+    // state cannot be removed partially: drop the whole sequence
++    // state cannot be removed partially: drop the whole sequence. Nothing ran yet (an abort before the first
++    // graph): the rewind alone restores the memory exactly as it was before this call.
 +    mctx->lm_rewind();
-+    if (lm_seq >= 0) {
++    if (touched && lm_seq >= 0) {
 +        LLAMA_LOG_WARN("%s: layer-major decode failed, removing all memory of seq_id = %d\n", __func__, lm_seq);
 +        memory->seq_rm(lm_seq, -1, -1);
 +    }
@@ -2122,7 +2157,16 @@ index 93f8a72ed..6b1e30341 100644
 +        if (lm_hold) {
 +            model.pgrn_scratch_hold(il);   // a new layer epoch: clear the held bitmap
 +        }
++        uint32_t iu = 0;
 +        do {
++            // cancellation point: a layer-major prefill is ONE decode call for the whole prompt (minutes for a long
++            // one), so poll the host-side abort check before every (layer, ubatch) step
++            if (lm_abort_requested()) {
++                LLAMA_LOG_WARN("%s: layer-major prefill aborted at layer %d/%d, ubatch %u (%u layer passes done)\n",
++                        __func__, il, n_layer, iu, (unsigned) il);
++                return lm_fail(mctx, GGML_STATUS_ABORTED, il > 0 || iu > 0);
++            }
++            ++iu;
 +            const auto & ubatch = mctx->get_ubatch();
 +            n_outputs = 0;   // pre-pass graphs have no output head
 +            ggml_status status;
@@ -2140,7 +2184,7 @@ index 93f8a72ed..6b1e30341 100644
  bool llama_context::set_embeddings_nextn_dev(bool value) {
      LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
  
-@@ -1847,7 +2050,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+@@ -1847,7 +2072,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
          res->reset();
  
          ggml_backend_sched_reset(sched.get());
@@ -2153,7 +2197,7 @@ index 93f8a72ed..6b1e30341 100644
  
          //const auto t_start_us = ggml_time_us();
  
-@@ -1880,7 +2087,22 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+@@ -1880,7 +2109,22 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
          //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
      }
  
@@ -2176,7 +2220,7 @@ index 93f8a72ed..6b1e30341 100644
      if (status != GGML_STATUS_SUCCESS) {
          LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
          ret = status;
-@@ -2350,6 +2572,29 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2350,6 +2594,29 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
          ggml_backend_event_wait(h_nextn_backend, ev_h_nextn_read.get());
      }
  
@@ -2206,7 +2250,17 @@ index 93f8a72ed..6b1e30341 100644
      do {
          const auto & ubatch = mctx->get_ubatch();
  
-@@ -2373,6 +2618,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2369,10 +2636,20 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+             n_outputs = n_outputs_new;
+         }
+ 
++        if (lm_active && lm_abort_requested()) {
++            // cancellation point of the final layer-major pass (last layer + output head)
++            LLAMA_LOG_WARN("%s: layer-major prefill aborted in the final pass\n", __func__);
++            return lm_fail(mctx.get(), GGML_STATUS_ABORTED);
++        }
++
+         ggml_status status;
  
          const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
  
@@ -2217,7 +2271,7 @@ index 93f8a72ed..6b1e30341 100644
          if (!res) {
              // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
              llama_pos pos_min[LLAMA_MAX_SEQ];
-@@ -2537,6 +2786,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+@@ -2537,6 +2814,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
          n_tokens_prev  += ubatch.n_tokens;
      } while (mctx->next());
  
@@ -2228,7 +2282,7 @@ index 93f8a72ed..6b1e30341 100644
      if (layer_inp_dev && ev_layer_inp_written) {
          ggml_backend_event_record(ev_layer_inp_written.get(), layer_inp_backend);
      }
-@@ -3076,6 +3329,9 @@ llm_graph_params llama_context::graph_params(
+@@ -3076,6 +3357,9 @@ llm_graph_params llama_context::graph_params(
          /*.layer_inp_src =*/ supports_embd_row() ? cparams.ctx_other->get_layer_inp_dev() : nullptr,
          /*.h_nextn_dev   =*/ cparams.embeddings_nextn_dev ? h_nextn_dev : nullptr,
          /*.h_nextn_src   =*/ supports_state_row() ? cparams.ctx_state_src->get_h_nextn_dev() : nullptr,
@@ -2238,7 +2292,7 @@ index 93f8a72ed..6b1e30341 100644
          /*.samplers    =*/ sampling.samplers,
          /*.n_outputs   =*/ n_outputs,
          /*.cb          =*/ graph_get_cb(),
-@@ -3231,6 +3487,177 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -3231,6 +3515,177 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
      return true;
  }
  
@@ -2416,7 +2470,7 @@ index 93f8a72ed..6b1e30341 100644
  llm_graph_cb llama_context::graph_get_cb() const {
      return [&](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
          if (il >= 0) {
-@@ -4116,6 +4543,30 @@ llama_perf_context_data llama_context::perf_get_data() const {
+@@ -4116,6 +4571,30 @@ llama_perf_context_data llama_context::perf_get_data() const {
      data.n_p_eval    = std::max(1, n_p_eval);
      data.n_eval      = std::max(1, n_eval);
      data.n_reused    = std::max(0, n_reused);
@@ -2447,7 +2501,7 @@ index 93f8a72ed..6b1e30341 100644
  
      data.n_reallocs_same = n_reallocs_same;
      data.n_reallocs_diff = n_reallocs_diff;
-@@ -4130,6 +4581,11 @@ void llama_context::perf_reset() {
+@@ -4130,6 +4609,11 @@ void llama_context::perf_reset() {
      n_reused    = 0;
  
      // note: the reallocation counters are not reset - they track the lifetime totals for this context
@@ -2459,7 +2513,7 @@ index 93f8a72ed..6b1e30341 100644
  }
  
  llama_memory_breakdown llama_context::memory_breakdown() const {
-@@ -4588,6 +5044,22 @@ llama_context * llama_init_from_model(
+@@ -4588,6 +5072,22 @@ llama_context * llama_init_from_model(
              LLAMA_LOG_INFO("%s: n_ctx_train adjusted to %u\n", __func__, model->hparams.n_ctx_train);
          }
  
@@ -2482,7 +2536,18 @@ index 93f8a72ed..6b1e30341 100644
          return ctx;
      } catch (const std::exception & err) {
          LLAMA_LOG_ERROR("%s: failed to initialize the context: %s\n", __func__, err.what());
-@@ -5120,6 +5592,37 @@ void llama_perf_context_print(const llama_context * ctx) {
+@@ -4659,6 +5159,10 @@ void llama_set_abort_callback(llama_context * ctx, bool (*abort_callback)(void *
+     ctx->set_abort_callback(abort_callback, abort_callback_data);
+ }
+ 
++void llama_set_layer_major_abort_callback(llama_context * ctx, bool (*abort_callback)(void * data), void * abort_callback_data) {
++    ctx->set_layer_major_abort_callback(abort_callback, abort_callback_data);
++}
++
+ void llama_set_embeddings(llama_context * ctx, bool embeddings) {
+     ctx->set_embeddings(embeddings);
+ }
+@@ -5120,6 +5624,37 @@ void llama_perf_context_print(const llama_context * ctx) {
      LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
      LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
      LLAMA_LOG_INFO("%s:   graph reallocs = %10d    / %5d        (same size) / (changed size)\n", __func__, data.n_reallocs_same, data.n_reallocs_diff);
@@ -2521,10 +2586,18 @@ index 93f8a72ed..6b1e30341 100644
  
  void llama_perf_context_reset(llama_context * ctx) {
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 3e3921c7d..656d1692c 100644
+index 3e3921c7d..a7dfea1a8 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -264,6 +264,15 @@ private:
+@@ -119,6 +119,7 @@ struct llama_context {
+     void set_n_threads(int32_t n_threads, int32_t n_threads_batch);
+ 
+     void set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
++    void set_layer_major_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
+ 
+     void set_embeddings (bool value);
+     void set_embeddings_nextn(bool value, bool masked);
+@@ -264,6 +265,16 @@ private:
      // (re)allocate the device buffer for cparams.embeddings_nextn_dev, false if it does not fit
      bool h_nextn_dev_alloc();
  
@@ -2534,13 +2607,14 @@ index 3e3921c7d..656d1692c 100644
 +    const char * lm_ineligible(const llama_batch_ext & batch_inp, llama_memory_context_i * mctx, bool has_embd_row,
 +                               bool has_state_row, bool write_h_nextn, bool has_samplers) const;
 +    int  decode_layer_major_prepasses(llama_memory_context_i * mctx);
-+    int  lm_fail(llama_memory_context_i * mctx, ggml_status status);
++    int  lm_fail(llama_memory_context_i * mctx, ggml_status status, bool touched = true);
++    bool lm_abort_requested() const;
 +    void lm_end();
 +
      ggml_backend_t backend_from_dev(ggml_backend_dev_t dev) const;
  
      //
-@@ -318,6 +327,8 @@ private:
+@@ -318,6 +329,8 @@ private:
  
      // ggml_backend_sched realloc callback, counts and traces the graph reallocations of this context
      static void sched_graph_realloc(ggml_backend_sched_t sched, ggml_cgraph * gf, bool backend_ids_changed, bool graph_size_changed, void * user_data);
@@ -2549,7 +2623,7 @@ index 3e3921c7d..656d1692c 100644
  
      // disable auto fused ops (Flash Attention, Gated Delta Net) whose op lands on a device
      // that differs from the layer it belongs to (usually due to missing backend support)
-@@ -338,6 +349,50 @@ private:
+@@ -338,6 +351,50 @@ private:
  
      llama_cparams cparams;
  
@@ -2599,6 +2673,15 @@ index 3e3921c7d..656d1692c 100644
 +
      llama_adapter_cvec_ptr  cvec;
      llama_adapter_loras_ptr loras;
+ 
+@@ -442,6 +499,8 @@ private:
+ 
+     ggml_abort_callback abort_callback      = nullptr;
+     void *              abort_callback_data = nullptr;
++    ggml_abort_callback lm_abort_callback      = nullptr;   // layer-major only, host side (never sent to backends)
++    void *              lm_abort_callback_data = nullptr;
+ 
+     std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
  
 diff --git a/src/llama-grammar.cpp b/src/llama-grammar.cpp
 index 21a018c8c..f9c60fa96 100644
@@ -10601,7 +10684,7 @@ index c1a0f4dca..ccbd60722 100644
      // note: must be signed - they are subtracted before the later ones are set
      int64_t t_start       = 0;
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 2f927d74f..2363cb12b 100644
+index 2f927d74f..caa65696c 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -6,6 +6,7 @@
@@ -10701,7 +10784,35 @@ index 2f927d74f..2363cb12b 100644
  
          SLT_INF(*this,
                  "  graph reallocs = %10d    / %5d        (same size) / (changed size)\n",
-@@ -1347,6 +1405,20 @@ private:
+@@ -1099,6 +1157,17 @@ private:
+ 
+     llama_context * ctx_tgt = nullptr;
+ 
++    // Slipstream: cancellable layer-major prefill. A layer-major prefill is ONE llama_decode call for the whole
++    // prompt; while it runs the queue worker declines tasks, but a CANCEL for the task being decoded raises this
++    // flag, which the layer-major abort check (llama_set_layer_major_abort_callback) polls between layer steps.
++    std::atomic<int>     decode_task_id{-1};      // the only task in the running decode batch, else -1
++    std::atomic<bool>    decode_cancelled{false};
++    std::atomic<int64_t> decode_cancel_us{0};      // when the cancel arrived (for the abort latency log)
++
++    static bool decode_abort_cb(void * data) {
++        return static_cast<server_context_impl *>(data)->decode_cancelled.load(std::memory_order_relaxed);
++    }
++
+     server_batch batch;
+ 
+     llama_model   * model_dft = nullptr;
+@@ -1338,6 +1407,9 @@ private:
+             return false;
+         }
+ 
++        // host-side only: never reaches the backends, and only the layer-major prefill polls it
++        llama_set_layer_major_abort_callback(ctx_tgt, decode_abort_cb, this);
++
+         vocab = llama_model_get_vocab(model_tgt);
+ 
+         try {
+@@ -1347,6 +1419,20 @@ private:
              return false;
          }
  
@@ -10722,7 +10833,7 @@ index 2f927d74f..2363cb12b 100644
          n_ctx = llama_n_ctx(ctx_tgt);
  
          add_bos_token = llama_vocab_get_add_bos(vocab);
-@@ -1358,6 +1430,7 @@ private:
+@@ -1358,6 +1444,7 @@ private:
  
              {
                  common_params params_dft = common_base_params_to_speculative(params_base);
@@ -10730,7 +10841,7 @@ index 2f927d74f..2363cb12b 100644
  
                  // progress callback
                  params_dft.load_progress_callback           = load_progress_callback;
-@@ -1519,7 +1592,10 @@ private:
+@@ -1519,7 +1606,10 @@ private:
                  spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
              } catch (const std::exception & e) {
                  SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
@@ -10742,7 +10853,7 @@ index 2f927d74f..2363cb12b 100644
                      return false;
                  }
              }
-@@ -1551,6 +1627,8 @@ private:
+@@ -1551,6 +1641,8 @@ private:
              slot.mem.init(ctx_tgt, ctx_dft);
              slot.spec    = spec.get();
              slot.n_ctx   = n_ctx_slot();
@@ -10751,7 +10862,7 @@ index 2f927d74f..2363cb12b 100644
  
              slot.mctx                   = mctx;
              slot.prompt.tokens.has_mtmd = mctx != nullptr;
-@@ -2387,6 +2465,8 @@ private:
+@@ -2387,6 +2479,8 @@ private:
      void send_final_response(server_slot & slot) {
          auto res = std::make_unique<server_task_result_cmpl_final>();
  
@@ -10760,7 +10871,23 @@ index 2f927d74f..2363cb12b 100644
          res->id      = slot.task->id;
          res->id_slot = slot.id;
  
-@@ -3896,6 +3976,45 @@ private:
+@@ -2980,6 +3074,15 @@ private:
+     // returns false to decline the task, it is offered again after the decode is done
+     bool process_single_task(server_task && task, bool is_yielding) {
+         // while yielding, an encode / decode is running and only reading the server state is safe
++        if (is_yielding && task.type == SERVER_TASK_TYPE_CANCEL && task.id_target >= 0 &&
++                task.id_target == decode_task_id.load()) {
++            // the running decode belongs only to this task: let a layer-major prefill stop early. The task is
++            // still declined; it is handled again after the decode returns.
++            if (!decode_cancelled.exchange(true)) {
++                decode_cancel_us.store(ggml_time_us());
++                SRV_INF("cancel of id_task = %d during its decode: requesting a layer-major abort\n", task.id_target);
++            }
++        }
+         if (is_yielding && task.type != SERVER_TASK_TYPE_METRICS && task.type != SERVER_TASK_TYPE_SLOT_GET) {
+             SRV_DBG("decoding, decline task, id_task = %d\n", task.id);
+             return false;
+@@ -3896,6 +3999,45 @@ private:
              });
          }
  
@@ -10806,7 +10933,7 @@ index 2f927d74f..2363cb12b 100644
          // make checkpoints if needed
          iterate(drafting, [&](server_slot & slot) {
              auto & draft = slot.spec_draft;
-@@ -4651,6 +4770,35 @@ private:
+@@ -4651,6 +4793,35 @@ private:
              }
          }
  
@@ -10842,18 +10969,41 @@ index 2f927d74f..2363cb12b 100644
          bool has_output = false;
          for (int i = off; i < off + batch.view.size(); ++i) {
              has_output |= batch.tokens[i].output;
-@@ -4659,6 +4807,7 @@ private:
+@@ -4659,12 +4830,46 @@ private:
          // yield to the queue, so we can still handle metrics tasks while decoding
          // note: the sync is done here too, so that the wait is also covered by the yield
          int ret = 0;
 +        const uint64_t lm_decodes_before = llama_perf_context(ctx_tgt).pgrn_lm_decodes;
++        {
++            // the cancel target of this decode: only when every token belongs to one slot's task
++            int id_task = -1;
++            for (int i = off; i < off + batch.view.size(); ++i) {
++                const int32_t id_slot = batch.tokens[i].id_slot;
++                const int     id      = (id_slot >= 0 && id_slot < (int32_t) slots.size() && slots[id_slot].task)
++                                      ? slots[id_slot].task->id : -1;
++                if (i == off) {
++                    id_task = id;
++                } else if (id != id_task) {
++                    id_task = -1;
++                    break;
++                }
++            }
++            decode_cancelled.store(false);
++            decode_task_id.store(id_task);
++        }
          queue_tasks.yield_to_queue([&]() {
              ret = llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch.view.get());
              if (ret == 0 && has_output) {
-@@ -4666,6 +4815,16 @@ private:
+                 llama_synchronize(ctx_tgt);
              }
          });
- 
++        decode_task_id.store(-1);
++        if (ret == 2 && decode_cancelled.load()) {
++            SRV_WRN("layer-major prefill aborted %.3f s after the cancel of its task\n",
++                    (ggml_time_us() - decode_cancel_us.load()) / 1e6);
++        }
++        decode_cancelled.store(false);
++
 +        if (routing != nullptr) {
 +            if (ret == 0) {
 +                routing->commit_batch();
@@ -10863,26 +11013,24 @@ index 2f927d74f..2363cb12b 100644
 +        }
 +
 +
-+
+ 
          if (ret != 0) {
              {
-                 std::string err;
-@@ -4685,7 +4844,13 @@ private:
+@@ -4685,7 +4890,12 @@ private:
                      err = "Compute error.";
                  }
  
 -                // TODO: handle ret == 2 (abort) when we start aborting
 +                if (ret == 2) {
-+                    // Slipstream: an aborted decode. A layer-major prefill drops the sequence's whole memory
-+                    // (llama_context::lm_fail), so the slot's cached prompt is gone: clear it, do not retry.
-+                    // Note: the server sets no abort callback today, so a running decode call (a layer-major
-+                    // prefill is one call for the whole prompt) is not interruptible; this is the safe path.
++                    // Slipstream: an aborted decode. The server only aborts a layer-major prefill whose task was
++                    // cancelled (client gone / stop); it drops the sequence's memory (llama_context::lm_fail), so
++                    // the slot's cached prompt is gone: clear it below, do not retry.
 +                    err = "Decode aborted.";
 +                }
  
                  if (!err.empty()) {
                      SRV_ERR("%s off = %d, n_batch = %d, ret = %d\n", err.c_str(), off, n_batch, ret);
-@@ -4717,6 +4882,15 @@ private:
+@@ -4717,6 +4927,15 @@ private:
          } else {
              // success, apply batch metrics
              metrics_post_decode(off, batch.view.size(), has_output);
