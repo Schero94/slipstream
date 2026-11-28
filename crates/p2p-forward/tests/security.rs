@@ -252,6 +252,8 @@ async fn binds_ipv6_loopback_too_and_refuses_if_taken() {
         identity,
         UseConfig {
             peer: r.share.dial_addr(),
+            trust: r.use_trust.clone(),
+            node: r.use_node.clone(),
             bind: format!("127.0.0.1:{port}").parse().unwrap(),
             paired: PairedConfig::default(),
             spare_stream: false,

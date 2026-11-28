@@ -4539,3 +4539,72 @@ Latency check (mock only, `N_TTFT=150 N_IDLE=40 N_PACED=3 bench/forward/run_m1.s
 fixes +13.3 / +13.6), after 1 s idle p95 **+14.4 ms** (paired +14.9; before +14.5 / +15.0), no-spare arm +26.4 / +29.3 ms
 (before +26.7 / +29.4); paced 512 × 25 ms decode event rate +0.22 % (N=3). Body SHA identical across all arms. → overhead unchanged; no real-engine run needed (transport path
 unchanged apart from per-request constant-time checks).
+
+## v0.6 M2 pairing + trust — SPAKE2 code pairing, trust store, trust gate, authenticated SealedStream — all M2 acceptance tests green — 2026-11-28
+
+Plan: docs/plans/2026-11-28-use-your-other-mac.md §2 / §8 / §9 M2. Code: `crates/p2p-crypto/src/pake.rs` (SPAKE2 + key
+confirmation), `crates/p2p-crypto/src/stream.rs` (`finish_authenticated`), `crates/p2p-forward/src/{trust,gate}.rs` (`PeerTrust`,
+share-side gate loop), `crates/p2p-forward/src/{worker,client,proto}.rs` (per-stream trust + revoke), `apps/p2p-node/src/trust.rs`
+(TrustStore, `NodeTrust`, `reset_identity`, `resolve_use_target`), `apps/p2p-node/src/pairing.rs` (`/slipstream/pair/1`, window,
+Unpair), `apps/p2p-node/src/main.rs` (CLI). Host M3 Pro 36 GB (Mac15,6), macOS 27.0.1, base 3dbbd0f + this change.
+
+Design (what was built):
+- **Pairing** (`/slipstream/pair/1`): SPAKE2 over the Ed25519 group (`spake2` 0.4, RustCrypto), idA = client PeerId bytes, idB = server
+  PeerId bytes, password = the 6 digits (OsRng, uniform 000000–999999). Messages `[u32 len][JSON]` ≤ 4 KiB: `Start{spake_a, x25519_a}` →
+  `Reply{spake_b, x25519_b, info_b*, confirm_b}` → `Finish{info_a*, confirm_a}` → `Done{ack*}` (* = ChaCha20-Poly1305 under a key derived
+  from K, one key per direction, each used once). `confirm = HMAC-SHA256(HKDF(K,"confirm"), "slipstream-pair-v1" ‖ role A/B ‖ PeerIdA ‖
+  PeerIdB ‖ X25519A ‖ X25519B ‖ name ‖ app_version ‖ may_start_model ‖ prev)`, length-prefixed fields, `prev` = B's tag inside A's tag;
+  verified with HMAC's constant-time `verify_slice`. The client verifies B before revealing its own tag. The server stores before `Done`.
+- **Window**: 5 min (injectable `Clock`), one session at a time, a session counts as an attempt once B sent `Reply` (aborted sessions
+  count too), 3 failed sessions or one success close it. While open, the gate admits untrusted peers as *guests* (only the pair protocol
+  serves them; openai/status re-check trust per stream); guests are disconnected ≤ 250 ms after the window closes.
+- **Trust store** `<data_dir>/trusted_macs.json`: `{body:{version,peers:[TrustedPeer…]}, mac}`, HMAC-SHA256 keyed by
+  HKDF-SHA256(node secret, salt "slipstream-trust-store-v1", info "trust-store"); written via temp file (0600, `create_new`) + fsync +
+  rename + dir fsync; read-modify-write from disk; a file that fails the MAC / parse / validation is treated as **empty** and sets
+  `pairings_reset` (never trusted). Running processes poll it every 250 ms (size + mtime ns + inode) and reload.
+- **Gate**: `ConnectionEstablished` → trusted kept, untrusted closed (unless guest); on every trust change + every 250 ms: lost trust →
+  best-effort `Unpair` (≤ 400 ms) then disconnect; every stream: `trusted_key(peer)` or dropped before any byte is read; an active request
+  whose peer loses trust is cancelled at once (`until_untrusted`, upstream dropped). Use side: dials only a PeerId pinned in the store
+  (`/p2p/<id>` from the entry; an address that pins another id is refused before dialing; QUIC TLS refuses an impostor at the address),
+  stops re-dialing a revoked peer, refuses streams for it.
+- **Authenticated SealedStream** (Noise-KK-like): `ikm = DH(e_i,e_r) ‖ DH(e_i,S_r) ‖ DH(S_i,e_r) ‖ DH(S_i,S_r)`, `salt = e_i ‖ e_r ‖ S_i ‖
+  S_r`, `info = "slipstream-stream-kk-v1" ‖ PeerIdI|PeerIdR|protocol`; every DH must be contributory. S = the node's X25519 `node.key`
+  (the same root the PeerId is derived from), pinned in the trust store at pairing. The forwarder (openai/status) and Unpair use only
+  this; the unauthenticated `finish` is kept for the M0 pipe reproduction (`forward-spike`).
+- **Revoke / reset**: `trust revoke <name|PeerId>` (another process) → running share/use drop the peer within one poll, send `Unpair`
+  (pair protocol, authenticated channel, one `Unpair` frame) → the other Mac removes us too. `reset-identity --confirm` writes a new
+  `node.key` (temp + rename) and deletes the trust file (intentional → no "reset" flag); without `--confirm` it refuses.
+- CLI: `pair --show-code [--listen --name --no-model-control]`, `pair --peer <multiaddr> --code <6 digits> [--name]`,
+  `trust list|revoke`, `reset-identity --confirm`; `share` refuses to start with no paired Mac, `use [--peer name|PeerId|multiaddr]`
+  takes the target from the store ("No paired Mac to use yet …" otherwise). `--allow-peer` is gone; `bench/forward/run_m1.sh` pairs first.
+
+| Acceptance (plan §7 / §9 M2) | Test | Result |
+|---|---|---|
+| correct code pairs both Macs, entries correct (PeerId, static key, name, role, version, capability, pinned addr), window closes after one success | `pairing::correct_code_pairs_both_macs_once` | PASS (same code from a third Mac refused, nothing stored) |
+| wrong code 3× closes the window | `pairing::wrong_code_three_times_closes_the_window` | PASS (each attempt `WrongCode`; afterwards the right code is refused; both stores empty) |
+| MITM relay with a different PeerId fails key confirmation | `pairing::mitm_relay_with_a_different_peer_id_fails_key_confirmation` | PASS (relay pipes the pair stream between A↔M and M↔B with the right code: A fails at B's tag, nothing stored, B counts 1 failure; the real MacBook then pairs) |
+| replayed confirmation rejected | `pairing::replayed_confirmation_is_rejected` | PASS (session 1's valid Finish replayed in session 2 → `wrong_code`; fresh session 3, same code → paired); unit: cross-session replay + reflection |
+| code expires after 5 min (injectable clock) | `pairing::code_expires_after_five_minutes` | PASS (open at 4:59, expired at 5:01, gate stops admitting guests, pairing refused) |
+| unpaired peer disconnected before any stream | `trust_gate::unpaired_peer_disconnected_before_any_stream` | PASS (`connections_rejected ≥ 1`, `streams_accepted = 0`, upstream untouched; with a window open: guest kept, forwarder stream refused per stream, guest closed after `cancel()`) |
+| revoked peer mid-stream aborted ≤ 1 s | `trust_gate::revoked_peer_mid_stream_is_aborted_within_1s` | PASS: revoke from a second store instance (= the CLI process) during a 50 ev/s SSE stream → llama-server connection dropped after **162 ms**, editor stream ended after **161 ms** (≤ one 250 ms file poll); `Unpair` delivered (MacBook removed the big Mac), connection closed, new requests 502 with nothing upstream |
+| dial with wrong pinned PeerId refused | `trust_gate::dial_with_wrong_pinned_peer_id_is_refused` | PASS (impostor at the stored address: `Dial error: Unexpected peer ID …`; address pinning another id / unpaired PeerId refused before dialing; forwarder refuses an untrusted PeerId with PermissionDenied) |
+| tampered trust file → empty + flag | `trust_gate::tampered_trust_file_is_empty_with_flag_and_fails_closed` + `trust::tests` | PASS (one changed byte while share runs → store empty + `pairings_reset` within 1 s, paired connection closed, requests refused; forged entry with a fake MAC never trusted; foreign node key → empty + flag) |
+| wrong static key cannot derive stream keys | `stream::tests::wrong_static_key_cannot_derive_stream_keys` | PASS (impostor initiator and impostor responder, both directions fail; auth/unauth never interoperate; low-order static/ephemeral → BadKey) |
+| CLI end to end | `paired_cli::pair_share_use_trust_revoke_end_to_end` | PASS (`pair --show-code` / `pair --peer --code` processes, `share`/`use` from the store, 403s unchanged, `trust revoke` on the big Mac while running → MacBook's store empty via Unpair, 502 after) |
+
+- **Pairing duration, loopback** (`pairing::pairing_duration_on_loopback`, debug build, in-process, client side = dial + QUIC/TLS +
+  stream open + SPAKE2 + confirmation + both stores written with fsync, N=10 fresh pairs): min 17.50 / **p50 20.76** / max 49.84 ms (first
+  pair includes warm-up). Full CLI client process incl. process start: 70.9 ms. Crypto alone (release): SPAKE2 122 µs per side.
+- **Handshake cost** (release, per side, per stream): unauthenticated 36.9 µs → authenticated (4 DH) 120.5 µs, +84 µs. Off the request
+  path for the editor because of the pre-opened spare stream.
+- **Forwarding overhead unchanged** (mock, `N_TTFT=150 N_IDLE=40 N_PACED=3 bench/forward/run_m1.sh` inside scripts/heavy.sh, shaped RTT
+  8 ms, paired peers + authenticated SealedStream, raw log `bench/forward/results/20261128-151421-m1.txt`): back-to-back TTFT overhead p95
+  **+13.25 ms** (paired p95 +13.38; M1 security fixes +13.2 / +13.4), after 1 s idle p95 **+14.46 ms** (paired +14.87; before +14.4 /
+  +14.9), no-spare +26.5 / +28.9 ms (before +26.4 / +29.3); paced 512 × 25 ms event rate +0.10 % (N=3); body SHA identical in all arms;
+  stream open p50 12.3 ms (= one shaped RTT, as before).
+- Tests: `cargo test --workspace` **273 passed** (was 246: p2p-crypto +10 (7 pake, 3 stream), p2p-forward +1, p2p-node lib +6,
+  `tests/pairing.rs` 6, `tests/trust_gate.rs` 4; `paired_cli.rs` rewritten, still 2), 0 warnings; `app/src-tauri` 108/108. The existing
+  loopback/security/cancel/peer-death tests run with paired peers (each side's `StaticTrust` holds the other's PeerId + static key, the
+  authenticated handshake on every stream). New tests 3/3 repeat runs green.
+- Not measured / open: real two-Mac pairing (Wi-Fi), `pair --show-code` and `share` cannot listen on the same UDP port at once
+  (headless: stop share while pairing; the app (M4) opens the window inside the running share via `NodeTrust::set_window`).

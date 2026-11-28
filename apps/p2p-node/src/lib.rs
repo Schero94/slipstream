@@ -3,8 +3,10 @@
 pub mod admission;
 pub mod config;
 pub mod mesh;
+pub mod pairing;
 pub mod runtime;
 pub mod spawn_guard;
+pub mod trust;
 pub mod wire;
 
 pub use admission::{AdmissionController, AdmissionPermit, AdmissionRejection};

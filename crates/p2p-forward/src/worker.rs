@@ -12,8 +12,13 @@
 //! and the first frame must arrive within 5 s, except for at most
 //! [`ShareLimits::idle_streams_per_peer`] idle (pre-`ReqHead`) streams per peer (the use
 //! side's pre-opened spare); `GET /props` and `GET /slots` are sanitized.
+//!
+//! Trust (M2): the swarm runs the trust gate ([`crate::gate`]); every accepted stream
+//! re-checks [`PeerTrust::trusted_key`] and uses the pinned static key for the
+//! authenticated SealedStream handshake; a request whose peer loses trust mid-stream is
+//! cancelled at once ([`crate::trust::until_untrusted`]).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -21,10 +26,9 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use libp2p::multiaddr::Protocol;
-use libp2p::swarm::SwarmEvent;
 use libp2p::{Multiaddr, PeerId};
-use p2p_crypto::StreamRole;
-use p2p_libp2p::paired::{build_paired_swarm, handle_ping, PairedConfig, PairedEvent};
+use p2p_crypto::{NodeKeypair, StreamRole};
+use p2p_libp2p::paired::{Control, PairedConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -39,6 +43,7 @@ use crate::proto::{
     BODY_CHUNK, MAX_BODY, OPENAI_PROTOCOL_V1, STATUS_PROTOCOL_V1,
 };
 use crate::status::{self, StatusRequest};
+use crate::trust::{until_untrusted, PeerTrust};
 use crate::unix_ms;
 
 pub const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -46,8 +51,6 @@ pub const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 pub const REQUEST_TOTAL_CAP: Duration = Duration::from_secs(2 * 60 * 60);
 /// Largest `/slots` / `/props` response buffered for sanitizing.
 const SLOTS_MAX: usize = 4 * 1024 * 1024;
-/// At most one `rejected_peer` log line per this interval (the rest are counted).
-const REJECT_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Share-side stream limits (M1 security review).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,13 +78,15 @@ impl Default for ShareLimits {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ShareConfig {
     pub listen: Multiaddr,
     /// The local llama-server (loopback only).
     pub upstream: SocketAddr,
-    /// M1 trust: PeerIds allowed to connect (M2 replaces this with the trust store).
-    pub allow: Vec<PeerId>,
+    /// M2 trust gate (the paired Macs from the trust store).
+    pub trust: Arc<dyn PeerTrust>,
+    /// This node's static X25519 key (`node.key`), for the authenticated SealedStream.
+    pub node: NodeKeypair,
     pub paired: PairedConfig,
     pub admission: AdmissionLimits,
     pub limits: ShareLimits,
@@ -122,6 +127,16 @@ pub struct ShareStats {
     pub body_too_large: u64,
     pub idle_streams_refused: u64,
     pub handshake_timeouts: u64,
+    /// Streams that passed the per-stream trust check (handshake started).
+    pub streams_accepted: u64,
+    /// Untrusted peers admitted while a pairing window was open.
+    pub pairing_guests: u64,
+    /// Guests disconnected after the pairing window closed.
+    pub guests_closed: u64,
+    /// Connections closed because the peer lost trust (revoke / unpair).
+    pub revoked_disconnects: u64,
+    /// Requests aborted because the peer lost trust mid-stream.
+    pub revoked_streams: u64,
 }
 
 pub type SharedShareStats = Arc<Mutex<ShareStats>>;
@@ -131,6 +146,7 @@ pub struct ShareHandle {
     pub listen_addr: Multiaddr,
     pub stats: SharedShareStats,
     pub admission: Admission,
+    control: Control,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -138,6 +154,11 @@ impl ShareHandle {
     /// Full pinned address for the use side: `<listen>/p2p/<peer_id>`.
     pub fn dial_addr(&self) -> Multiaddr {
         self.listen_addr.clone().with(Protocol::P2p(self.peer_id))
+    }
+
+    /// The swarm's stream control (to register more protocols, e.g. `/slipstream/pair/1`).
+    pub fn control(&self) -> Control {
+        self.control.clone()
     }
 }
 
@@ -155,6 +176,8 @@ fn other<E: std::fmt::Display>(e: E) -> io::Error {
 
 struct Ctx {
     local: PeerId,
+    node: NodeKeypair,
+    trust: Arc<dyn PeerTrust>,
     upstream: SocketAddr,
     name: String,
     admission: Admission,
@@ -198,13 +221,14 @@ impl Ctx {
     async fn open_and_first_frame(
         &self,
         peer: PeerId,
+        peer_key: [u8; 32],
         stream: libp2p::Stream,
         protocol: &libp2p::StreamProtocol,
     ) -> io::Result<Option<(crate::proto::Frame, ChannelReader, ChannelWriter)>> {
         let context = channel_context(&peer, &self.local, protocol);
         let (mut reader, writer) = match tokio::time::timeout(
             self.limits.handshake_timeout,
-            open_channel(stream, StreamRole::Responder, &context),
+            open_channel(stream, StreamRole::Responder, &context, &self.node, &peer_key),
         )
         .await
         {
@@ -274,34 +298,33 @@ pub async fn start_share(
     identity: libp2p::identity::Keypair,
     cfg: ShareConfig,
 ) -> io::Result<ShareHandle> {
-    if cfg.allow.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "share needs at least one --allow-peer (no open sharing)",
-        ));
-    }
     if !cfg.upstream.ip().is_loopback() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "upstream must be a loopback address",
         ));
     }
-    let allow: Arc<HashSet<PeerId>> = Arc::new(cfg.allow.iter().copied().collect());
-    let mut swarm = build_paired_swarm(identity, &cfg.paired);
-    let local = *swarm.local_peer_id();
-    swarm.listen_on(cfg.listen.clone()).map_err(other)?;
-    let listen_addr = loop {
-        if let SwarmEvent::NewListenAddr { address, .. } = swarm.select_next_some().await {
-            break address;
-        }
-    };
-    let mut control = swarm.behaviour().stream.new_control();
+    let stats = SharedShareStats::default();
+    let gated = crate::gate::start_gated_listener(
+        identity,
+        cfg.listen.clone(),
+        &cfg.paired,
+        cfg.trust.clone(),
+        stats.clone(),
+        "share",
+        cfg.verbose,
+    )
+    .await?;
+    let local = gated.peer_id;
+    let listen_addr = gated.listen_addr.clone();
+    let mut control = gated.control.clone();
     let mut openai = control.accept(OPENAI_PROTOCOL_V1).map_err(other)?;
     let mut status_in = control.accept(STATUS_PROTOCOL_V1).map_err(other)?;
-    let stats = SharedShareStats::default();
     let admission = Admission::new(cfg.admission);
     let ctx = Arc::new(Ctx {
         local,
+        node: cfg.node.clone(),
+        trust: cfg.trust.clone(),
         upstream: cfg.upstream,
         name: cfg.name.clone(),
         admission: admission.clone(),
@@ -311,74 +334,21 @@ pub async fn start_share(
         verbose: cfg.verbose,
     });
 
-    let swarm_stats = stats.clone();
-    let swarm_allow = allow.clone();
-    let verbose = cfg.verbose;
-    let swarm_task = tokio::spawn(async move {
-        let mut reject_log = LogRateLimit::new(REJECT_LOG_INTERVAL);
-        loop {
-            match swarm.select_next_some().await {
-                SwarmEvent::Behaviour(PairedEvent::Ping(event)) => {
-                    if let Some(rtt) = handle_ping(&mut swarm, &event) {
-                        if verbose {
-                            eprintln!("share ping peer={} rtt_us={}", event.peer, rtt.as_micros());
-                        }
-                    }
-                }
-                SwarmEvent::ConnectionEstablished {
-                    peer_id,
-                    connection_id,
-                    ..
-                } => {
-                    // Trust gate (M1: --allow-peer list): unknown peers are disconnected
-                    // before any stream of theirs is read.
-                    if !swarm_allow.contains(&peer_id) {
-                        swarm_stats.lock().unwrap().connections_rejected += 1;
-                        if let Some(suppressed) = reject_log.allow(Instant::now()) {
-                            eprintln!(
-                                "share event=rejected_peer peer={peer_id} suppressed_since_last={suppressed} unix_ms={}",
-                                unix_ms()
-                            );
-                        }
-                        swarm.close_connection(connection_id);
-                    } else {
-                        swarm_stats.lock().unwrap().connections_established += 1;
-                        eprintln!("share event=connected peer={peer_id} unix_ms={}", unix_ms());
-                    }
-                }
-                SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
-                    if swarm_allow.contains(&peer_id) {
-                        swarm_stats.lock().unwrap().connections_closed += 1;
-                        eprintln!(
-                            "share event=closed peer={peer_id} cause={cause:?} unix_ms={}",
-                            unix_ms()
-                        );
-                    }
-                }
-                SwarmEvent::IncomingConnectionError { error, .. } => {
-                    if verbose {
-                        eprintln!("share event=incoming_error error={error}");
-                    }
-                }
-                _ => {}
-            }
-        }
-    });
-
     let openai_ctx = ctx.clone();
-    let openai_allow = allow.clone();
     let openai_task = tokio::spawn(async move {
         // Spawn per stream immediately: libp2p-stream drops inbound streams silently if
         // the acceptor is not polling (M0 finding).
         while let Some((peer, stream)) = openai.next().await {
-            if !openai_allow.contains(&peer) {
+            // Per-stream trust check (a pairing guest or a just-revoked peer gets nothing).
+            let Some(key) = openai_ctx.trust.trusted_key(&peer) else {
                 openai_ctx.stats.lock().unwrap().streams_rejected += 1;
                 drop(stream);
                 continue;
-            }
+            };
+            openai_ctx.stats.lock().unwrap().streams_accepted += 1;
             let ctx = openai_ctx.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_openai(&ctx, peer, stream).await {
+                if let Err(e) = handle_openai(&ctx, peer, key, stream).await {
                     if ctx.verbose {
                         eprintln!("share event=stream_error peer={peer} error={e}");
                     }
@@ -388,40 +358,40 @@ pub async fn start_share(
     });
 
     let status_ctx = ctx.clone();
-    let status_allow = allow;
     let status_task = tokio::spawn(async move {
         while let Some((peer, stream)) = status_in.next().await {
-            if !status_allow.contains(&peer) {
+            let Some(key) = status_ctx.trust.trusted_key(&peer) else {
                 status_ctx.stats.lock().unwrap().streams_rejected += 1;
                 continue;
-            }
+            };
+            status_ctx.stats.lock().unwrap().streams_accepted += 1;
             let ctx = status_ctx.clone();
             tokio::spawn(async move {
-                let _ = handle_status(&ctx, peer, stream).await;
+                let _ = handle_status(&ctx, peer, key, stream).await;
             });
         }
     });
 
     eprintln!(
-        "share event=listening addr={} upstream={} allowed_peers={}",
+        "share event=listening addr={} upstream={}",
         listen_addr.clone().with(Protocol::P2p(local)),
         cfg.upstream,
-        cfg.allow.len()
     );
     Ok(ShareHandle {
         peer_id: local,
         listen_addr,
         stats,
         admission,
-        tasks: vec![swarm_task, openai_task, status_task],
+        control: gated.control.clone(),
+        tasks: vec![gated.task, openai_task, status_task],
     })
 }
 
-async fn handle_status(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::Result<()> {
+async fn handle_status(ctx: &Ctx, peer: PeerId, peer_key: [u8; 32], stream: libp2p::Stream) -> io::Result<()> {
     let context = channel_context(&peer, &ctx.local, &STATUS_PROTOCOL_V1);
     let (mut reader, mut writer) = tokio::time::timeout(
         ctx.limits.handshake_timeout,
-        open_channel(stream, StreamRole::Responder, &context),
+        open_channel(stream, StreamRole::Responder, &context, &ctx.node, &peer_key),
     )
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "stream handshake timed out"))??;
@@ -454,12 +424,12 @@ enum Outcome {
     UpstreamError,
 }
 
-async fn handle_openai(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::Result<()> {
+async fn handle_openai(ctx: &Ctx, peer: PeerId, peer_key: [u8; 32], stream: libp2p::Stream) -> io::Result<()> {
     // Handshake ≤ 5 s; the first frame ≤ 5 s unless this is one of the peer's (≤ 2) idle
     // streams — the use side keeps one pre-opened spare that may sit idle for hours
     // (connection liveness comes from QUIC keep-alive).
     let Some((first, reader, mut writer)) =
-        ctx.open_and_first_frame(peer, stream, &OPENAI_PROTOCOL_V1).await?
+        ctx.open_and_first_frame(peer, peer_key, stream, &OPENAI_PROTOCOL_V1).await?
     else {
         return Ok(());
     };
@@ -494,6 +464,20 @@ async fn handle_openai(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::R
     let cancel_at: Arc<Mutex<Option<Instant>>> = Arc::default();
     let (body_tx, body_rx) = mpsc::channel::<Vec<u8>>(8);
     let too_large = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Revoke takes effect mid-request: the peer losing trust cancels at once (the
+    // upstream connection is dropped; the gate closes the QUIC connection right after).
+    let revoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let revoke_task = tokio::spawn({
+        let trust = ctx.trust.clone();
+        let cancel = cancel.clone();
+        let revoked = revoked.clone();
+        async move {
+            until_untrusted(&*trust, peer, peer_key).await;
+            revoked.store(true, std::sync::atomic::Ordering::SeqCst);
+            cancel.cancel();
+        }
+    });
+    let _revoke_guard = AbortOnDrop(revoke_task);
     let reader_task = tokio::spawn(read_request_side(
         reader,
         body_tx,
@@ -578,6 +562,10 @@ async fn handle_openai(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::R
         return Ok(());
     }
     let mut s = ctx.stats.lock().unwrap();
+    if revoked.load(std::sync::atomic::Ordering::SeqCst) {
+        s.revoked_streams += 1;
+        eprintln!("share event=revoked_stream_aborted peer={peer} path={path} unix_ms={}", unix_ms());
+    }
     match outcome {
         Outcome::Completed => s.completed += 1,
         Outcome::Cancelled => {
@@ -596,6 +584,14 @@ async fn handle_openai(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::R
         Outcome::UpstreamError => s.upstream_errors += 1,
     }
     Ok(())
+}
+
+struct AbortOnDrop(JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 fn body_too_large() -> Vec<u8> {

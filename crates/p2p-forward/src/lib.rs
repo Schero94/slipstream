@@ -7,6 +7,9 @@
 //! - [`client`]: use side (editor on `127.0.0.1:<port>`), [`worker`]: share side
 //! - [`admission`]: per-peer 1 in flight + 2 queued, [`status`]: status RPC
 //! - [`mock_llama`]: deterministic llama-server mock for tests and `bench/forward/run_m1.sh`
+//! - M2: [`trust`] ([`PeerTrust`]: pinned static keys, pairing window, revoke signal) and
+//!   [`gate`] (share-side trust gate at `ConnectionEstablished` + on every trust change);
+//!   the trust store and pairing themselves live in `apps/p2p-node` (`trust.rs`, `pairing.rs`)
 //!
 //! [`node`] / [`pipe`] are the M0 raw byte pipe, kept only to reproduce the M0 numbers
 //! (`forward-spike`, `bench/forward/run_m0.sh`); it has no allowlist and is never used
@@ -18,6 +21,7 @@ pub mod admission;
 pub mod allowlist;
 pub mod bench;
 pub mod client;
+pub mod gate;
 pub mod http;
 pub mod mock;
 pub mod mock_llama;
@@ -25,9 +29,11 @@ pub mod node;
 pub mod pipe;
 pub mod proto;
 pub mod status;
+pub mod trust;
 pub mod worker;
 
 pub use client::{start_use, LocalLimits, UseConfig, UseHandle};
+pub use trust::{PeerTrust, StaticTrust, TrustEpoch};
 pub use worker::{parse_upstream, start_share, ShareConfig, ShareHandle, ShareLimits};
 
 pub(crate) fn unix_ms() -> u128 {
@@ -45,16 +51,22 @@ use p2p_crypto::{NodeKeypair, SigningIdentity};
 /// Ed25519 transport identity exactly like `apps/p2p-node/src/mesh.rs` does, so the
 /// PeerId equals the signed-Hello identity.
 pub fn load_or_create_identity(dir: &Path) -> std::io::Result<libp2p::identity::Keypair> {
+    Ok(transport_identity(&load_or_create_node(dir)?))
+}
+
+/// Load (or create, 0600) the node's static X25519 key `dir/node.key` — the root of
+/// both the libp2p identity ([`transport_identity`]) and the paired static key used by
+/// the authenticated SealedStream (v0.6 M2).
+pub fn load_or_create_node(dir: &Path) -> std::io::Result<NodeKeypair> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join("node.key");
-    let node = if path.exists() {
-        NodeKeypair::load(&path).map_err(std::io::Error::other)?
+    if path.exists() {
+        NodeKeypair::load(&path).map_err(std::io::Error::other)
     } else {
         let node = NodeKeypair::generate();
         node.save(&path).map_err(std::io::Error::other)?;
-        node
-    };
-    Ok(transport_identity(&node))
+        Ok(node)
+    }
 }
 
 pub fn transport_identity(node: &NodeKeypair) -> libp2p::identity::Keypair {

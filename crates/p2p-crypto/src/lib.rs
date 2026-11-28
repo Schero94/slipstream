@@ -26,6 +26,7 @@
 mod envelope;
 mod error;
 mod identity;
+mod pake;
 mod signing;
 mod stream;
 
@@ -36,8 +37,12 @@ pub use envelope::{
 };
 pub use error::CryptoError;
 pub use identity::{IdentityIoError, NodeKeypair};
+pub use pake::{
+    PairInfo, PairingCode, PakeError, PakeRole, PakeStart, SessionKey, Transcript, CODE_DIGITS,
+    MAX_CLAIM_LEN, PAIR_TRANSCRIPT_LABEL,
+};
 pub use signing::{verify_identity_signature, SigningError, SigningIdentity};
 pub use stream::{
     FrameHeader, FrameOpener, FrameSealer, SealedStream, StreamHandshake, StreamRole, FLAG_FIN,
-    FRAME_HEADER_LEN, MAX_FRAME_PLAINTEXT, STREAM_HKDF_INFO, TAG_LEN,
+    FRAME_HEADER_LEN, MAX_FRAME_PLAINTEXT, STREAM_HKDF_INFO, STREAM_KK_HKDF_INFO, TAG_LEN,
 };

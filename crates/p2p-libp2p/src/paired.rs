@@ -10,7 +10,8 @@
 //!   pinned peer connection stays up between editor requests (no handshake per request);
 //! - connection limits: 4 per peer, 32 total, 8 pending inbound.
 //!
-//! No trust gate yet (M2): callers must only dial pinned `/p2p/<id>` addresses.
+//! Trust gate (M2): `p2p_forward::gate` (share side) and `p2p_forward::client` (use side)
+//! close connections of untrusted peers; callers must only dial pinned `/p2p/<id>` addresses.
 
 use std::time::Duration;
 
@@ -25,6 +26,9 @@ pub const PIPE_PROTOCOL_V0: StreamProtocol = StreamProtocol::new("/slipstream/pi
 pub const OPENAI_PROTOCOL_V1: StreamProtocol = StreamProtocol::new("/slipstream/openai/1");
 /// M1 status RPC (`Status`, `StartModel`, `StopModel`).
 pub const STATUS_PROTOCOL_V1: StreamProtocol = StreamProtocol::new("/slipstream/status/1");
+/// M2 pairing (SPAKE2 code) and `Unpair`; the only protocol served to untrusted peers,
+/// and only while a pairing window is open.
+pub const PAIR_PROTOCOL_V1: StreamProtocol = StreamProtocol::new("/slipstream/pair/1");
 
 /// Transport tuning for paired connections.
 #[derive(Debug, Clone)]

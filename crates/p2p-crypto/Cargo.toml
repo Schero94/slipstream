@@ -20,6 +20,9 @@ rand = "0.8"
 hex = "0.4"
 zeroize = { version = "1", features = ["zeroize_derive"] }
 ed25519-dalek = { version = "2.2", features = ["zeroize"] }
+# v0.6 M2 pairing: SPAKE2 (Ed25519 group) + HMAC key confirmation.
+spake2 = "0.4"
+hmac = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

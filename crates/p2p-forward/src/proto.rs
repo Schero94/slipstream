@@ -2,8 +2,9 @@
 //!
 //! Protocols: [`OPENAI_PROTOCOL_V1`] (one QUIC stream per HTTP request) and
 //! [`STATUS_PROTOCOL_V1`] (status RPC). Every stream starts with the
-//! [`p2p_crypto::SealedStream`] handshake (32-byte ephemeral X25519 key each way, keys
-//! bound to both PeerIds + the protocol id); after that each sealed AEAD frame carries
+//! [`p2p_crypto::SealedStream`] handshake (32-byte ephemeral X25519 key each way; keys
+//! derived from ephemeral + the paired static X25519 keys (M2) and bound to both PeerIds +
+//! the protocol id); after that each sealed AEAD frame carries
 //! exactly one protocol frame:
 //!
 //! ```text
@@ -19,6 +20,7 @@
 //! | `Error` | share → use | JSON [`WireError`] before any `RespHead` |
 //! | `Cancel` | use → share | empty; the editor went away → drop the upstream connection |
 //! | `StatusReq` / `StatusResp` | status protocol | JSON |
+//! | `Unpair` | pair protocol (M2) | empty; sender removed the receiver from its trust store |
 //!
 //! A clean end of a direction is the sealed FIN frame; a stream that ends without FIN
 //! (reset, crash, peer loss) is an error and, on the share side, a cancel.
@@ -26,7 +28,7 @@
 use std::io;
 
 use p2p_crypto::{
-    CryptoError, FrameHeader, FrameOpener, FrameSealer, StreamHandshake, StreamRole,
+    CryptoError, FrameHeader, NodeKeypair, FrameOpener, FrameSealer, StreamHandshake, StreamRole,
     FRAME_HEADER_LEN, MAX_FRAME_PLAINTEXT,
 };
 use serde::{Deserialize, Serialize};
@@ -55,6 +57,8 @@ pub enum FrameType {
     Cancel = 6,
     StatusReq = 7,
     StatusResp = 8,
+    /// M2: "I removed you from my paired Macs" (pair protocol, authenticated channel).
+    Unpair = 9,
 }
 
 impl FrameType {
@@ -68,6 +72,7 @@ impl FrameType {
             6 => Self::Cancel,
             7 => Self::StatusReq,
             8 => Self::StatusResp,
+            9 => Self::Unpair,
             _ => return None,
         })
     }
@@ -322,12 +327,18 @@ pub fn channel_context(
     format!("{initiator}|{responder}|{protocol}").into_bytes()
 }
 
-/// Run the SealedStream handshake on a fresh libp2p stream and split it into a frame
-/// reader and writer. No plaintext fallback: any handshake failure is an error.
+/// Run the authenticated SealedStream handshake (v0.6 M2: ephemeral + paired static
+/// X25519 keys, [`StreamHandshake::finish_authenticated`]) on a fresh libp2p stream and
+/// split it into a frame reader and writer. `local` = this node's static key,
+/// `peer_static` = the peer's static key pinned in the trust store. No plaintext and no
+/// unauthenticated fallback: a peer without the pinned static secret derives other keys,
+/// so its first frame fails.
 pub async fn open_channel(
     stream: libp2p::Stream,
     role: StreamRole,
     context: &[u8],
+    local: &NodeKeypair,
+    peer_static: &[u8; 32],
 ) -> io::Result<(ChannelReader, ChannelWriter)> {
     let (mut r, mut w) = tokio::io::split(stream.compat());
     let hs = StreamHandshake::new();
@@ -335,7 +346,9 @@ pub async fn open_channel(
     w.flush().await?;
     let mut peer = [0u8; 32];
     r.read_exact(&mut peer).await?;
-    let sealed = hs.finish(&peer, role, context).map_err(crypto_io)?;
+    let sealed = hs
+        .finish_authenticated(&peer, role, context, local, peer_static)
+        .map_err(crypto_io)?;
     Ok((FrameReader::new(r, sealed.rx), FrameWriter::new(w, sealed.tx)))
 }
 
@@ -354,6 +367,7 @@ mod tests {
             FrameType::Cancel,
             FrameType::StatusReq,
             FrameType::StatusResp,
+            FrameType::Unpair,
         ] {
             let mut out = Vec::new();
             encode(kind, b"payload", &mut out).unwrap();
@@ -363,7 +377,7 @@ mod tests {
             assert_eq!(decode(&empty).unwrap().payload, b"");
         }
         assert_eq!(decode(&[1, 0, 0]), Err(ProtoError::Short));
-        assert_eq!(decode(&[9, 0, 0, 0, 0]), Err(ProtoError::UnknownType(9)));
+        assert_eq!(decode(&[10, 0, 0, 0, 0]), Err(ProtoError::UnknownType(10)));
         assert_eq!(decode(&[0, 0, 0, 0, 0]), Err(ProtoError::UnknownType(0)));
         assert!(matches!(
             decode(&[2, 0, 0, 0, 2, b'x']),

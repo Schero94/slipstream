@@ -11,9 +11,25 @@
 //! (initiator→responder, responder→initiator). `context` should bind the transport
 //! identities (e.g. both PeerIds and the protocol name); a mismatch makes every frame fail.
 //!
-//! The ephemeral DH alone is **unauthenticated**: peer authentication comes from the
-//! QUIC TLS layer (pinned PeerIds) plus `context` binding. M2 can mix in the paired
-//! static X25519 keys from the trust store.
+//! The ephemeral DH alone ([`StreamHandshake::finish`]) is **unauthenticated**: peer
+//! authentication comes only from the QUIC TLS layer (pinned PeerIds) plus `context`
+//! binding. It is kept for the M0 raw-pipe reproduction.
+//!
+//! # Authenticated handshake (v0.6 M2, Noise-KK-like)
+//! [`StreamHandshake::finish_authenticated`] additionally mixes the paired **static**
+//! X25519 keys (exchanged and confirmed during SPAKE2 pairing, pinned in the trust store)
+//! into the key derivation:
+//!
+//! ```text
+//! ikm  = DH(e_i, e_r) || DH(e_i, S_r) || DH(S_i, e_r) || DH(S_i, S_r)     (ee, es, se, ss)
+//! salt = e_i_pub || e_r_pub || S_i_pub || S_r_pub
+//! info = "slipstream-stream-kk-v1" || context
+//! ```
+//!
+//! A peer that presents the right PeerId (TLS) but does not hold the pinned static
+//! secret derives different keys, so its first frame fails authentication — the stream
+//! keys are authenticated by the pairing itself, not only by QUIC TLS. Every DH must be
+//! contributory (low-order points are refused).
 //!
 //! # Frames
 //! `[u32 BE ciphertext_len][u8 flags][ciphertext || 16-byte tag]`, AAD = the 5 header
@@ -31,13 +47,16 @@ use hkdf::Hkdf;
 use ring::aead::{Aad, LessSafeKey, Nonce, Tag, UnboundKey, CHACHA20_POLY1305};
 use rand::rngs::OsRng;
 use sha2::Sha256;
-use x25519_dalek::{EphemeralSecret, PublicKey};
+use x25519_dalek::{PublicKey, ReusableSecret};
 use zeroize::Zeroize;
 
 use crate::error::CryptoError;
+use crate::NodeKeypair;
 
 /// HKDF `info` prefix for stream keys. Bump when the layout changes.
 pub const STREAM_HKDF_INFO: &[u8] = b"slipstream-stream-v1";
+/// HKDF `info` prefix for the authenticated (static-key) handshake.
+pub const STREAM_KK_HKDF_INFO: &[u8] = b"slipstream-stream-kk-v1";
 /// Frame header length: u32 ciphertext length + u8 flags.
 pub const FRAME_HEADER_LEN: usize = 5;
 /// Poly1305 tag length.
@@ -56,7 +75,9 @@ pub enum StreamRole {
 
 /// One side of the per-stream ephemeral key exchange.
 pub struct StreamHandshake {
-    secret: EphemeralSecret,
+    // Reusable so the authenticated handshake can do ee + es (two DHs); a fresh one is
+    // still generated per stream and dropped after `finish*`.
+    secret: ReusableSecret,
     public: [u8; 32],
 }
 
@@ -68,7 +89,7 @@ impl Default for StreamHandshake {
 
 impl StreamHandshake {
     pub fn new() -> Self {
-        let secret = EphemeralSecret::random_from_rng(OsRng);
+        let secret = ReusableSecret::random_from_rng(OsRng);
         let public = PublicKey::from(&secret).to_bytes();
         Self { secret, public }
     }
@@ -79,6 +100,8 @@ impl StreamHandshake {
     }
 
     /// Finish with the peer's ephemeral public key; returns the two directional halves.
+    /// Unauthenticated (ephemeral-only) — see the module docs; the forwarder uses
+    /// [`Self::finish_authenticated`].
     pub fn finish(
         self,
         peer_public: &[u8; 32],
@@ -97,24 +120,83 @@ impl StreamHandshake {
         let mut salt = [0u8; 64];
         salt[..32].copy_from_slice(&initiator_pub);
         salt[32..].copy_from_slice(&responder_pub);
-        let mut info = Vec::with_capacity(STREAM_HKDF_INFO.len() + context.len());
-        info.extend_from_slice(STREAM_HKDF_INFO);
-        info.extend_from_slice(context);
-        let hk = Hkdf::<Sha256>::new(Some(&salt), shared.as_bytes());
-        let mut okm = [0u8; 64];
-        hk.expand(&info, &mut okm).map_err(|_| CryptoError::Hkdf)?;
-        let i2r = aead_key(&okm[..32])?;
-        let r2i = aead_key(&okm[32..])?;
-        okm.zeroize();
-        let (tx, rx) = match role {
-            StreamRole::Initiator => (i2r, r2i),
-            StreamRole::Responder => (r2i, i2r),
-        };
-        Ok(SealedStream {
-            tx: FrameSealer::new(tx),
-            rx: FrameOpener::new(rx),
-        })
+        derive(&salt, shared.as_bytes(), STREAM_HKDF_INFO, context, role)
     }
+
+    /// Finish with the peer's ephemeral key **and** the paired static keys (v0.6 M2):
+    /// `local_static` is this node's X25519 key (`node.key`), `peer_static` the peer's
+    /// static public key pinned in the trust store at pairing time.
+    pub fn finish_authenticated(
+        self,
+        peer_ephemeral: &[u8; 32],
+        role: StreamRole,
+        context: &[u8],
+        local_static: &NodeKeypair,
+        peer_static: &[u8; 32],
+    ) -> Result<SealedStream, CryptoError> {
+        let peer_e = PublicKey::from(*peer_ephemeral);
+        let peer_s = PublicKey::from(*peer_static);
+        // Our view of the four DHs, ordered as (ee, es, se, ss) from the initiator's side.
+        let ee = self.secret.diffie_hellman(&peer_e);
+        let e_to_peer_s = self.secret.diffie_hellman(&peer_s);
+        let s_to_peer_e = local_static.secret().diffie_hellman(&peer_e);
+        let ss = local_static.secret().diffie_hellman(&peer_s);
+        for dh in [&ee, &e_to_peer_s, &s_to_peer_e, &ss] {
+            if !dh.was_contributory() {
+                return Err(CryptoError::BadKey);
+            }
+        }
+        // initiator: es = DH(e_i, S_r) = e_to_peer_s, se = DH(S_i, e_r) = s_to_peer_e
+        // responder: es = DH(S_r, e_i) = s_to_peer_e, se = DH(e_r, S_i) = e_to_peer_s
+        let (es, se) = match role {
+            StreamRole::Initiator => (&e_to_peer_s, &s_to_peer_e),
+            StreamRole::Responder => (&s_to_peer_e, &e_to_peer_s),
+        };
+        let mut ikm = [0u8; 128];
+        ikm[..32].copy_from_slice(ee.as_bytes());
+        ikm[32..64].copy_from_slice(es.as_bytes());
+        ikm[64..96].copy_from_slice(se.as_bytes());
+        ikm[96..].copy_from_slice(ss.as_bytes());
+        let local_s = local_static.public_bytes();
+        let (ei, er, si, sr) = match role {
+            StreamRole::Initiator => (self.public, *peer_ephemeral, local_s, *peer_static),
+            StreamRole::Responder => (*peer_ephemeral, self.public, *peer_static, local_s),
+        };
+        let mut salt = [0u8; 128];
+        salt[..32].copy_from_slice(&ei);
+        salt[32..64].copy_from_slice(&er);
+        salt[64..96].copy_from_slice(&si);
+        salt[96..].copy_from_slice(&sr);
+        let out = derive(&salt, &ikm, STREAM_KK_HKDF_INFO, context, role);
+        ikm.zeroize();
+        out
+    }
+}
+
+fn derive(
+    salt: &[u8],
+    ikm: &[u8],
+    label: &[u8],
+    context: &[u8],
+    role: StreamRole,
+) -> Result<SealedStream, CryptoError> {
+    let mut info = Vec::with_capacity(label.len() + context.len());
+    info.extend_from_slice(label);
+    info.extend_from_slice(context);
+    let hk = Hkdf::<Sha256>::new(Some(salt), ikm);
+    let mut okm = [0u8; 64];
+    hk.expand(&info, &mut okm).map_err(|_| CryptoError::Hkdf)?;
+    let i2r = aead_key(&okm[..32])?;
+    let r2i = aead_key(&okm[32..])?;
+    okm.zeroize();
+    let (tx, rx) = match role {
+        StreamRole::Initiator => (i2r, r2i),
+        StreamRole::Responder => (r2i, i2r),
+    };
+    Ok(SealedStream {
+        tx: FrameSealer::new(tx),
+        rx: FrameOpener::new(rx),
+    })
 }
 
 /// Both directions of one sealed stream; split them across tasks freely.
@@ -459,5 +541,94 @@ mod tests {
         assert!(FrameHeader::parse(&[0, 0, 0, 15, 0]).is_err()); // shorter than a tag
         assert!(FrameHeader::parse(&[0, 0, 0, 16, 0x02]).is_err()); // unknown flag
         assert!(FrameHeader::parse(&[0, 0, 0, 16, FLAG_FIN]).unwrap().fin());
+    }
+
+    /// Authenticated pair: `i_static` is what the initiator really holds, `r_expects_i`
+    /// is the initiator static public key the responder pinned at pairing time.
+    fn kk_pair(
+        i_static: &NodeKeypair,
+        r_static: &NodeKeypair,
+        i_expects_r: [u8; 32],
+        r_expects_i: [u8; 32],
+        ctx: &[u8],
+    ) -> (SealedStream, SealedStream) {
+        let i = StreamHandshake::new();
+        let r = StreamHandshake::new();
+        let (ip, rp) = (i.public(), r.public());
+        (
+            i.finish_authenticated(&rp, StreamRole::Initiator, ctx, i_static, &i_expects_r)
+                .unwrap(),
+            r.finish_authenticated(&ip, StreamRole::Responder, ctx, r_static, &r_expects_i)
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn authenticated_roundtrip_with_paired_static_keys() {
+        let a = NodeKeypair::generate();
+        let b = NodeKeypair::generate();
+        let (mut i, mut r) = kk_pair(&a, &b, b.public_bytes(), a.public_bytes(), b"A|B|/p");
+        for n in 0..50u32 {
+            let msg = format!("data: {n}\n\n");
+            assert_eq!(r.rx.open(&i.tx.seal(msg.as_bytes(), false).unwrap()).unwrap().0, msg.as_bytes());
+            assert_eq!(i.rx.open(&r.tx.seal(msg.as_bytes(), false).unwrap()).unwrap().0, msg.as_bytes());
+        }
+        // authenticated and unauthenticated handshakes never interoperate
+        let hi = StreamHandshake::new();
+        let hr = StreamHandshake::new();
+        let (hip, hrp) = (hi.public(), hr.public());
+        let mut ki = hi
+            .finish_authenticated(&hrp, StreamRole::Initiator, b"c", &a, &b.public_bytes())
+            .unwrap();
+        let mut ur = hr.finish(&hip, StreamRole::Responder, b"c").unwrap();
+        assert!(ur.rx.open(&ki.tx.seal(b"x", false).unwrap()).is_err());
+    }
+
+    /// M2: a peer with the right PeerId (TLS) but the wrong static key cannot derive the
+    /// stream keys — in either role.
+    #[test]
+    fn wrong_static_key_cannot_derive_stream_keys() {
+        let a = NodeKeypair::generate();
+        let b = NodeKeypair::generate();
+        let impostor = NodeKeypair::generate();
+        // impostor initiator: claims to be A, holds another static secret
+        let (mut i, mut r) =
+            kk_pair(&impostor, &b, b.public_bytes(), a.public_bytes(), b"A|B|/p");
+        assert!(r.rx.open(&i.tx.seal(b"POST /v1/chat", false).unwrap()).is_err());
+        assert!(i.rx.open(&r.tx.seal(b"HTTP/1.1 200", false).unwrap()).is_err());
+        // impostor responder: A dials "B" but the answering side holds another secret
+        let (mut i, mut r) =
+            kk_pair(&a, &impostor, b.public_bytes(), a.public_bytes(), b"A|B|/p");
+        assert!(r.rx.open(&i.tx.seal(b"POST /v1/chat", false).unwrap()).is_err());
+        assert!(i.rx.open(&r.tx.seal(b"HTTP/1.1 200", false).unwrap()).is_err());
+        // right keys but different binding context
+        let hi = StreamHandshake::new();
+        let hr = StreamHandshake::new();
+        let (hip, hrp) = (hi.public(), hr.public());
+        let mut i2 = hi
+            .finish_authenticated(&hrp, StreamRole::Initiator, b"A|B|/x", &a, &b.public_bytes())
+            .unwrap();
+        let mut r2 = hr
+            .finish_authenticated(&hip, StreamRole::Responder, b"A|B|/y", &b, &a.public_bytes())
+            .unwrap();
+        assert!(r2.rx.open(&i2.tx.seal(b"x", false).unwrap()).is_err());
+    }
+
+    #[test]
+    fn authenticated_rejects_low_order_static_or_ephemeral() {
+        let a = NodeKeypair::generate();
+        let hs = StreamHandshake::new();
+        let good_e = StreamHandshake::new().public();
+        assert_eq!(
+            hs.finish_authenticated(&good_e, StreamRole::Initiator, b"", &a, &[0u8; 32])
+                .err(),
+            Some(CryptoError::BadKey)
+        );
+        let hs = StreamHandshake::new();
+        assert_eq!(
+            hs.finish_authenticated(&[0u8; 32], StreamRole::Initiator, b"", &a, &a.public_bytes())
+                .err(),
+            Some(CryptoError::BadKey)
+        );
     }
 }

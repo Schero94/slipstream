@@ -123,7 +123,10 @@ async fn share_side_enforces_allowlist_and_strips_headers_itself() {
         }
     });
     let peer = r.share.peer_id;
-    let raw = |m: &str, t: &str, h: Vec<(String, String)>| raw_request(control.clone(), local, peer, m.to_string(), t.to_string(), h);
+    let keys = (r.use_node.clone(), r.share_node.public_bytes());
+    let raw = |m: &str, t: &str, h: Vec<(String, String)>| {
+        raw_request(control.clone(), local, peer, keys.clone(), m.to_string(), t.to_string(), h)
+    };
     for (m, t) in [("POST", "/slots/0?action=save"), ("POST", "/props"), ("GET", "/slots/1"), ("POST", "/infill")] {
         let resp = raw(m, t, vec![]).await;
         assert!(resp.starts_with("HTTP/1.1 403"), "{m} {t}: {resp}");
@@ -158,6 +161,7 @@ async fn raw_request(
     mut control: Control,
     local: libp2p::PeerId,
     peer: libp2p::PeerId,
+    keys: (p2p_crypto::NodeKeypair, [u8; 32]),
     method: String,
     target: String,
     headers: Vec<(String, String)>,
@@ -165,7 +169,7 @@ async fn raw_request(
     let head = ReqHead { method, target, headers, body: BodyKind::None };
     let stream = control.open_stream(peer, OPENAI_PROTOCOL_V1).await.unwrap();
     let ctx = channel_context(&local, &peer, &OPENAI_PROTOCOL_V1);
-    let (mut rd, mut wr) = open_channel(stream, StreamRole::Initiator, &ctx).await.unwrap();
+    let (mut rd, mut wr) = open_channel(stream, StreamRole::Initiator, &ctx, &keys.0, &keys.1).await.unwrap();
     wr.send_json(FrameType::ReqHead, &head).await.unwrap();
     wr.send(FrameType::ReqBody, &[]).await.unwrap();
     let mut out = Vec::new();
@@ -276,11 +280,16 @@ async fn bodies_capped_chunked_and_expect_continue() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn untrusted_peer_is_disconnected() {
     let r = rig(RigOptions::default()).await;
-    let stranger = load_or_create_identity(&r.dir.path().join("stranger")).unwrap();
+    let stranger_node = p2p_forward::load_or_create_node(&r.dir.path().join("stranger")).unwrap();
+    let stranger = p2p_forward::transport_identity(&stranger_node);
+    // the stranger trusts the big Mac (it knows its PeerId and static key), but the big
+    // Mac never paired with it
     let res = start_use(
         stranger,
         UseConfig {
             peer: r.share.dial_addr(),
+            trust: r.use_trust.clone(),
+            node: stranger_node,
             bind: "127.0.0.1:0".parse().unwrap(),
             paired: PairedConfig::default(),
             spare_stream: true,

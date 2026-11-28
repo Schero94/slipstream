@@ -45,6 +45,11 @@ tokio = { workspace = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+zeroize = "1"
+tokio-util = { version = "0.7", features = ["compat"] }
 libp2p = { version = "0.57", default-features = false, features = ["tokio", "quic", "request-response", "macros", "ed25519"] }
 
 [dev-dependencies]

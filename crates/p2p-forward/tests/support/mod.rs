@@ -1,5 +1,9 @@
 //! Shared harness for the M1 forwarder tests: mock llama-server, share side, use side
 //! (separate identities in temp dirs), optional UDP shaper in between.
+//!
+//! M2: both sides are *paired* — each side's trust holds the other's PeerId and static
+//! X25519 key (what pairing writes into the trust store), and every stream uses the
+//! authenticated SealedStream.
 
 #![allow(dead_code)]
 
@@ -14,15 +18,22 @@ use p2p_forward::admission::AdmissionLimits;
 use p2p_forward::mock_llama::{self, MockLlama};
 use p2p_forward::proto::{channel_context, open_channel, BodyKind, FrameType, ReqHead, OPENAI_PROTOCOL_V1};
 use p2p_forward::{
-    load_or_create_identity, start_share, start_use, LocalLimits, ShareConfig, ShareHandle, ShareLimits, UseConfig,
-    UseHandle,
+    load_or_create_identity, load_or_create_node, start_share, start_use, transport_identity, LocalLimits,
+    ShareConfig, ShareHandle, ShareLimits, StaticTrust, UseConfig, UseHandle,
 };
+use std::sync::Arc;
 use p2p_libp2p::paired::{build_paired_swarm, Control, PairedConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 pub struct Rig {
     pub dir: tempfile::TempDir,
+    pub share_node: p2p_crypto::NodeKeypair,
+    pub use_node: p2p_crypto::NodeKeypair,
+    /// The share side's trusted peers (the MacBook).
+    pub share_trust: Arc<StaticTrust>,
+    /// The use side's trusted peers (the big Mac).
+    pub use_trust: Arc<StaticTrust>,
     pub mock: MockLlama,
     pub share: ShareHandle,
     pub use_side: UseHandle,
@@ -56,13 +67,19 @@ impl Default for RigOptions {
 pub async fn rig(opts: RigOptions) -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let mock = mock_llama::start("127.0.0.1:0".parse().unwrap()).await.unwrap();
-    let use_identity = load_or_create_identity(&dir.path().join("macbook")).unwrap();
+    let use_node = load_or_create_node(&dir.path().join("macbook")).unwrap();
+    let share_node = load_or_create_node(&dir.path().join("big-mac")).unwrap();
+    let use_identity = transport_identity(&use_node);
+    let share_identity = transport_identity(&share_node);
+    let share_trust = StaticTrust::new([(use_identity.public().to_peer_id(), use_node.public_bytes())]);
+    let use_trust = StaticTrust::new([(share_identity.public().to_peer_id(), share_node.public_bytes())]);
     let share = start_share(
-        load_or_create_identity(&dir.path().join("big-mac")).unwrap(),
+        share_identity,
         ShareConfig {
             listen: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
             upstream: mock.addr,
-            allow: vec![use_identity.public().to_peer_id()],
+            trust: share_trust.clone(),
+            node: share_node.clone(),
             paired: opts.paired.clone(),
             admission: opts.admission,
             limits: opts.share_limits,
@@ -85,6 +102,8 @@ pub async fn rig(opts: RigOptions) -> Rig {
         use_identity,
         UseConfig {
             peer,
+            trust: use_trust.clone(),
+            node: use_node.clone(),
             bind: "127.0.0.1:0".parse().unwrap(),
             paired: opts.paired,
             spare_stream: opts.spare_stream,
@@ -97,6 +116,10 @@ pub async fn rig(opts: RigOptions) -> Rig {
     .unwrap();
     Rig {
         dir,
+        share_node,
+        use_node,
+        share_trust,
+        use_trust,
         mock,
         share,
         use_side,
@@ -201,6 +224,8 @@ pub struct RawPeer {
     pub control: Control,
     pub local: libp2p::PeerId,
     pub peer: libp2p::PeerId,
+    pub node: p2p_crypto::NodeKeypair,
+    pub peer_key: [u8; 32],
 }
 
 pub async fn raw_peer(r: &Rig) -> RawPeer {
@@ -214,7 +239,13 @@ pub async fn raw_peer(r: &Rig) -> RawPeer {
             swarm.select_next_some().await;
         }
     });
-    RawPeer { control, local, peer: r.share.peer_id }
+    RawPeer {
+        control,
+        local,
+        peer: r.share.peer_id,
+        node: r.use_node.clone(),
+        peer_key: r.share_node.public_bytes(),
+    }
 }
 
 impl RawPeer {
@@ -222,7 +253,9 @@ impl RawPeer {
         let mut control = self.control.clone();
         let stream = control.open_stream(self.peer, OPENAI_PROTOCOL_V1).await.unwrap();
         let ctx = channel_context(&self.local, &self.peer, &OPENAI_PROTOCOL_V1);
-        open_channel(stream, StreamRole::Initiator, &ctx).await.unwrap()
+        open_channel(stream, StreamRole::Initiator, &ctx, &self.node, &self.peer_key)
+            .await
+            .unwrap()
     }
 
     /// Send one ReqHead (+ body frames), return the raw response bytes as text

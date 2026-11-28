@@ -15,6 +15,10 @@
 //! spare stream per connection (hides stream negotiation after idle, M0 finding).
 //! Cancellation: when the editor closes its connection (stop button), a `Cancel`
 //! frame is sent and the stream dropped; the share side drops its upstream connection.
+//! Trust (M2): only a peer pinned in the trust store is dialed; every stream re-checks
+//! [`PeerTrust::trusted_key`] and uses the pinned static key for the authenticated
+//! SealedStream; when the peer loses trust the connection is closed (after a best-effort
+//! goodbye) and not re-dialed.
 
 use std::io;
 use std::net::SocketAddr;
@@ -25,7 +29,7 @@ use futures::StreamExt;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 use libp2p::{Multiaddr, PeerId};
-use p2p_crypto::StreamRole;
+use p2p_crypto::{NodeKeypair, StreamRole};
 use p2p_libp2p::paired::{build_paired_swarm, handle_ping, Control, PairedConfig, PairedEvent};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -40,6 +44,7 @@ use crate::proto::{
     WireError, BODY_CHUNK, OPENAI_PROTOCOL_V1, STATUS_PROTOCOL_V1,
 };
 use crate::status::{StatusReply, StatusRequest};
+use crate::trust::{PeerTrust, NOTIFY_REVOKED_BUDGET};
 use crate::unix_ms;
 
 pub const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
@@ -49,10 +54,14 @@ pub use crate::proto::MAX_BODY;
 /// The editor must send its request head within this time (slow-loris guard).
 pub const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct UseConfig {
-    /// Pinned share address, must end in `/p2p/<PeerId>`.
+    /// Pinned share address, must end in `/p2p/<PeerId>`; that PeerId must be trusted.
     pub peer: Multiaddr,
+    /// M2 trust store view (the paired Macs).
+    pub trust: Arc<dyn PeerTrust>,
+    /// This node's static X25519 key (`node.key`), for the authenticated SealedStream.
+    pub node: NodeKeypair,
     /// Local editor address; must be loopback.
     pub bind: SocketAddr,
     pub paired: PairedConfig,
@@ -134,6 +143,11 @@ impl UseHandle {
     pub fn connected(&self) -> bool {
         self.shared.connection.borrow().is_some()
     }
+
+    /// The swarm's stream control (to register more protocols, e.g. `/slipstream/pair/1`).
+    pub fn control(&self) -> Control {
+        self.shared.control.lock().unwrap().clone()
+    }
 }
 
 type Channel = (ChannelReader, ChannelWriter);
@@ -146,6 +160,8 @@ struct Spare {
 struct Shared {
     local: PeerId,
     peer: PeerId,
+    node: NodeKeypair,
+    trust: Arc<dyn PeerTrust>,
     control: Mutex<Control>,
     /// `Some(generation)` while connected; generation increments per connection.
     connection: watch::Receiver<Option<u64>>,
@@ -164,6 +180,13 @@ fn other<E: std::fmt::Display>(e: E) -> io::Error {
 
 impl Shared {
     async fn open(&self, protocol: libp2p::StreamProtocol) -> io::Result<Channel> {
+        // Per-stream trust check: a revoked peer gets no new stream.
+        let Some(peer_key) = self.trust.trusted_key(&self.peer) else {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "that Mac is no longer paired with this one",
+            ));
+        };
         let mut control = self.control.lock().unwrap().clone();
         let t0 = Instant::now();
         let stream = tokio::time::timeout(STREAM_OPEN_TIMEOUT, control.open_stream(self.peer, protocol.clone()))
@@ -173,7 +196,7 @@ impl Shared {
         let context = channel_context(&self.local, &self.peer, &protocol);
         let channel = tokio::time::timeout(
             STREAM_OPEN_TIMEOUT,
-            open_channel(stream, StreamRole::Initiator, &context),
+            open_channel(stream, StreamRole::Initiator, &context, &self.node, &peer_key),
         )
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "stream handshake timed out"))??;
@@ -272,6 +295,12 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
             "the editor address must be loopback (127.0.0.1)",
         ));
     }
+    if cfg.trust.trusted_key(&peer).is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{peer} is not a paired Mac (pair first: slipstream-node pair --peer <addr> --code <code>)"),
+        ));
+    }
     if cfg.token.as_deref().is_some_and(|t| t.len() < 16 || !t.bytes().all(|b| b.is_ascii_graphic())) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -310,6 +339,8 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
     let shared = Arc::new(Shared {
         local,
         peer,
+        node: cfg.node.clone(),
+        trust: cfg.trust.clone(),
         control: Mutex::new(control),
         connection: conn_rx,
         spare: Mutex::new(None),
@@ -325,13 +356,50 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
     let verbose = cfg.verbose;
     // No behaviour stores peer addresses, so re-dial with the full pinned multiaddr.
     let redial_addr = cfg.peer.clone();
+    let trust = cfg.trust.clone();
+    let notify_control = shared.control.lock().unwrap().clone();
     let swarm_task = tokio::spawn(async move {
         let mut generation = 1u64;
         let mut open_conns = 1usize;
         let mut redial = tokio::time::interval(Duration::from_secs(2));
         redial.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut epoch = trust.subscribe();
+        let mut epoch_live = true;
+        let mut last_key = trust.trusted_key(&peer);
+        // Peer lost trust: no re-dial until it is trusted again.
+        let mut suspended = false;
+        let (close_tx, mut close_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
         loop {
             tokio::select! {
+                changed = epoch.changed(), if epoch_live => {
+                    if changed.is_err() {
+                        epoch_live = false;
+                    }
+                    match (trust.trusted_key(&peer), last_key) {
+                        (None, Some(old)) => {
+                            last_key = None;
+                            suspended = true;
+                            let _ = conn_tx.send(None);
+                            eprintln!("use event=revoked peer={peer} unix_ms={}", unix_ms());
+                            let notify = trust.notify_revoked(peer, old, notify_control.clone());
+                            let close_tx = close_tx.clone();
+                            tokio::spawn(async move {
+                                let _ = tokio::time::timeout(NOTIFY_REVOKED_BUDGET, notify).await;
+                                let _ = close_tx.send(());
+                            });
+                        }
+                        (Some(k), _) => {
+                            last_key = Some(k);
+                            suspended = false;
+                        }
+                        (None, None) => {}
+                    }
+                }
+                Some(()) = close_rx.recv() => {
+                    if trust.trusted_key(&peer).is_none() {
+                        let _ = swarm.disconnect_peer_id(peer);
+                    }
+                }
                 event = swarm.select_next_some() => match event {
                     SwarmEvent::Behaviour(PairedEvent::Ping(event)) => {
                         if let Some(rtt) = handle_ping(&mut swarm, &event) {
@@ -342,6 +410,10 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
                         } else {
                             eprintln!("use event=ping_failed peer={} unix_ms={}", event.peer, unix_ms());
                         }
+                    }
+                    SwarmEvent::ConnectionEstablished { peer_id, connection_id, .. } if peer_id != peer || suspended => {
+                        // Only the pinned, still-trusted peer may hold a connection.
+                        swarm.close_connection(connection_id);
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, .. } if peer_id == peer => {
                         open_conns += 1;
@@ -363,7 +435,7 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
                     _ => {}
                 },
                 _ = redial.tick() => {
-                    if open_conns == 0 && !swarm.is_connected(&peer) {
+                    if !suspended && open_conns == 0 && !swarm.is_connected(&peer) {
                         if let Err(e) = swarm.dial(redial_addr.clone()) {
                             if verbose {
                                 eprintln!("use event=redial_error error={e}");

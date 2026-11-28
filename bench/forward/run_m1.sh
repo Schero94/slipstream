@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # v0.6 M1 forwarder measurements (docs/plans/2026-11-28-use-your-other-mac.md §9 M1).
+# Since M2 the Macs are paired first (pair --show-code / pair --peer --code); no --allow-peer.
 # Separate processes on one Mac with their own data dirs: upstream (mock or llama-server),
 # `slipstream-node share` (big Mac), a userspace UDP shaper (RTT_MS, default 8 ms) and two
 # `slipstream-node use` processes (MacBook; one with the pre-opened spare stream, one
@@ -21,12 +22,22 @@ cleanup() { for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null || true; 
 trap cleanup EXIT INT TERM
 say() { echo "$*" | tee -a "$LOG"; }
 
+# M2: pair the big Mac with both MacBook data dirs once (6-digit code over /slipstream/pair/1).
+pair_cli() {
+  local book=$1 fifo="$WORK/pair-$(basename "$1").out"
+  "$N" pair --show-code --listen /ip4/127.0.0.1/udp/19003/quic-v1 --name "Bench Studio" --data-dir "$WORK/big" >"$fifo" 2>/dev/null &
+  local pid=$!
+  for _ in $(seq 50); do grep -q '^dial=' "$fifo" 2>/dev/null && break; sleep 0.1; done
+  "$N" pair --peer "$(sed -n 's/^dial=//p' "$fifo")" --code "$(sed -n 's/^code=//p' "$fifo")" --name "$(basename "$book")" --data-dir "$book" >/dev/null
+  wait "$pid"
+}
+pair_cli "$WORK/book"; pair_cli "$WORK/book-nospare"
+
 # share on udp 19003, shaper 19004 -> 19003, use (spare) on 18191, use (no spare) on 18192
 start_pair() {
   local up=$1 tag=$2
-  local b1 b2; b1=$("$N" peer-id --data-dir "$WORK/book"); b2=$("$N" peer-id --data-dir "$WORK/book-nospare")
   "$N" share --listen /ip4/127.0.0.1/udp/19003/quic-v1 --forward "http://$up" --data-dir "$WORK/big" \
-    --allow-peer "$b1,$b2" --name "Bench Studio" --addr-file "$WORK/addr-$tag" >"$WORK/share-$tag.log" 2>&1 & PIDS+=($!)
+    --name "Bench Studio" --addr-file "$WORK/addr-$tag" >"$WORK/share-$tag.log" 2>&1 & PIDS+=($!)
   for _ in $(seq 50); do [ -s "$WORK/addr-$tag" ] && break; sleep 0.1; done
   "$F" shaper --bind 127.0.0.1:19004 --target 127.0.0.1:19003 --rtt-ms "$RTT_MS" >"$WORK/shaper-$tag.log" 2>&1 & PIDS+=($!)
   sleep 0.2
