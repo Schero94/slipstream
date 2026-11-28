@@ -422,6 +422,25 @@ fn metal_memory_check(free_gib: f64, gguf_bytes: u64, pgrn_bytes: u64, cache_gb:
          (model {resident:.1} + expert cache {cache:.1} + reserve {reserve:.1} GiB).{hint}")))
 }
 
+/// Expert-cache eviction policy for streamed runs (engine `PGRN_EVICT`, lossless: only which
+/// resident expert is dropped changes, output byte-identical). Decayed-count eviction +
+/// lookahead-protect wins where the cache is small next to the expert file and is neutral
+/// above. Measured on Qwen3.6-35B Q4 (PGRN 20.1 GB = 18.7 GiB), llama-server, lookahead on,
+/// no MTP, identical output hashes, 0 MB swap (bench/RESULTS.md 2026-11-28, all reps pooled):
+///   decode tok/s base -> decay: 4 GiB 9.72 -> 9.90 (+1.9 %, 6 of 6 pairs) · 6 GiB 12.14 ->
+///   12.57 (+3.5 %) · 8 GiB 14.73 -> 14.88 (+1.0 %, 4 of 6 pairs) · 10 GiB 17.57 -> 17.40 (-1.0 %, mixed)
+///   · 14 GiB neutral; SSD expert reads -4.7 % @4 GiB (engine trace).
+/// So it is set only when cache < 0.45 x PGRN size (8 GiB of 18.7 GiB = 0.43 -> on,
+/// 10 GiB = 0.53 -> off), only with lookahead (the protect half needs its kicks), and never
+/// over a value the user already exported.
+fn streamed_evict_policy(cache_gb: f64, pgrn_bytes: u64, lookahead: bool) -> Option<&'static str> {
+    let pb = pgrn_bytes as f64;
+    if !lookahead || pb <= 0.0 || !(cache_gb > 0.0) {
+        return None;
+    }
+    if cache_gb * GIB_F < 0.45 * pb { Some("decay") } else { None }
+}
+
 #[cfg(test)]
 mod ui_msg_tests {
     use super::*;
@@ -444,6 +463,24 @@ mod ui_msg_tests {
         assert!(e.contains("5.0 GiB free, 9.0 GiB needed"), "{e}");
         let e = metal_memory_check(10.0, 21 * G, 19 * G, 10.0, 3.0).unwrap_err();
         assert!(e.contains("fit=5") && e.contains("5 GiB or less"), "{e}");
+    }
+
+    #[test]
+    fn evict_policy_only_for_small_streamed_caches() {
+        // 35B Q4 PGRN: 20,128,754,176 bytes (18.75 GiB); 0.45 x = 8.44 GiB
+        let pgrn: u64 = 20_128_754_176;
+        for c in [2.0, 4.0, 6.0, 8.0, 8.4] {
+            assert_eq!(streamed_evict_policy(c, pgrn, true), Some("decay"), "cache {c}");
+        }
+        for c in [8.5, 10.0, 14.0, 24.0] {
+            assert_eq!(streamed_evict_policy(c, pgrn, true), None, "cache {c}");
+        }
+        assert_eq!(streamed_evict_policy(4.0, pgrn, false), None, "needs lookahead");
+        assert_eq!(streamed_evict_policy(4.0, 0, true), None, "no PGRN");
+        assert_eq!(streamed_evict_policy(0.0, pgrn, true), None);
+        assert_eq!(streamed_evict_policy(f64::NAN, pgrn, true), None);
+        // threshold scales with the expert file: 10 GiB cache on a 30 GiB sidecar is small
+        assert_eq!(streamed_evict_policy(10.0, 30 * G, true), Some("decay"));
     }
 
     #[test]
@@ -516,6 +553,11 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
             cmd.env("PGRN_LOOKAHEAD", (cfg.pgrn_lookahead - 1).min(16).to_string());
         } else {
             cmd.env("PGRN_LOOKAHEAD", "-1");
+        }
+        if !cfg.dense && std::env::var_os("PGRN_EVICT").is_none() {
+            if let Some(policy) = streamed_evict_policy(cfg.cache_gb, file_size(&cfg.pgrn), cfg.pgrn_lookahead > 0) {
+                cmd.env("PGRN_EVICT", policy);
+            }
         }
         if cfg.pgrn_steer.is_finite() && cfg.pgrn_steer > 0.0 {
             cmd.env("PGRN_STEER", format!("{:.3}", cfg.pgrn_steer.min(0.5)));
