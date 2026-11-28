@@ -27,6 +27,7 @@ mod envelope;
 mod error;
 mod identity;
 mod signing;
+mod stream;
 
 pub use envelope::{
     open, open_job, open_job_request, open_job_result, open_json, public_key_from_hex, seal,
@@ -36,3 +37,7 @@ pub use envelope::{
 pub use error::CryptoError;
 pub use identity::{IdentityIoError, NodeKeypair};
 pub use signing::{verify_identity_signature, SigningError, SigningIdentity};
+pub use stream::{
+    FrameHeader, FrameOpener, FrameSealer, SealedStream, StreamHandshake, StreamRole, FLAG_FIN,
+    FRAME_HEADER_LEN, MAX_FRAME_PLAINTEXT, STREAM_HKDF_INFO, TAG_LEN,
+};

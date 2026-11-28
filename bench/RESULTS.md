@@ -4381,3 +4381,80 @@ and not negative.
 - Tests: workspace 183/183, Tauri 108/108, Python 44/44 (+2 subtests), UI contracts 7/7, headless assets PASS.
 - Artifacts: Slipstream_0.5.3_aarch64.dmg 70,100,416 B sha256 0b9d3ddb9855… · zip 68,562,551 B eef0d982b275… ·
   slipstream-node_0.5.3_macos_aarch64.tar.gz 5,452,070 B 17b9e4cfcf40….
+
+## v0.6 M0 transport spike — streaming QUIC + SealedStream — GO (libp2p-stream) — 2026-11-28
+
+Plan: docs/plans/2026-11-28-use-your-other-mac.md §9 M0. Code: `crates/p2p-libp2p/src/paired.rs` (stream behaviour,
+ping, keep-alive, limits, `build_paired_swarm`), `crates/p2p-crypto/src/stream.rs` (SealedStream),
+`crates/p2p-forward` (raw/sealed byte pipe, SSE mock, bench client, `forward-spike` CLI), `bench/forward/run_m0.sh`.
+Host M3 Pro 36 GB (Mac15,6), macOS 27.0.1, base commit 0c5607c, release build. All arms are separate processes on
+one Mac with their own key dirs, loopback QUIC: **direct** (client → upstream) · **raw** (client → use → QUIC
+stream → share → upstream) · **sealed** (same + SealedStream inside the QUIC stream). Arm order rotates every
+iteration (A,B,C / B,C,A / C,A,B). Raw logs: `bench/forward/results/20261128-124036-m0*.{txt,tsv}` (main run;
+`20261128-123635-*` = first run, same code minus the ring comparison, N_PACED=2 — consistent).
+
+**Decision: GO libp2p-stream, pinned `=0.5.0-alpha`** (the release built for libp2p-swarm 0.48 = our libp2p 0.57.1;
+published 2026-09-11, ~318k recent downloads). Reasons: (1) it is exactly the needed surface (`Control::open_stream`
+/ `accept` per protocol, raw `libp2p::Stream` with futures AsyncRead/Write) and composes with `ping` and
+`connection_limits` in one `#[derive(NetworkBehaviour)]`; (2) it is small (659 lines, MIT) — a custom
+ConnectionHandler would re-implement the same handler/shared-state/upgrade code (~300–500 lines) with no measured
+benefit: stream open on an established connection is p50 65–72 µs / p95 103–117 µs warm on loopback; (3) worst case
+(upstream breaks or stalls) we vendor those 659 lines into `p2p-libp2p`. Caveats found by reading the source (for
+M1): inbound streams go through a `channel(0)` and are **dropped silently** if the acceptor is not polling (our
+accept loop spawns a task per stream immediately); one handler negotiates **one outbound stream at a time per
+connection** (opens serialize); negotiation is multistream-select V1 (one extra RTT per stream, ~5–10 ms on Wi-Fi —
+M1 can pre-open a spare stream or use `with_substream_upgrade_protocol_override(V1Lazy)`); it has no keep-alive of
+its own (connection persistence comes from the swarm `idle_connection_timeout` = 24 h and QUIC keep-alive).
+
+Transport config (`PairedConfig::default()`): QUIC keep-alive 2 s, QUIC max idle 10 s, libp2p ping every 2 s
+(timeout 5 s, failure → close), connection limits 4/peer, 32 total, 8 pending inbound; dialing only to pinned
+`.../p2p/<PeerId>` (`start_use` rejects anything else). Identity = the node's Ed25519 key (same derivation as
+mesh.rs), persistent per `--key-dir`.
+
+| Metric (target) | direct | raw pipe | sealed pipe | Verdict |
+|---|---|---|---|---|
+| TTFT, 32-event SSE back-to-back, N=500/arm, p50 / p95 | 76 / 112 µs | 263 / 302 µs | 325 / 364 µs | overhead p95 **+189 µs raw, +252 µs sealed** (paired p95 +221 / +287 µs) — PASS (< 5 ms) |
+| TTFT after 1 s idle (editor think time), N=60/arm, p50 / p95 | 1000 / 1280 µs | 2848 / 3865 µs | 3405 / 4256 µs | overhead p95 **+2.6 ms raw, +3.0 ms sealed** (paired p95 +2.9 / +3.4 ms) — PASS, thin margin |
+| TTFT, paced runs (each pipe idle ~14 s before its request), N=6/arm, p50 / p95 | 700 / 750 µs | 2431 / 5169 µs | 1831 / 2664 µs | overhead p95 +4.4 ms raw, +1.9 ms sealed — at the limit, N=6 |
+| Decode, mock 512 events every 25 ms, N=6/arm | 36.2 ev/s | 36.2 (+0.10 %) | 36.2 (+0.12 %) | PASS (within 1 %) |
+| Decode, real llama-server 512 tok (below), N=4/arm | 15.36 tok/s | 15.47 (+0.73 %) | 15.14 (−1.46 %) | not resolvable: per-arm run spread is 4–6 % |
+| Pipe ceiling, 512 events unpaced, N=100 | 597k ev/s | 644k ev/s | 534k ev/s (−10 %) | ~14,000× the paced 36 ev/s, ~35,000× real decode |
+| AEAD per 200 B SSE chunk (SealedStream, RustCrypto) | — | — | seal 0.94 µs + open 0.98 µs | PASS (< 2 µs per chunk per side; 1.93 µs both sides together) |
+| Byte identity (SHA-256 of the body) | `48e25ed3…` / `aa2f1756…` | identical | identical | PASS, every sample (mock bodies are deterministic) |
+| Peer loss (SIGSTOP share = big Mac asleep) | — | 10.76–11.46 s (5 runs) | — | idle timeout + ~1.04 s; with `--idle-timeout-ms 8000` 9.02–9.05 s (3 runs) |
+
+- AEAD detail (ns per frame, seal / open; 200k iters): 64 B 468/403 · 200 B 942/982 · 512 B 1699/1877 · 1 KiB
+  3113/3362 · 4 KiB 11895/12212 · 16 KiB 46857/48290 (0.35 GB/s). The RustCrypto `chacha20` 0.9 crate runs its
+  portable backend on aarch64 (NEON only behind `--cfg chacha20_force_neon`). Same framing with ring 0.17 (ARMv8
+  assembly, already in the tree via rustls): 200 B 208/296 · 16 KiB 8486/8664 (1.93 GB/s), i.e. 4–5.5× faster.
+  Not needed for SSE, but a 32 MiB request body costs ~190 ms seal+open with RustCrypto vs ~35 ms with ring →
+  M1 candidate (switching only changes the backend; the frame format stays).
+- **Real llama-server** (`LLAMA=1`, inside scripts/heavy.sh, one model process): Groot-19B-A3B Q4_K_M from ~/Modelle,
+  cache 4 GiB, app streamed regime: `PGRN_EVICT=decay`, lookahead default on, no MTP, `--pgrn-io-threads 8
+  --pgrn-compact-slots --gpu-layers 99 -c 8192 --parallel 1 -b 2048 -ub 2048 -fa on --jinja --no-warmup
+  --cache-ram 2048 --metrics --reasoning off --temp 0` (no `--slot-save-path`, no layer-major). Request
+  `/v1/chat/completions` stream, 512 tokens, temperature 0, seed 1, ignore_eos, cache_prompt false; 1 warm-up per arm,
+  25 s cooldown between requests. Binary 10:57:24 (newer than every llama-server source). Per-run decode (client side,
+  event arrivals): direct 15.73/15.45/15.08/15.20 · raw 15.35/15.58/15.60/15.37 · sealed 15.06/15.08/14.74/15.67.
+  TTFT (prefill-dominated) direct 1567–1647 ms, raw 1610–1630 ms, sealed 1566–1711 ms: engine noise (±50 ms) hides
+  any sub-ms transport cost, so the TTFT target is judged on the mock. Generated text **identical in all 12 runs**
+  (content SHA-256 `bf0c5ded5c58…`); raw SSE bodies differ run to run only by llama-server's timestamps
+  (`created`, timings), in every arm, so body-level byte identity is proven on the mock. Swap Δ 0 MB, RSS 7.1 GB.
+- Stream open (use side): warm p50 65–72 µs, p95 103–117 µs; after 25 s idle (llama phase) p50 0.93–1.16 ms.
+  Ping RTT loopback p50 0.21–0.73 ms.
+- Finding — **idle wake-up dominates the overhead**: back-to-back requests cost +0.19–0.25 ms, but after the pipe
+  processes slept (1 s – 25 s) the overhead rises to +2–4.4 ms p95 (three processes and two extra hops must wake;
+  the direct arm also rises from 0.08 to 0.7–1.0 ms). Still under 5 ms on loopback, but it eats the margin. M1:
+  measure with the real two-Mac setup, try a pre-opened spare stream, a share-side upstream connection kept warm,
+  and higher thread QoS for the forwarder.
+- Finding — **ping does not speed up peer-loss detection**: libp2p-ping 0.48 treats the first failure as free and
+  re-opens a stream after a failure; the re-open waits for multistream negotiation (no timeout below the swarm's
+  10 s), so the failure surfaces only when QUIC's idle timer closes the connection (detection = idle + ~1.04 s).
+  For the M1 "peer death ≤ 10 s" acceptance: set QUIC idle to 8 s (measured 9.02–9.05 s) or add an app-level
+  heartbeat on the persistent status stream.
+- Tests: `crates/p2p-crypto` stream.rs 7 new unit tests (roundtrip + FIN, no nonce reuse over 20k frames and across
+  directions/handshakes, refuses counter wrap at 2^96, every-bit tamper incl. header/FIN flag, replay/reorder/drop/
+  truncation, context binding, low-order point rejection, header bounds); `crates/p2p-forward/tests/loopback_pipe.rs`
+  5 tests (raw + sealed byte-identical incl. 8 concurrent streams over one persistent connection, idle > 2× QUIC
+  idle timeout keeps the connection, peer loss detected, sealed share never answers a raw client in plaintext,
+  unpinned dial rejected, identity persistent per key dir). Workspace 183 → 195 green, Tauri 108/108.

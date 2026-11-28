@@ -149,7 +149,7 @@ threat model in `COMMUNITY_MESH_OPERATIONS.md`).
 
 | M | Scope | Acceptance | Effort |
 |---|---|---|---|
-| M0 | Transport spike: stream behaviour, persistent connection, raw pipe, SealedStream prototype | loopback TTFT overhead < 5 ms p95; 512-token decode within 1 %; AEAD < 2 µs/chunk; go/no-go libp2p-stream | 3–4 d |
+| M0 | Transport spike: stream behaviour, persistent connection, raw pipe, SealedStream prototype | loopback TTFT overhead < 5 ms p95; 512-token decode within 1 %; AEAD < 2 µs/chunk; go/no-go libp2p-stream | 3–4 d · **DONE 2026-11-28**: GO libp2p-stream `=0.5.0-alpha`; TTFT overhead p95 +0.25 ms sealed back-to-back, +3.0 ms after 1 s idle (wake-up cost, thin margin); decode +0.1 % (mock), real Groot 512 tok within run noise, identical text; AEAD 0.94 + 0.98 µs per 200 B chunk; peer loss = QUIC idle + 1 s (use 8 s idle in M1). bench/RESULTS.md "v0.6 M0 transport spike" |
 | M1 | `crates/p2p-forward` + headless `share`/`use` CLI, `NodeMode::Paired`, admission | SSE byte-identical (plain, strict JSON, forced tool); cancel < 250 ms p95 @5 ms RTT; layer-major abort logged; first-token overhead < 50 ms p95 @8 ms RTT; throughput within 2 %; 403s; peer death ≤ 10 s | 6–8 d |
 | M2 | Pairing + trust | pairing/trust-gate tests; revoke aborts ≤ 1 s; MITM fails | 5–7 d |
 | M3 | Discovery | ≤ 3 s same host; TXT keys exact; re-dial ≤ 10 s | 3–4 d |

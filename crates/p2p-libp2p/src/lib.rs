@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod paired;
+
 use std::convert::Infallible;
 use std::io;
 use std::time::Duration;
