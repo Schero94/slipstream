@@ -3940,3 +3940,11 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 - Note: first threshold 1,024 never fired (nominal slot prefix 3,714 vs usable checkpoint 1,687);
   256 fires. Hashes in earlier E6 runs differed only by the server's random tool-call ids (fixed:
   the script now hashes function name + arguments).
+- Critic follow-up (same day): the copy is now chosen by the usable prefix on both sides (largest
+  checkpoint ≤ shared length on hybrid/recurrent/SWA models, `needs_checkpoints` set from the
+  model) instead of the nominal shared length, so a copy is never loaded when its checkpoints
+  cannot be used; a copied entry moves to the back of the LRU list so it is evicted last.
+  Re-run (binary 03:00:50): C2 26 tokens 1.6 s, output 86b8ff31ee95; C3 still 22.1 s — no
+  checkpoint exists before the date inside the system prompt (upstream checkpoints only at
+  user-message starts), independent of the copy choice. Known limit: at --cache-ram 1024 (Macs
+  < 32 GB) one ~800 MB state fills the cache, so saving the outgoing slot evicts the entry first.

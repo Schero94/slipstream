@@ -10729,7 +10729,7 @@ index c1a0f4dca..ccbd60722 100644
      // note: must be signed - they are subtracted before the later ones are set
      int64_t t_start       = 0;
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 2f927d74f..d7c552731 100644
+index 2f927d74f..bee5f6330 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -6,6 +6,7 @@
@@ -10924,7 +10924,16 @@ index 2f927d74f..d7c552731 100644
  
              slot.mctx                   = mctx;
              slot.prompt.tokens.has_mtmd = mctx != nullptr;
-@@ -2329,7 +2438,9 @@ private:
+@@ -1630,6 +1739,8 @@ private:
+             SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
+ 
+             prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
++            // Slipstream: a shorter prefix of a hybrid/recurrent/SWA state is only usable at a checkpoint
++            prompt_cache->needs_checkpoints = llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt) || n_swa > 0;
+         } else {
+             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+         }
+@@ -2329,7 +2440,9 @@ private:
          queue_results.send(std::move(res));
      }
  
@@ -10935,7 +10944,7 @@ index 2f927d74f..d7c552731 100644
          auto res = std::make_unique<server_task_result_cmpl_partial>();
  
          res->id    = slot.task->id;
-@@ -2339,7 +2450,7 @@ private:
+@@ -2339,7 +2452,7 @@ private:
              res->is_progress        = true;
              res->progress.total     = slot.task->n_tokens();
              res->progress.cache     = slot.stats.n_prompt_cached;
@@ -10944,7 +10953,7 @@ index 2f927d74f..d7c552731 100644
              res->progress.time_ms   = slot.stats.t_elapsed_us() / 1000;
          }
          if (is_begin) {
-@@ -2387,6 +2498,8 @@ private:
+@@ -2387,6 +2500,8 @@ private:
      void send_final_response(server_slot & slot) {
          auto res = std::make_unique<server_task_result_cmpl_final>();
  
@@ -10953,7 +10962,7 @@ index 2f927d74f..d7c552731 100644
          res->id      = slot.task->id;
          res->id_slot = slot.id;
  
-@@ -2980,6 +3093,17 @@ private:
+@@ -2980,6 +3095,17 @@ private:
      // returns false to decline the task, it is offered again after the decode is done
      bool process_single_task(server_task && task, bool is_yielding) {
          // while yielding, an encode / decode is running and only reading the server state is safe
@@ -10971,7 +10980,7 @@ index 2f927d74f..d7c552731 100644
          if (is_yielding && task.type != SERVER_TASK_TYPE_METRICS && task.type != SERVER_TASK_TYPE_SLOT_GET) {
              SRV_DBG("decoding, decline task, id_task = %d\n", task.id);
              return false;
-@@ -3175,7 +3299,9 @@ private:
+@@ -3175,7 +3301,9 @@ private:
                              n_idle_slots++;
                          }
  
@@ -10982,7 +10991,7 @@ index 2f927d74f..d7c552731 100644
                      }
                      SRV_DBG("n_idle_slots = %d\n", n_idle_slots);
  
-@@ -3417,6 +3543,60 @@ private:
+@@ -3417,6 +3545,60 @@ private:
          }
      }
  
@@ -11043,7 +11052,7 @@ index 2f927d74f..d7c552731 100644
      void abort_all_slots(const std::string & reason) {
          for (auto & slot : slots) {
              if (slot.is_processing()) {
-@@ -3427,6 +3607,7 @@ private:
+@@ -3427,6 +3609,7 @@ private:
      }
  
      // @ngxson : for debugging only
@@ -11051,7 +11060,7 @@ index 2f927d74f..d7c552731 100644
      int64_t t_pre_decode  = 0;
      int64_t t_decode      = 0;
      int64_t t_post_decode = 0;
-@@ -3622,6 +3803,18 @@ private:
+@@ -3622,6 +3805,18 @@ private:
                  llama_synchronize(ctx_tgt);
  #endif
  
@@ -11070,7 +11079,7 @@ index 2f927d74f..d7c552731 100644
                  if (ok) {
                      // move the head of the batch forward with the number of tokens we just processed
                      off_next = off + n_tokens;
-@@ -3896,6 +4089,45 @@ private:
+@@ -3896,6 +4091,45 @@ private:
              });
          }
  
@@ -11116,7 +11125,7 @@ index 2f927d74f..d7c552731 100644
          // make checkpoints if needed
          iterate(drafting, [&](server_slot & slot) {
              auto & draft = slot.spec_draft;
-@@ -4279,6 +4511,9 @@ private:
+@@ -4279,6 +4513,9 @@ private:
                          slot.stats.n_prompt_cached    = n_past;
                          slot.stats.n_prompt_processed = 0;
  
@@ -11126,7 +11135,7 @@ index 2f927d74f..d7c552731 100644
                          metrics.add_prompt_cached(n_past);
  
                          slot.prompt.tokens.keep_first(n_past);
-@@ -4651,6 +4886,35 @@ private:
+@@ -4651,6 +4888,35 @@ private:
              }
          }
  
@@ -11162,7 +11171,7 @@ index 2f927d74f..d7c552731 100644
          bool has_output = false;
          for (int i = off; i < off + batch.view.size(); ++i) {
              has_output |= batch.tokens[i].output;
-@@ -4659,12 +4923,94 @@ private:
+@@ -4659,12 +4925,94 @@ private:
          // yield to the queue, so we can still handle metrics tasks while decoding
          // note: the sync is done here too, so that the wait is also covered by the yield
          int ret = 0;
@@ -11257,7 +11266,7 @@ index 2f927d74f..d7c552731 100644
  
          if (ret != 0) {
              {
-@@ -4685,7 +5031,12 @@ private:
+@@ -4685,7 +5033,12 @@ private:
                      err = "Compute error.";
                  }
  
@@ -11271,7 +11280,7 @@ index 2f927d74f..d7c552731 100644
  
                  if (!err.empty()) {
                      SRV_ERR("%s off = %d, n_batch = %d, ret = %d\n", err.c_str(), off, n_batch, ret);
-@@ -4717,6 +5068,15 @@ private:
+@@ -4717,6 +5070,15 @@ private:
          } else {
              // success, apply batch metrics
              metrics_post_decode(off, batch.view.size(), has_output);
@@ -11287,7 +11296,7 @@ index 2f927d74f..d7c552731 100644
          }
  
          // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
-@@ -4859,6 +5219,10 @@ private:
+@@ -4859,6 +5221,10 @@ private:
                  slot.stats.update_prompt_last();
                  slot.t_print_last = t_now;
                  slot.n_gen_last = 0;
@@ -11299,10 +11308,10 @@ index 2f927d74f..d7c552731 100644
  
              slot.stats.update_gen_last();
 diff --git a/tools/server/server-slot-sched.cpp b/tools/server/server-slot-sched.cpp
-index 526a144c3..045addf3c 100644
+index 526a144c3..84e8c76a7 100644
 --- a/tools/server/server-slot-sched.cpp
 +++ b/tools/server/server-slot-sched.cpp
-@@ -164,7 +164,25 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
+@@ -164,7 +164,40 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
      return &states.back();
  }
  
@@ -11320,6 +11329,21 @@ index 526a144c3..045addf3c 100644
 +    }();
 +    return on;
 +}
++// Tokens of `prompt` that can really be reused for a new prompt sharing `lcp` tokens with it: the
++// whole lcp for plain KV memory or a full match; otherwise the largest checkpoint at or below lcp.
++static int slipstream_usable_prefix(const server_prompt & prompt, int lcp, bool needs_checkpoints) {
++    if (!needs_checkpoints || lcp >= (int) prompt.tokens.size()) {
++        return lcp;
++    }
++    int best = 0;
++    for (const auto & ckpt : prompt.checkpoints) {
++        if (ckpt->n_tokens <= lcp && (int) ckpt->n_tokens > best) {
++            best = (int) ckpt->n_tokens;
++        }
++    }
++    return best;
++}
++
 +static constexpr int SLIPSTREAM_PROMPT_COPY_MIN_GAIN = 256; // tokens more than the slot shares nominally (its usable checkpoint is often far lower)
 +
 +std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_better(const server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, int & lcp, bool * keep_entry) const {
@@ -11329,27 +11353,29 @@ index 526a144c3..045addf3c 100644
      // a prompt made with another lora config is cleared before the new one starts, so it counts as empty
      const bool is_empty = prompt.tokens.empty() || lora_should_clear_cache(prompt.lora, lora_new);
  
-@@ -176,6 +194,8 @@ std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_b
+@@ -176,6 +209,8 @@ std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_b
      SRV_TRC(" - looking for better prompt, base f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
  
      auto it_best = states.cend();
 +    bool best_is_copy = false;
-+    const int lcp_base = lcp;
++    const int usable_base = is_empty ? 0 : slipstream_usable_prefix(prompt, lcp, needs_checkpoints);
  
      // find the most similar cached prompt, that would also preserve the most context
      for (auto it = states.cbegin(); it != states.cend(); ++it) {
-@@ -193,13 +213,23 @@ std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_b
+@@ -193,13 +228,25 @@ std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_b
  
          // don't trash large prompts
          if (f_keep_cur < 0.25f) {
 +            // ... but a long shared prefix can be restored from a copy (Slipstream, see above)
++            // compare what can really be reused on both sides (checkpoints on hybrid models)
++            const int usable_cur = slipstream_usable_prefix(it->prompt, lcp_cur, needs_checkpoints);
 +            if (keep_entry && slipstream_prompt_copy_enabled() &&
-+                lcp_cur >= lcp_base + SLIPSTREAM_PROMPT_COPY_MIN_GAIN && f_sim_best < f_sim_cur) {
++                usable_cur >= usable_base + SLIPSTREAM_PROMPT_COPY_MIN_GAIN && f_sim_best < f_sim_cur) {
 +                f_sim_best   = f_sim_cur;
 +                lcp          = lcp_cur;
 +                it_best      = it;
 +                best_is_copy = true;
-+                SRV_TRC("   - prompt with length %7zu: restore a copy (shared prefix %d tokens)\n", it->prompt.tokens.size(), lcp_cur);
++                SRV_TRC("   - prompt with length %7zu: restore a copy (shared %d, usable %d vs slot %d)\n", it->prompt.tokens.size(), lcp_cur, usable_cur, usable_base);
 +            }
              continue;
          }
@@ -11365,7 +11391,7 @@ index 526a144c3..045addf3c 100644
  
              it_best = it;
          }
-@@ -208,20 +238,25 @@ std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_b
+@@ -208,20 +255,25 @@ std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_b
      if (it_best != states.cend()) {
          SRV_TRC(" - found better prompt with f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
      }
@@ -11393,7 +11419,7 @@ index 526a144c3..045addf3c 100644
  
      // an empty erase gives a mutable iterator to the same entry, its prompt is moved out below
      const auto it_best = states.erase(it_found, it_found);
-@@ -264,9 +299,16 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
+@@ -264,9 +316,19 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
              SRV_DBG("%s", "__TEST_TAG_PROMPT_CACHE_FULL_RESTORE__\n");
          }
  
@@ -11403,6 +11429,9 @@ index 526a144c3..045addf3c 100644
 +            SRV_INF("slot %d: restored a copy of a cached prompt (%zu tokens, %d shared), entry kept\n",
 +                    id_slot, it_best->prompt.tokens.size(), lcp_best);
 +            prompt = it_best->prompt.clone();
++            // the entry every new conversation copies from is the most valuable one: mark it as
++            // recently used so the LRU eviction (pop_front) takes older entries first
++            states.splice(states.end(), states, it_best);
 +        } else {
 +            prompt = std::move(it_best->prompt);
  
@@ -11413,10 +11442,21 @@ index 526a144c3..045addf3c 100644
          SRV_TRC("slot %d: prompt cache restore took %.2f ms\n", id_slot, (ggml_time_us() - t_start) / 1000.0);
      }
 diff --git a/tools/server/server-slot-sched.h b/tools/server/server-slot-sched.h
-index f1be0fe2f..a426b6e3e 100644
+index f1be0fe2f..fd2ac3763 100644
 --- a/tools/server/server-slot-sched.h
 +++ b/tools/server/server-slot-sched.h
-@@ -100,7 +100,9 @@ struct server_prompt_cache {
+@@ -78,6 +78,10 @@ struct server_prompt_cache_state {
+ };
+ 
+ struct server_prompt_cache {
++    // Slipstream: true when restoring a shorter prefix needs a context checkpoint (recurrent, hybrid
++    // or SWA memory); used to compare usable, not nominal, prefixes for the copy restore
++    bool needs_checkpoints = false;
++
+     server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
+         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
+         this->limit_tokens = limit_tokens;
+@@ -100,7 +104,9 @@ struct server_prompt_cache {
      // the cached state that is a better starting point than `prompt` for `tokens_new`, states.end() if none
      // lcp: the common prefix of that state with `tokens_new`
      // lora_new: the lora config of the new prompt, the states made with another config are skipped

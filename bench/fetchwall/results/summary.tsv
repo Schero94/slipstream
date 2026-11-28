@@ -309,3 +309,17 @@ lmabort p2new peak_rss_mb=9335 swap_delta_mb=0
 e6 copy256 swap_delta_mb=0
 20261128-023809	e6	label=nocopy2	C1_prompt_n=37407	C1_ttft_s=132.9	C2_prompt_n=2745	C2_cache_n=1687	C2_ttft_s=18.3	C3_prompt_n=2052	C3_cache_n=2380	C3_ttft_s=11.9	C1_out=fc14398b032c	C2_out=86b8ff31ee95	C3_out=86b8ff31ee95
 e6 nocopy2 swap_delta_mb=0
+20261128-024224	srv	label=pb-old	cache=10	decode_tps=18.13	prompt_n=57	ttft_s=0.8	prefill_tps=68.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=38b5b06864f1	env=
+20261128-024358	srv	label=pb-new	cache=10	decode_tps=17.36	prompt_n=57	ttft_s=0.8	prefill_tps=70.2	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14383	lm_decodes=0	out=38b5b06864f1	env=
+20261128-024532	srv	label=pb-nochunk	cache=10	decode_tps=19.00	prompt_n=57	ttft_s=0.8	prefill_tps=71.2	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=38b5b06864f1	env=PORT_NOCHUNK=1
+20261128-024703	srv	label=pb-fuselast	cache=10	decode_tps=17.90	prompt_n=57	ttft_s=0.9	prefill_tps=64.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=38b5b06864f1	env=PORT_FUSE_LAST=1
+20261128-024834	srv	label=pb-rsgather	cache=10	decode_tps=17.11	prompt_n=57	ttft_s=0.9	prefill_tps=64.4	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=38b5b06864f1	env=PORT_RS_NOINPLACE=1
+20261128-025006	srv	label=pb-all	cache=10	decode_tps=17.66	prompt_n=57	ttft_s=0.8	prefill_tps=72.3	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14378	lm_decodes=0	out=38b5b06864f1	env=PORT_NOCHUNK=1 PORT_FUSE_LAST=1 PORT_RS_NOINPLACE=1
+20261128-025136	srv	label=pb-old	cache=10	decode_tps=18.38	prompt_n=57	ttft_s=0.8	prefill_tps=70.3	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=38b5b06864f1	env=
+20261128-025307	srv	label=pb-new	cache=10	decode_tps=18.25	prompt_n=57	ttft_s=0.9	prefill_tps=65.9	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=38b5b06864f1	env=
+20261128-025439	srv	label=pb-nochunk	cache=10	decode_tps=18.95	prompt_n=57	ttft_s=0.8	prefill_tps=70.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=38b5b06864f1	env=PORT_NOCHUNK=1
+20261128-025610	srv	label=pb-fuselast	cache=10	decode_tps=17.98	prompt_n=57	ttft_s=0.8	prefill_tps=67.6	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=38b5b06864f1	env=PORT_FUSE_LAST=1
+20261128-025740	srv	label=pb-rsgather	cache=10	decode_tps=17.12	prompt_n=57	ttft_s=0.9	prefill_tps=64.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14382	lm_decodes=0	out=38b5b06864f1	env=PORT_RS_NOINPLACE=1
+20261128-025913	srv	label=pb-all	cache=10	decode_tps=17.90	prompt_n=57	ttft_s=0.8	prefill_tps=70.5	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14379	lm_decodes=0	out=38b5b06864f1	env=PORT_NOCHUNK=1 PORT_FUSE_LAST=1 PORT_RS_NOINPLACE=1
+20261128-030050	e6	label=usable	C1_prompt_n=37407	C1_ttft_s=132.4	C2_prompt_n=26	C2_cache_n=4406	C2_ttft_s=1.6	C3_prompt_n=4432	C3_cache_n=0	C3_ttft_s=22.1	C1_out=fc14398b032c	C2_out=86b8ff31ee95	C3_out=86b8ff31ee95
+e6 usable swap_delta_mb=0
