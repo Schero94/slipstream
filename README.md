@@ -56,6 +56,12 @@ or as a direct authenticated QUIC peer. Community donation and remote Chat are
 separate opt-ins. Traffic is encrypted, but the selected worker sees plaintext
 during inference; sensitive and secret work stays local by default.
 
+<p align="center">
+  <img src="docs/screenshots/connect-editor.png" alt="Slipstream app: the model is running and Kilo Code or OpenCode connect with one click" width="820" /><br/>
+  <img src="docs/screenshots/prompt-progress.png" alt="Slipstream app: progress bar while a 39,517-token agent prompt is read" width="820" /><br/>
+  <sub>The app: one click connects Kilo Code or OpenCode; long agent prompts show live progress. (UI with demo data.)</sub>
+</p>
+
 > Not affiliated with Ollama. Slipstream is a llama.cpp/Metal fork with its own SSD expert-streaming layer (PGRN) and a self-contained control app.
 
 ---

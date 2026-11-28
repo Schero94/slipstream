@@ -62,6 +62,8 @@ Never edit files while a build is compiling them (it produces mixed binaries).
   (case-insensitive); unknown → WARN + default; decay is inert with --pgrn-hot-percent > 0 (WARN).
   The app sets `decay` for streamed runs with cache < 0.45 × PGRN size. `PGRN_TRACE=<path>` writes a
   cache trace for `bench/fetchwall/sim_eviction.py` (`--engine-summary` = per-arm outcomes incl. wasted reads).
+- `PGRN_CROP_Q=0` — disables the last-layer query crop (on by default since 2026-11-28: the last
+  attention layer computes Q/attention only for output rows; bitwise identical, −4.5 s at 39k).
 - `PGRN_STEER=<bonus>` — cache-steered routing (Cache-Prior arXiv 2412.00099 / CECAR
   2611.20119 / PSR 2610.34721): bonus on resident experts' *selection* probability,
   mask snapshotted at ubatch start (deterministic); mixing weights stay unbiased. Lossy.
