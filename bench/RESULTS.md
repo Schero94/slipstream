@@ -3978,3 +3978,14 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 - Numerics unchanged by the upstream range (identical hashes everywhere) → no KLD run needed.
 - Patch: 60 upstream files, 5,849 lines (was 11,534: two stray .orig files removed; CUDA fattn + test-backend-ops
   hunks dropped for upstream's versions). engine_sync --verify PASS (exit 0).
+
+## Port follow-up: named tool_choice regression fixed — 2026-11-28
+
+- `bench/fetchwall/toolchoice_smoke.sh` (llama-server, Qwen3.6, 4 GiB, two tools read_file /
+  list_dir, prompt "Show me what is in the src folder"): after the 8e23278 port a named
+  tool_choice {"type":"function","function":{"name":"read_file"}} was ignored — the model called
+  list_dir (the port took upstream's tool_choice parsing, whose grammar does not enforce the name
+  for Qwen3.6's XML tool calls). Old binary: read_file.
+- Fix (tools/server/server-common.cpp): filter `tools` to the named function before the upstream
+  parsing (fork behaviour since 0.3). After: read_file forced; null/auto/required → list_dir and
+  none → no tool call, identical to the old binary. ctest -R peregrine 14/14, engine_sync VERIFY PASS.

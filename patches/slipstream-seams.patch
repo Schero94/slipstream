@@ -4997,7 +4997,7 @@ index 9f9393f98..8aca50123 100644
      server-chat.h
      server-task.cpp
 diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
-index 8bceea6aa..b96c1175d 100644
+index 8bceea6aa..07317c713 100644
 --- a/tools/server/server-common.cpp
 +++ b/tools/server/server-common.cpp
 @@ -159,11 +159,22 @@ json server_slot_stats::to_json() const {
@@ -5023,6 +5023,35 @@ index 8bceea6aa..b96c1175d 100644
      return base;
  }
  
+@@ -1500,6 +1511,28 @@ json oaicompat_chat_params_parse(
+     auto stream = json_value(body, "stream", false);
+     auto tool_choice = json_value(body, "tool_choice", json("auto"));
+ 
++    // Slipstream: a named tool_choice ({"type":"function","function":{"name":...}}) must force exactly
++    // that tool. Upstream parses the name into tool_choice.allowed, but the grammar built for some
++    // templates (Qwen3.6's XML tool calls) ignores it and lets the model call any tool (measured after
++    // the 8e23278 port: read_file requested, list_dir called). Filtering the tools to the selected one,
++    // with mode required, is equivalent to OpenAI's specific-function choice (fork behaviour since 0.3).
++    if (has_tools && tool_choice.is_object() && json_value(tool_choice, "type", std::string()) == "function") {
++        const auto name = json_value(json_value(tool_choice, "function", json::object()), "name", std::string());
++        if (name.empty()) {
++            throw std::invalid_argument("tool_choice object must select a non-empty function name");
++        }
++        json selected = json::array();
++        for (const auto & tool : tools) {
++            if (json_value(json_value(tool, "function", json::object()), "name", std::string()) == name) {
++                selected.push_back(tool);
++            }
++        }
++        if (selected.empty()) {
++            throw std::invalid_argument("tool_choice function '" + name + "' is not present in tools");
++        }
++        tools = std::move(selected);
++    }
++
+     if (!opt.use_jinja) {
+         if (has_tools) {
+             throw std::runtime_error("tools param requires --jinja flag");
 diff --git a/tools/server/server-common.h b/tools/server/server-common.h
 index c1a0f4dca..ccbd60722 100644
 --- a/tools/server/server-common.h
