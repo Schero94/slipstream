@@ -2860,7 +2860,7 @@ index fedc70969..9fcc8a992 100644
          const llama_grammar_rules      & rules,
          const llama_grammar_stack      & stack,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 31200d0d1..13f05d078 100644
+index 31200d0d1..fe6a8abf6 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -267,6 +267,22 @@ bool llm_graph_input_batch_idxs::can_reuse(const llm_graph_params & params) {
@@ -2886,7 +2886,49 @@ index 31200d0d1..13f05d078 100644
  void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
      if (ubatch->pos && pos) {
          const int64_t n_tokens = ubatch->n_tokens;
-@@ -1271,15 +1287,21 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
+@@ -400,6 +416,41 @@ bool llm_graph_input_out_ids::can_reuse(const llm_graph_params & params) {
+     return res;
+ }
+ 
++void llm_graph_input_out_ids_pad::set_input(const llama_ubatch * ubatch) {
++    GGML_ASSERT(rows && ggml_backend_buffer_is_host(rows->buffer));
++    GGML_ASSERT(ubatch->n_tokens == n_tokens && ubatch->output);
++    GGML_ASSERT(n_outputs <= n_pad && n_pad <= n_tokens);
++
++    // every output row, then the non-output rows nearest the end of the ubatch, in ascending order
++    std::vector<char> take(n_tokens, 0);
++    uint32_t n = 0;
++    for (uint32_t i = 0; i < n_tokens; ++i) {
++        if (ubatch->output[i]) {
++            take[i] = 1;
++            n++;
++        }
++    }
++    GGML_ASSERT(n == n_outputs);
++    for (int64_t i = (int64_t) n_tokens - 1; i >= 0 && n < n_pad; --i) {
++        if (!take[i]) {
++            take[i] = 1;
++            n++;
++        }
++    }
++    int32_t * data = (int32_t *) rows->data;
++    n = 0;
++    for (uint32_t i = 0; i < n_tokens; ++i) {
++        if (take[i]) {
++            data[n++] = (int32_t) i;
++        }
++    }
++    GGML_ASSERT(n == n_pad);
++}
++
++bool llm_graph_input_out_ids_pad::can_reuse(const llm_graph_params & params) {
++    return n_outputs == params.n_outputs && n_tokens == params.ubatch.n_tokens;
++}
++
+ void llm_graph_input_moe_ids::set_input(const llama_ubatch * ubatch) {
+     GGML_ASSERT(ggml_backend_buffer_is_host(ids->buffer));
+ 
+@@ -1271,15 +1322,21 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
  }
  
  void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
@@ -2911,7 +2953,7 @@ index 31200d0d1..13f05d078 100644
          GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
          int32_t * data = (int32_t *) inp_rs->s_copy->data;
  
-@@ -1762,6 +1784,9 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
+@@ -1762,6 +1819,9 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
      h_nextn_dev      (params.h_nextn_dev),
      h_nextn_src      (params.h_nextn_src),
      w_scales         (params.w_scales),
@@ -2921,7 +2963,7 @@ index 31200d0d1..13f05d078 100644
      samplers         (params.samplers),
      cb_func          (params.cb),
      res              (params.res),
-@@ -2341,7 +2366,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2341,7 +2401,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
           ggml_tensor * gate_up_exps,
           ggml_tensor * selected_experts_in,
           ggml_tensor * post_exp_norm,
@@ -2931,7 +2973,7 @@ index 31200d0d1..13f05d078 100644
      return build_moe_ffn(
          cur,
          gate_inp,  /* gate_inp_b  */ nullptr,
-@@ -2361,7 +2387,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2361,7 +2422,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          /* gate_up_exps_b */ nullptr,
          selected_experts_in,
          post_exp_norm,
@@ -2941,7 +2983,7 @@ index 31200d0d1..13f05d078 100644
      );
  }
  
-@@ -2388,16 +2415,61 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2388,16 +2450,61 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
           ggml_tensor * gate_up_exps_b,
           ggml_tensor * selected_experts_in,
           ggml_tensor * post_exp_norm,
@@ -3004,7 +3046,7 @@ index 31200d0d1..13f05d078 100644
          cb(logits, "ffn_moe_logits", il);
      } else {
          logits = probs_in;
-@@ -2438,6 +2510,17 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2438,6 +2545,17 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          selection_probs = ggml_add(ctx0, probs, exp_probs_b);
          cb(selection_probs, "ffn_moe_probs_biased", il);
      }
@@ -3022,7 +3064,7 @@ index 31200d0d1..13f05d078 100644
  
      // llama4 doesn't have exp_probs_b, and sigmoid is only used after top_k
      // see: https://github.com/meta-llama/llama-models/blob/699a02993512fb36936b1b0741e13c06790bcf98/models/llama4/moe.py#L183-L198
-@@ -2481,7 +2564,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2481,7 +2599,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          selected_experts = ggml_argsort_top_k(ctx0, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
          cb(selected_experts->src[0], "ffn_moe_argsort", il);
      }
@@ -3031,7 +3073,7 @@ index 31200d0d1..13f05d078 100644
  
      if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
          // TODO: Use scalar div instead when/if implemented
-@@ -2534,7 +2617,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2534,7 +2652,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
      ggml_build_forward_expand(gf, weights);
  
      // benchmark only: the expert GEMMs use random ids, the router above is not changed
@@ -3040,7 +3082,7 @@ index 31200d0d1..13f05d078 100644
          // fused top-k kernels write the router ids together with the weights, so keep the ids alive until here
          // the empty get_rows is skipped by the backends, it only adds this dependency
          ggml_build_forward_expand(gf, ggml_get_rows(ctx0, weights, ggml_view_2d(ctx0, selected_experts, 0, n_tokens, selected_experts->nb[1], 0)));
-@@ -2547,11 +2630,21 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2547,11 +2665,21 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          }
      }
  
@@ -3063,7 +3105,7 @@ index 31200d0d1..13f05d078 100644
          moe_cache->build_lookup(*this, { il, up_exps, gate_exps, down_exps, gate_up_exps, weight_before_ffn }, selected_experts);
  
      cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
-@@ -2704,7 +2797,22 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2704,7 +2832,22 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
              cur = amax_src1.res;
          }
  
@@ -3086,7 +3128,7 @@ index 31200d0d1..13f05d078 100644
          cb(experts, "ffn_moe_down", il);
  
          if (amax_src1.scale_s) {
-@@ -2714,7 +2822,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2714,7 +2857,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          return experts;
      };
  
@@ -3097,7 +3139,7 @@ index 31200d0d1..13f05d078 100644
          build_experts(cur, selected_experts, nullptr, true) :
          moe_cache->build_experts(*this, cache, cur, selected_experts,
                  [](ggml_tensor * cur, ggml_tensor * ids, ggml_tensor * mm_ids, bool cached, void * user_data) {
-@@ -2977,6 +3087,22 @@ ggml_tensor * llm_graph_context::build_inp_pos() const {
+@@ -2977,6 +3122,22 @@ ggml_tensor * llm_graph_context::build_inp_pos() const {
      return cur;
  }
  
@@ -3120,7 +3162,28 @@ index 31200d0d1..13f05d078 100644
  ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
      auto inp = std::make_unique<llm_graph_input_attn_temp>(hparams.n_attn_temp_floor_scale, hparams.f_attn_temp_scale, hparams.f_attn_temp_offset, hparams.attn_temp_pow);
  
-@@ -3486,7 +3612,8 @@ ggml_tensor * llm_graph_context::build_attn(
+@@ -3014,6 +3175,20 @@ ggml_tensor * llm_graph_context::build_inp_out_ids() const {
+     return cur;
+ }
+ 
++ggml_tensor * llm_graph_context::build_inp_out_ids_pad(uint32_t n_pad) const {
++    auto inp = std::make_unique<llm_graph_input_out_ids_pad>(n_outputs, n_tokens, n_pad);
++
++    auto & cur = inp->rows;
++
++    cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pad);
++    ggml_set_input(cur);
++    ggml_set_name(cur, "out_ids_pad");
++
++    res->add_input(std::move(inp));
++
++    return cur;
++}
++
+ ggml_tensor * llm_graph_context::build_inp_mean() const {
+     auto inp = std::make_unique<llm_graph_input_mean>(cparams);
+ 
+@@ -3486,7 +3661,8 @@ ggml_tensor * llm_graph_context::build_attn(
          ggml_tensor * sinks,
          ggml_tensor * v_mla, // TODO: remove
              float     kq_scale,
@@ -3130,7 +3193,7 @@ index 31200d0d1..13f05d078 100644
      GGML_ASSERT(v_mla == nullptr);
  
      if (inp->self_k_rot[il]) {
-@@ -3531,8 +3658,20 @@ ggml_tensor * llm_graph_context::build_attn(
+@@ -3531,8 +3707,20 @@ ggml_tensor * llm_graph_context::build_attn(
          v = mctx_cur->get_v(ctx0, il);
      }
  
@@ -3154,7 +3217,7 @@ index 31200d0d1..13f05d078 100644
      ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il, nullptr, nullptr,
              mctx_cur->get_k_scale(il), mctx_cur->get_v_scale(il));
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 4a1d497b7..0a1387ce0 100644
+index 4a1d497b7..2e66789c0 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -185,6 +185,20 @@ public:
@@ -3178,7 +3241,33 @@ index 4a1d497b7..0a1387ce0 100644
  class llm_graph_input_pos : public llm_graph_input_i {
  public:
      llm_graph_input_pos(uint32_t n_pos_per_embd, llama_rope_section_order rope_section_order = LLAMA_ROPE_SECTION_ORDER_TYXZ)
-@@ -886,6 +900,13 @@ struct llm_graph_params {
+@@ -268,6 +282,25 @@ public:
+     const uint32_t n_outputs;
+ };
+ 
++// Slipstream (PGRN_CROP_Q): the output rows padded with other ubatch rows to n_pad rows (sorted). The cropped
++// last-layer attention runs on these rows so the flash-attention kernel class matches the uncropped graph.
++class llm_graph_input_out_ids_pad : public llm_graph_input_i {
++public:
++    llm_graph_input_out_ids_pad(uint32_t n_outputs, uint32_t n_tokens, uint32_t n_pad) :
++        n_outputs(n_outputs), n_tokens(n_tokens), n_pad(n_pad) {}
++    virtual ~llm_graph_input_out_ids_pad() = default;
++
++    void set_input(const llama_ubatch * ubatch) override;
++
++    bool can_reuse(const llm_graph_params & params) override;
++
++    ggml_tensor * rows = nullptr; // I32 [n_pad]
++
++    const uint32_t n_outputs;
++    const uint32_t n_tokens;
++    const uint32_t n_pad;
++};
++
+ // random expert ids for the MoE GEMMs, for benchmarks only (env: LLAMA_MOE_RANDOM_ROUTING)
+ class llm_graph_input_moe_ids : public llm_graph_input_i {
+ public:
+@@ -886,6 +919,13 @@ struct llm_graph_params {
      ggml_tensor * h_nextn_src   = nullptr; // ctx_state_src's h_nextn device buffer (read)
      const llama_weight_scales * w_scales = nullptr;
  
@@ -3192,7 +3281,7 @@ index 4a1d497b7..0a1387ce0 100644
      std::map<llama_seq_id, llama_sampler *> samplers;
  
      static bool samplers_equal(
-@@ -982,6 +1003,9 @@ struct llm_graph_params {
+@@ -982,6 +1022,9 @@ struct llm_graph_params {
              layer_inp_src == other.layer_inp_src &&
              h_nextn_dev   == other.h_nextn_dev   &&
              h_nextn_src   == other.h_nextn_src   &&
@@ -3202,7 +3291,7 @@ index 4a1d497b7..0a1387ce0 100644
              model == other.model &&
              gtype == other.gtype &&
              cvec  == other.cvec  &&
-@@ -1163,6 +1187,10 @@ struct llm_graph_context {
+@@ -1163,6 +1206,10 @@ struct llm_graph_context {
      ggml_tensor * h_nextn_src;
      const llama_weight_scales * w_scales;
  
@@ -3213,7 +3302,7 @@ index 4a1d497b7..0a1387ce0 100644
      std::map<llama_seq_id, llama_sampler *> samplers;
  
      const llm_graph_cb & cb_func;
-@@ -1286,7 +1314,8 @@ struct llm_graph_context {
+@@ -1286,7 +1333,8 @@ struct llm_graph_context {
               ggml_tensor * gate_up_exps = nullptr,
               ggml_tensor * selected_experts_in = nullptr,
               ggml_tensor * post_exp_norm = nullptr,
@@ -3223,7 +3312,7 @@ index 4a1d497b7..0a1387ce0 100644
  
      ggml_tensor * build_moe_ffn(
               ggml_tensor * cur,
-@@ -1311,7 +1340,8 @@ struct llm_graph_context {
+@@ -1311,7 +1359,8 @@ struct llm_graph_context {
               ggml_tensor * gate_up_exps_b = nullptr,
               ggml_tensor * selected_experts_in = nullptr,
               ggml_tensor * post_exp_norm = nullptr,
@@ -3233,17 +3322,18 @@ index 4a1d497b7..0a1387ce0 100644
  
      //
      // inputs
-@@ -1333,6 +1363,9 @@ struct llm_graph_context {
+@@ -1333,6 +1382,10 @@ struct llm_graph_context {
      ggml_tensor * build_rope_indexer(ggml_tensor * cur, ggml_tensor * pos, int il) const;
      ggml_tensor * build_inp_attn_scale() const;
      ggml_tensor * build_inp_out_ids() const;
++    ggml_tensor * build_inp_out_ids_pad(uint32_t n_pad) const; // Slipstream: see llm_graph_input_out_ids_pad
 +
 +    // Slipstream layer-major prefill: I32 [n_tokens] batch indices of the ubatch tokens
 +    ggml_tensor * build_inp_lm_rows() const;
      ggml_tensor * build_inp_mean() const;
      ggml_tensor * build_inp_cls() const;
      ggml_tensor * build_inp_moe_ids(int64_t n_used, int64_t n_rows) const;
-@@ -1391,7 +1424,8 @@ struct llm_graph_context {
+@@ -1391,7 +1444,8 @@ struct llm_graph_context {
              ggml_tensor * sinks, // [n_head_q]
              ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v] // TODO: remove
                    float   kq_scale,
@@ -4506,7 +4596,7 @@ index 177b31451..a330813e6 100644
      res->t_embd = cur;
  
 diff --git a/src/models/models.h b/src/models/models.h
-index 128722e69..d76c3486f 100644
+index 128722e69..6d78569e5 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
 @@ -1661,6 +1661,15 @@ struct llama_model_dflash : public llama_model_base {
@@ -4533,27 +4623,48 @@ index 128722e69..d76c3486f 100644
  struct llama_model_ernie4_5 : public llama_model_base {
      llama_model_ernie4_5(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
-@@ -3210,7 +3220,8 @@ struct llama_model_qwen35moe : public llama_model_base {
+@@ -3210,7 +3220,9 @@ struct llama_model_qwen35moe : public llama_model_base {
          llm_graph_input_attn_kv * inp_attn,
                      ggml_tensor * cur,
                      ggml_tensor * inp_pos,
 -                            int   il);
 +                            int   il,
-+                    ggml_tensor * q_rows = nullptr);
++                    ggml_tensor * q_rows   = nullptr,  // Slipstream: attention rows (output rows, padded)
++                    ggml_tensor * out_rows = nullptr); // Slipstream: output rows kept after the output projection
  
          ggml_tensor * build_layer_attn_linear(
               llm_graph_input_rs * inp,
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index cf6dd9e74..2154764d0 100644
+index cf6dd9e74..526025a37 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
-@@ -162,21 +162,62 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
+@@ -1,6 +1,21 @@
+ #include "models.h"
+ #include "llama-memory-recurrent.h"
+ 
++// Slipstream PGRN_CROP_Q: minimum attention rows of the cropped last layer (>= the CPU tiled-FA tile of 64 rows and
++// the Metal vec-kernel threshold of 20 rows). PGRN_CROP_Q_MIN_ROWS=<n> overrides it for diagnostics only (1 = the
++// unpadded crop, which is NOT bitwise at real shapes).
++static int64_t pgrn_crop_q_min_rows() {
++    static const int64_t v = [] {
++        const char * e = getenv("PGRN_CROP_Q_MIN_ROWS");
++        const int64_t n = e ? std::max<int64_t>(1, atoll(e)) : 64;
++        if (e) {
++            LLAMA_LOG_WARN("%s: PGRN_CROP_Q_MIN_ROWS=%lld (diagnostic override)\n", __func__, (long long) n);
++        }
++        return n;
++    }();
++    return v;
++}
++
+ void llama_model_qwen35moe::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all, false);
+     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+@@ -162,21 +177,69 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
 -    inpL = build_inp_embd(model.tok_embd);
--
--    cb(inpL, "model.input_embed", -1);
 +    // Slipstream layer-major prefill: this graph covers layers [il0, il1). It reads its input rows from
 +    // lm_resid when it starts after layer 0, and writes its output rows back (without the head) when it
 +    // ends before the last layer. The normal graph is il0 = 0, il1 = n_layer.
@@ -4562,7 +4673,8 @@ index cf6dd9e74..2154764d0 100644
 +    const bool lm_in  = il0 > 0;
 +    const bool lm_out = il1 < (int) n_layer;
 +    GGML_ASSERT(0 <= il0 && il0 < il1 && il1 <= (int) n_layer);
-+
+ 
+-    cb(inpL, "model.input_embed", -1);
 +    ggml_tensor * lm_rows = (lm_in || lm_out) ? build_inp_lm_rows() : nullptr;
 +
 +    if (lm_in) {
@@ -4610,18 +4722,29 @@ index cf6dd9e74..2154764d0 100644
 +        const bool crop_last = il == n_layer - 1 && crop_before_nextn(inp_out_ids);
 +        // one stream (single-sequence ubatch) keeps the KQ mask rows aligned with the ubatch rows; ubatches where
 +        // every row is an output (decode, draft verify) keep the plain graph
++        // The attention runs on the output rows padded to at least pgrn_crop_q_min_rows() (64) rows: the flash-attention
++        // kernel class depends on the query row count (Metal: vec below 20 rows; CPU: tiled from 64 rows, split-KV for
++        // a single query over >= 512 KV cells), and per row each class is independent of the other rows. So the
++        // padded attention takes the same kernel as the uncropped graph -> bitwise identical output rows. Ubatches
++        // with at most that many rows keep the plain graph; ubatches without outputs (inner prefill ubatches) skip
++        // the attention entirely.
++        const int64_t crop_n_pad = n_outputs == 0 ? 0 : std::max<int64_t>(n_outputs, pgrn_crop_q_min_rows());
 +        const bool crop_q    = crop_last && crop_q_env && !hparams.is_recr(il) && ubatch.n_seqs_unq == 1 &&
-+                               !cparams.training && n_outputs < (int64_t) n_tokens;
++                               !cparams.training && n_outputs < (int64_t) n_tokens && crop_n_pad < (int64_t) n_tokens;
 +
          cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
          cb(cur, "attn_norm", il);
  
-@@ -188,11 +229,13 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
+@@ -188,11 +251,17 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
              cur = build_layer_attn_linear(inp->get_recr(), cur, il);
          } else {
              // Full attention layer
 -            cur = build_layer_attn(inp->get_attn(), cur, inp_pos, il);
-+            cur = build_layer_attn(inp->get_attn(), cur, inp_pos, il, crop_q ? inp_out_ids : nullptr);
++            ggml_tensor * q_rows = nullptr;
++            if (crop_q) {
++                q_rows = crop_n_pad == 0 ? inp_out_ids : build_inp_out_ids_pad((uint32_t) crop_n_pad);
++            }
++            cur = build_layer_attn(inp->get_attn(), cur, inp_pos, il, q_rows, crop_q ? inp_out_ids : nullptr);
          }
  
 -        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
@@ -4633,7 +4756,7 @@ index cf6dd9e74..2154764d0 100644
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
  
-@@ -221,6 +264,12 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
+@@ -221,6 +290,12 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
          // Input for next layer
          inpL = cur;
      }
@@ -4646,22 +4769,23 @@ index cf6dd9e74..2154764d0 100644
      cur = inpL;
  
      // post-norm hidden state feeds both the LM head and the MTP seed below
-@@ -274,7 +323,8 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
+@@ -274,7 +349,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
          llm_graph_input_attn_kv * inp,
          ggml_tensor *             cur,
          ggml_tensor *             inp_pos,
 -        int                       il) {
 +        int                       il,
-+        ggml_tensor *             q_rows) {
++        ggml_tensor *             q_rows,
++        ggml_tensor *             out_rows) {
      const int64_t n_embd_head = hparams.n_embd_head_v();
      GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
  
-@@ -321,12 +371,24 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
+@@ -321,12 +398,24 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
      cb(Kcur, "Kcur", il);
      cb(Vcur, "Vcur", il);
  
 +    if (q_rows) {
-+        // Slipstream: queries and gate only for the output rows (row-wise ops above are unchanged per row)
++        // Slipstream: queries and gate only for the (padded) output rows (row-wise ops above are unchanged per row)
 +        const int64_t n_rows = q_rows->ne[0];
 +        Qcur = ggml_reshape_2d(ctx0, Qcur, n_embd_head * n_head, n_tokens);
 +        Qcur = ggml_get_rows(ctx0, Qcur, q_rows);
@@ -4682,27 +4806,28 @@ index cf6dd9e74..2154764d0 100644
      cb(cur, "attn_pregate", il);
  
      ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
-@@ -335,7 +397,18 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
+@@ -335,7 +424,19 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
      cur = ggml_mul(ctx0, cur, gate_sigmoid);
      cb(cur, "attn_gated", il);
  
 -    cur = build_lora_mm(model.layers[il].wo, cur);
 +    if (q_rows && q_rows->ne[0] > 0) {
 +        // Slipstream: the output projection runs with the ubatch's full row count (zero rows elsewhere) so the
-+        // matmul takes the same kernel as without the crop -> bitwise identical output rows; then crop.
-+        // A ubatch without output rows (inner prefill ubatches) skips it: cur has 0 rows.
++        // matmul takes the same kernel as without the crop -> bitwise identical output rows; then keep the
++        // output rows. A ubatch without output rows (inner prefill ubatches) skips it: cur has 0 rows.
++        GGML_ASSERT(out_rows);
 +        ggml_tensor * full = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, cur->ne[0], n_tokens), 0.0f);
 +        cur = ggml_set_rows(ctx0, full, cur, q_rows);
 +        cb(cur, "attn_gated_scatter", il);
 +        cur = build_lora_mm(model.layers[il].wo, cur);
-+        cur = ggml_get_rows(ctx0, cur, q_rows);
++        cur = ggml_get_rows(ctx0, cur, out_rows);
 +    } else {
 +        cur = build_lora_mm(model.layers[il].wo, cur);
 +    }
      cb(cur, "attn_output", il);
  
      return cur;
-@@ -468,18 +541,27 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+@@ -468,18 +569,27 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
      // Check if this is an MoE layer
      GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
  
@@ -4734,7 +4859,7 @@ index cf6dd9e74..2154764d0 100644
      cb(moe_out, "ffn_moe_out", il);
  
      // Add shared experts if present - following Qwen3Next reference implementation
-@@ -637,18 +719,22 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llm_graph_params & params)
+@@ -637,18 +747,22 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llm_graph_params & params)
      cb(cur, "mtp_attn_post_norm", il);
  
      // MoE FFN — routed experts plus gated shared expert (mirrors qwen35moe).

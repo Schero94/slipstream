@@ -4219,3 +4219,55 @@ and not negative.
   135.9 / 133.9 s earlier today with the old binary.
 - Verdict: KEEP, default on (output byte-identical, KV state bitwise identical). First turn of a 39k agent
   prompt ~132 → ~127.5 s in the app regime. The bundled app engine needs a rebuild at the next release.
+
+## Last-layer crop (`PGRN_CROP_Q`) follow-up: NOT bitwise at real shapes → fixed by padding to 64 attention rows — KEEP (bitwise, default on) — 2026-11-28
+
+- **Correction of the entry above.** "Bitwise identical" was only proven at tiny shapes (T4: 23-token prompt,
+  ubatch 4, n_ctx 64) plus equal greedy-text hashes on the real model. A review pointed out that the flash-attention
+  kernel class depends on the query row count: Metal uses the vec kernel below 20 rows and the tiled (half8x8)
+  kernel above; the CPU uses the tiled path from 64 rows, `one_chunk` below, and a split-KV path for exactly one
+  query over ≥ 512 KV cells. Cropping to the single output row therefore switched kernels at real shapes. Measured:
+  - Real model (Qwen3.6-35B-A3B Q4, ~/Modelle, 4 GiB cache, Metal, new `test-peregrine-model --crop-q-file`
+    tool: 39,000 tokens of `bench/fetchwall/prompt_30k.txt`, n_ctx 40960, crop off vs on in fresh contexts, last-token
+    logits compared float by float), the commit-fe9d174 crop (reproduced with `PGRN_CROP_Q_MIN_ROWS=1`):
+    layer-major -b 40960 -ub 2048: **not bitwise, max_abs 3.0e-4, 247,422 of 248,320 logits differ**, top-1 token
+    equal, serialized sequence state (KV + recurrent) equal. Normal path -b 4096 -ub 4096: same (max_abs 3.0e-4,
+    247,422 / 248,320 differ, top-1 equal, state equal). So the earlier crop was "lossless up to fp summation order",
+    not bitwise; the greedy-text hashes matched only because the top token did not flip.
+  - Fixture T4 at real shapes (new arms, see below), crop as in fe9d174: Metal fails the prefix-5 cases of 540/ub64
+    and 540/ub2048 (max_abs 1.0e-5); CPU-only (`n_gpu_layers 0`, no KQV/op offload) fails every real shape
+    (540/ub64, 600/ub512, 540/ub2048, prefix 0 and 5, normal and layer-major; max_abs 1.8e-7). Tiny shape passes.
+- **Fix:** the cropped last-layer attention now runs on the output rows padded to at least 64 rows
+  (`max(n_outputs, 64)`): every output row plus the non-output rows nearest the end of the ubatch, ascending (new graph
+  input `llm_graph_input_out_ids_pad`, filled from `ubatch.output`, reused when n_outputs and n_tokens match).
+  Q, gate and the KQ mask are gathered for those rows, Wo still runs on the full-row zero-filled tensor, and the
+  true output rows are taken with `inp_out_ids` afterwards. Ubatches with ≤ 64 rows keep the plain graph; ubatches
+  without outputs (inner prefill ubatches) still skip the attention. Per row, each FA kernel class is independent of
+  the other rows (CPU tiled: rows padded to the 64-row tile and processed independently; Metal half8x8: per-row
+  online softmax, fully masked blocks contribute exactly 0), so with ≥ 64 rows the cropped arm stays in the same
+  class as the uncropped one. `PGRN_CROP_Q_MIN_ROWS=<n>` overrides 64 for diagnostics only (logs a WARN).
+  Caveat: on M5-class GPUs (Metal tensor API, disabled on this M3 Pro) the tensor-vs-half8x8 choice also depends on
+  the row count; for Qwen3.6 (16 heads, head 256) 64 rows already select the tensor kernel, other models untested.
+- **Tests after the fix** (binary build-crop 10:19–10:20, newer than every changed source):
+  - T4 in `test-peregrine-model` now covers 4 shapes × prefix {0,5} × {normal, layer-major} × {resident, streamed}
+    = 96 checks per device (last logits, follow-up logits, full memory state): tiny 23/ub4, 540/ub64 (ragged last
+    ubatch of 28/33 rows, KV ≥ 540), 600/ub512 (last ubatch 88/93 rows), 540/ub2048 (one 540-row ubatch, the app
+    ubatch size). Results: Metal `--gpu` OK, default placement (= Metal on this host) OK, **CPU-only OK**, all
+    max_abs=0. The e2e test (`--layer-major`) now also runs the CPU-only arm. ctest -R peregrine 14/14.
+  - Real model, same tool, padded crop (default): layer-major -b 40960 -ub 2048: **bitwise yes, max_abs 0,
+    0 / 248,320 differ**, state equal; normal -b 4096 -ub 4096: **bitwise yes, 0 / 248,320**, state equal. Swap stayed
+    at 335.56 MB through all runs (Δ 0).
+- **Speed** after the fix, `prefill_scaling.sh LM=1` (app regime, layer-major ub 2048 / -b 40960, 4 GiB,
+  --cache-ram 0, binary build-crop/bin/llama-server 10:20), interleaved off/on/off/on, 30 s cooldown, prompt seconds:
+
+  | run | 10k off / on | 20k off / on | 39,019 off / on |
+  |---|---:|---:|---:|
+  | r1 | 33.6 / 33.3 | 61.7 / 60.0 | 132.3 / 127.4 |
+  | r2 | 33.6 / 33.2 | 61.2 / 60.0 | 132.0 / 127.2 |
+
+  **39k: 132.15 → 127.3 s (−4.85 s, −3.7 %)**, same as the unpadded version (−4.5 s); the 63 extra attention rows
+  cost nothing measurable. Fit: quadratic 47.1 / 50.7 s off → 46.0 / 45.4 s on. Background load: corespotlightd at
+  115 % CPU when off-r2 started (load avg 1.47); off-r2 still matched off-r1 (132.0 vs 132.3), so no visible
+  disturbance. The crop-file tool's own timings agree (LM 125.9 → 121.2 s, normal 180.5 → 175.5 s).
+- Verdict: KEEP, default on — now bitwise at real shapes on Metal and CPU (fixture) and on the real model (both
+  app paths). The −4.5 s claim stands; the earlier "bitwise" claim for fe9d174 was wrong at real shapes.

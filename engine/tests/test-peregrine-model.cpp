@@ -573,19 +573,29 @@ static int layer_major_fixture(const char * gguf, const char * pgrn, bool gpu) {
 // T4: PGRN_CROP_Q (last layer: Q, attention and output projection only for the output rows). The prompt has a
 // single output (the last token) like a real prefill; normal and layer-major, prefix 0 and 5, resident and
 // streamed. Each arm gets a fresh context (graph reuse would keep a graph built under the other setting).
+// Shapes: the tiny one plus real shapes where the flash-attention kernel class depends on the query row count
+// (Metal: vec below 20 rows, else tiled; CPU: tiled from 64 rows, split-KV for exactly 1 query over >= 512 KV
+// cells) - prompts >= 520 tokens with ubatches of 64 (ragged last ubatch of < 64 rows), 512 (last ubatch >= 64
+// rows) and 2048 (one ubatch).
 struct crop_run { std::vector<float> last, follow; std::vector<uint8_t> state; };
+struct crop_shape { int n_prompt; uint32_t n_ubatch, n_batch, n_ctx; };
 
-static crop_run crop_decode(llama_model * model, bool layer_major, bool crop, int n_prompt, int n_prefix, uint32_t n_ubatch) {
+static crop_run crop_decode(llama_model * model, bool layer_major, bool crop, const crop_shape & sh, int n_prefix, bool cpu) {
     setenv("PGRN_CROP_Q", crop ? "1" : "0", 1);
     llama_context_params cp = llama_context_default_params();
-    cp.n_ctx = 64;
-    cp.n_batch = 32;
-    cp.n_ubatch = n_ubatch;
+    cp.n_ctx = sh.n_ctx;
+    cp.n_batch = sh.n_batch;
+    cp.n_ubatch = sh.n_ubatch;
     cp.n_threads = 4;
     cp.n_threads_batch = 4;
+    if (cpu) {
+        cp.offload_kqv = false;
+        cp.op_offload  = false;
+    }
     llama_context_ptr ctx(llama_init_from_model(model, cp));
     if (!ctx) throw std::runtime_error("context creation failed");
     const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const int n_prompt = sh.n_prompt;
     const auto tokens = lm_fixture_tokens(n_prefix + n_prompt, n_vocab);
     if (n_prefix > 0) {
         if (!ctx->set_layer_major(false)) throw std::runtime_error("set_layer_major failed");
@@ -613,18 +623,31 @@ static crop_run crop_decode(llama_model * model, bool layer_major, bool crop, in
     return run;
 }
 
-static bool crop_q_fixture(const char * gguf, const char * pgrn, bool gpu) {
+static size_t crop_n_diff(const std::vector<float> & a, const std::vector<float> & b) {
+    size_t n = a.size() == b.size() ? 0 : std::max(a.size(), b.size());
+    for (size_t i = 0; i < a.size() && i < b.size(); ++i) n += std::memcmp(&a[i], &b[i], sizeof(float)) != 0;
+    return n;
+}
+
+// cpu: everything on the CPU backend (n_gpu_layers 0, no KQV/op offload); otherwise the model's default placement
+// (all layers on Metal on this host) or --gpu
+static bool crop_q_fixture(const char * gguf, const char * pgrn, bool gpu, bool cpu = false) {
     const char * env0 = getenv("PGRN_CROP_Q");
     const std::string saved = env0 ? env0 : "";
-    const int n_prompt = 23;
-    const uint32_t n_ubatch = 4;
+    const crop_shape shapes[] = {
+        {   23,    4,   32,   64 },   // tiny (ragged ubatches of 4)
+        {  540,   64, 2048, 1024 },   // real: last ubatch 28 rows (prefix 0) / 33 rows (prefix 5), KV >= 540
+        {  600,  512, 2048, 1024 },   // real: last ubatch 88 / 93 rows
+        {  540, 2048, 2048, 1024 },   // real: one ubatch of 540 rows (app ubatch size)
+    };
     bool ok = true;
     int n_checks = 0;
-    double max_abs = 0.0;
+    double max_abs = 0.0, max_abs_real = 0.0;
     for (int streamed = 0; streamed < 2; ++streamed) {
         llama_model_params mp = llama_model_default_params();
         mp.load_mode = streamed ? LLAMA_LOAD_MODE_NONE : LLAMA_LOAD_MODE_MMAP;
         if (gpu) mp.n_gpu_layers = 99;
+        if (cpu) mp.n_gpu_layers = 0;
         if (streamed) {
             mp.pgrn_path = pgrn;
             mp.pgrn_cache_bytes = fixture_cache_bytes(gguf);
@@ -633,28 +656,97 @@ static bool crop_q_fixture(const char * gguf, const char * pgrn, bool gpu) {
         llama_model_ptr model(llama_model_load_from_file(gguf, mp));
         if (!model) throw std::runtime_error("model load failed");
         if (model->hparams.is_recr(model->hparams.n_layer() - 1)) throw std::runtime_error("fixture's last layer must be attention");
-        for (int prefix : { 0, 5 }) {
-            for (int lm = 0; lm < 2; ++lm) {
-                const crop_run off = crop_decode(model.get(), lm, false, n_prompt, prefix, n_ubatch);
-                const crop_run on  = crop_decode(model.get(), lm, true,  n_prompt, prefix, n_ubatch);
-                const std::string tag = std::string(streamed ? "streamed" : "resident") + (lm ? " layer-major" : " normal") +
-                                        " prefix " + std::to_string(prefix);
-                const bool b_last   = lm_bitwise(off.last, on.last);
-                const bool b_follow = lm_bitwise(off.follow, on.follow);
-                const bool b_state  = off.state == on.state;
-                max_abs = std::max({ max_abs, lm_max_abs(off.last, on.last), lm_max_abs(off.follow, on.follow) });
-                if (!b_last)   std::fprintf(stderr, "PGR_CROP_Q_CHECK_FAIL: last logits (%s)\n", tag.c_str());
-                if (!b_follow) std::fprintf(stderr, "PGR_CROP_Q_CHECK_FAIL: follow logits (%s)\n", tag.c_str());
-                if (!b_state)  std::fprintf(stderr, "PGR_CROP_Q_CHECK_FAIL: memory state (%s)\n", tag.c_str());
-                ok = ok && b_last && b_follow && b_state;
-                n_checks += 3;
+        for (const crop_shape & sh : shapes) {
+            for (int prefix : { 0, 5 }) {
+                for (int lm = 0; lm < 2; ++lm) {
+                    const crop_run off = crop_decode(model.get(), lm, false, sh, prefix, cpu);
+                    const crop_run on  = crop_decode(model.get(), lm, true,  sh, prefix, cpu);
+                    const std::string tag = std::string(streamed ? "streamed" : "resident") + (lm ? " layer-major" : " normal") +
+                                            " prompt " + std::to_string(sh.n_prompt) + " ubatch " + std::to_string(sh.n_ubatch) +
+                                            " prefix " + std::to_string(prefix);
+                    const bool b_last   = lm_bitwise(off.last, on.last);
+                    const bool b_follow = lm_bitwise(off.follow, on.follow);
+                    const bool b_state  = off.state == on.state;
+                    const double ma = std::max(lm_max_abs(off.last, on.last), lm_max_abs(off.follow, on.follow));
+                    max_abs = std::max(max_abs, ma);
+                    if (sh.n_prompt >= 520) max_abs_real = std::max(max_abs_real, ma);
+                    if (!b_last)   std::fprintf(stderr, "PGR_CROP_Q_CHECK_FAIL: last logits (%s) max_abs=%.9g n_diff=%zu/%zu\n",
+                                                tag.c_str(), lm_max_abs(off.last, on.last), crop_n_diff(off.last, on.last), off.last.size());
+                    if (!b_follow) std::fprintf(stderr, "PGR_CROP_Q_CHECK_FAIL: follow logits (%s) max_abs=%.9g n_diff=%zu/%zu\n",
+                                                tag.c_str(), lm_max_abs(off.follow, on.follow), crop_n_diff(off.follow, on.follow), off.follow.size());
+                    if (!b_state)  std::fprintf(stderr, "PGR_CROP_Q_CHECK_FAIL: memory state (%s)\n", tag.c_str());
+                    ok = ok && b_last && b_follow && b_state;
+                    n_checks += 3;
+                }
             }
         }
     }
     if (env0) setenv("PGRN_CROP_Q", saved.c_str(), 1); else unsetenv("PGRN_CROP_Q");
-    std::printf("PGR_CROP_Q_%s device=%s checks=%d max_abs=%.9g bitwise=%s\n", ok ? "OK" : "FAIL",
-                gpu ? "gpu" : "default", n_checks, max_abs, ok ? "yes" : "no");
+    std::printf("PGR_CROP_Q_%s device=%s shapes=tiny,540/ub64,600/ub512,540/ub2048 checks=%d max_abs=%.9g max_abs_real_shapes=%.9g bitwise=%s\n",
+                ok ? "OK" : "FAIL", cpu ? "cpu" : gpu ? "gpu" : "default", n_checks, max_abs, max_abs_real, ok ? "yes" : "no");
     return ok;
+}
+
+// T4b: the real model at app shapes, one long prompt (first N tokens of PROMPT), PGRN_CROP_Q=0 vs default
+// (crop on) on fresh contexts; last-token logits compared bitwise (max_abs, number of differing floats) plus
+// the serialized sequence state
+static int crop_q_file(const char * gguf, const char * pgrn, const char * prompt_file, int n_tokens, int n_ctx,
+        int n_batch, int n_ubatch, uint64_t cache_bytes, bool layer_major) {
+    using clock = std::chrono::steady_clock;
+    llama_model_params mp = llama_model_default_params();
+    mp.load_mode = LLAMA_LOAD_MODE_NONE;
+    mp.n_gpu_layers = 99;
+    mp.pgrn_path = pgrn;
+    mp.pgrn_cache_bytes = cache_bytes;
+    mp.pgrn_io_threads = 8;
+    mp.pgrn_compact_slots = true;
+    llama_model_ptr model(llama_model_load_from_file(gguf, mp));
+    if (!model || !model->pgrn_enabled()) throw std::runtime_error("PGRN model load failed");
+    std::ifstream in(prompt_file);
+    if (!in) throw std::runtime_error("cannot read the prompt file");
+    std::stringstream ss; ss << in.rdbuf();
+    auto tokens = common_tokenize(llama_model_get_vocab(model.get()), ss.str(), true, true);
+    if ((int) tokens.size() > n_tokens) tokens.resize((size_t) n_tokens);
+    if ((int) tokens.size() + 1 > n_ctx) throw std::runtime_error("prompt does not fit the context");
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
+    struct out { std::vector<float> last; std::vector<uint8_t> state_seq; double prompt_s; };
+    auto run = [&](bool crop) {
+        if (crop) unsetenv("PGRN_CROP_Q"); else setenv("PGRN_CROP_Q", "0", 1);
+        llama_context_params cp = llama_context_default_params();
+        cp.n_ctx = n_ctx;
+        cp.n_batch = n_batch;
+        cp.n_ubatch = n_ubatch;
+        cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        llama_context_ptr ctx(llama_init_from_model(model.get(), cp));
+        if (!ctx) throw std::runtime_error("context creation failed");
+        if (!ctx->set_layer_major(layer_major)) throw std::runtime_error("set_layer_major failed");
+        out o{};
+        const auto t0 = clock::now();
+        // decode calls of n_batch tokens (layer-major: n_batch covers the whole prompt -> one call)
+        for (size_t i0 = 0; i0 < tokens.size(); i0 += (size_t) n_batch) {
+            const size_t i1 = std::min(tokens.size(), i0 + (size_t) n_batch);
+            common_batch batch(ctx.get());
+            for (size_t i = i0; i < i1; ++i) batch.add(tokens[i], (llama_pos) i, 0, i + 1 == tokens.size());
+            if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) throw std::runtime_error("prompt decode failed");
+        }
+        const float * logits = llama_get_logits_ith(ctx.get(), -1);
+        o.last.assign(logits, logits + n_vocab);
+        o.prompt_s = std::chrono::duration<double>(clock::now() - t0).count();
+        o.state_seq = lm_state_seq(ctx.get(), 0);
+        return o;
+    };
+    const out a = run(false);
+    const out b = run(true);
+    unsetenv("PGRN_CROP_Q");
+    const bool bitwise = lm_bitwise(a.last, b.last);
+    const bool same_state = !a.state_seq.empty() && a.state_seq == b.state_seq;
+    const auto top = [](const std::vector<float> & v) { return (int) (std::max_element(v.begin(), v.end()) - v.begin()); };
+    std::printf("PGR_CROP_Q_FILE tokens=%zu batch=%d ubatch=%d layer_major=%d cache_gib=%.2f bitwise_last_logits=%s "
+                "max_abs=%.9g n_diff=%zu/%zu top1_off=%d top1_on=%d seq_state_equal=%s off_prompt_s=%.2f on_prompt_s=%.2f\n",
+        tokens.size(), n_batch, n_ubatch, layer_major ? 1 : 0, cache_bytes / 1073741824.0, bitwise ? "yes" : "no",
+        lm_max_abs(a.last, b.last), crop_n_diff(a.last, b.last), a.last.size(), top(a.last), top(b.last),
+        same_state ? "yes" : "no", a.prompt_s, b.prompt_s);
+    return bitwise && same_state ? 0 : 1;
 }
 
 // T3: the real model, one long prompt decoded in ONE decode call with layer-major off, then on, in the same
@@ -745,8 +837,29 @@ int main(int argc, char ** argv) {
         try {
             const bool gpu = argc >= 5 && std::string(argv[4]) == "--gpu";
             const int lm_ret = layer_major_fixture(argv[1], argv[2], gpu);
-            const bool crop_ok = crop_q_fixture(argv[1], argv[2], gpu);
+            const bool crop_ok = crop_q_fixture(argv[1], argv[2], gpu) && (gpu || crop_q_fixture(argv[1], argv[2], false, true));
             return lm_ret == 0 && crop_ok ? 0 : 1;
+        } catch (const std::exception & error) {
+            std::fprintf(stderr, "PGR_MODEL_PARITY_FAIL: %s\n", error.what());
+            return 1;
+        }
+    }
+    if (argc >= 11 && std::string(argv[3]) == "--crop-q-file") {
+        // MODEL.gguf MODEL.pgrn --crop-q-file PROMPT N_TOKENS CTX BATCH UBATCH CACHE_GIB LM(0|1)
+        common_init();
+        try {
+            return crop_q_file(argv[1], argv[2], argv[4], std::atoi(argv[5]), std::atoi(argv[6]), std::atoi(argv[7]),
+                    std::atoi(argv[8]), gibibytes(argv[9]), std::atoi(argv[10]) != 0);
+        } catch (const std::exception & error) {
+            std::fprintf(stderr, "PGR_CROP_Q_FILE_FAIL: %s\n", error.what());
+            return 1;
+        }
+    }
+    if (argc == 5 && std::string(argv[3]) == "--crop-q") {
+        // fixture T4 only (the e2e test runs it as part of --layer-major); argv[4] = --gpu | --cpu | --default
+        common_init();
+        try {
+            return crop_q_fixture(argv[1], argv[2], std::string(argv[4]) == "--gpu", std::string(argv[4]) == "--cpu") ? 0 : 1;
         } catch (const std::exception & error) {
             std::fprintf(stderr, "PGR_MODEL_PARITY_FAIL: %s\n", error.what());
             return 1;

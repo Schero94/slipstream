@@ -63,7 +63,9 @@ Never edit files while a build is compiling them (it produces mixed binaries).
   The app sets `decay` for streamed runs with cache < 0.45 × PGRN size. `PGRN_TRACE=<path>` writes a
   cache trace for `bench/fetchwall/sim_eviction.py` (`--engine-summary` = per-arm outcomes incl. wasted reads).
 - `PGRN_CROP_Q=0` — disables the last-layer query crop (on by default since 2026-11-28: the last
-  attention layer computes Q/attention only for output rows; bitwise identical, −4.5 s at 39k).
+  attention layer computes Q/attention only for the output rows, padded to ≥ 64 rows so the flash-attention
+  kernel class matches the uncropped graph; bitwise identical at real shapes, −4.8 s at 39k).
+  `PGRN_CROP_Q_MIN_ROWS=<n>` is a diagnostic override of the 64 (1 = the old unpadded crop, not bitwise).
 - `PGRN_STEER=<bonus>` — cache-steered routing (Cache-Prior arXiv 2412.00099 / CECAR
   2611.20119 / PSR 2610.34721): bonus on resident experts' *selection* probability,
   mask snapshotted at ubatch start (deterministic); mixing weights stay unbiased. Lossy.
