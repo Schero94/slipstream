@@ -4089,3 +4089,18 @@ Trace runs (1000 tokens, tracing on) agree: code 4 GiB base 8.75/8.77, lp 9.07, 
 decode win of +3.5 % @4 GiB and +2.3 % @10 GiB on a short prompt and +11 % in the agent regime @4 GiB, with
 10–13 % fewer synchronous expert reads in replay. Proposed next step: make it the default (and add it to the
 app) after one review pass and a 6/8/14 GiB check; `lp` alone is a smaller, simpler fallback.
+
+## PGRN_EVICT=decay re-measured in the real app regime (no MTP) + critic — 2026-11-28
+
+- The first A/B (95e389e) used run_arm_server.sh's default MTP draft 4; the app runs streamed +
+  lookahead WITHOUT MTP. Re-run: `SPEC_ARGS="" sweep_evict.sh`, base vs decay, interleaved, 2 reps,
+  prompt_code, 400 tokens, Qwen3.6 Q4 from ~/Modelle, binary 05:13:20. Decode tok/s:
+  4 GiB 9.66, 9.75 → 9.98, 9.87 (+2.3 %) · 6 GiB 12.16, 12.12 → 12.60, 12.53 (+3.5 %) ·
+  8 GiB 14.61, 14.61 → 14.95, 15.09 (+2.8 %) · 10 GiB 17.56, 17.48 → 17.67, 16.98 (−1.1 %, mixed) ·
+  14 GiB 21.35, 21.27 → 21.18, 21.27 (neutral). Output 95b22dcdb531 in every arm, swap 0 MB.
+- Verdict: consistent lossless win where the cache is small relative to the model (≤ 8 GiB of a
+  ~19 GB sidecar), neutral above. Critic (read-only): engine change correct (no starvation — lp pins
+  are cleared by batch_begin before any demand insert; single-writer, no overflow, default path
+  unchanged); evidence caveats: MTP inflated the first numbers (confirmed: +3.5 % → +2.3–3.5 % at
+  small caches, nothing at 10+ GiB), the replay does not count reads wasted on failed prefetch
+  publishes ('P' 2), decay replay ≈exact (22 mismatches), decay is inert with --pgrn-hot-percent.
