@@ -11298,6 +11298,135 @@ index 2f927d74f..d7c552731 100644
              }
  
              slot.stats.update_gen_last();
+diff --git a/tools/server/server-slot-sched.cpp b/tools/server/server-slot-sched.cpp
+index 526a144c3..045addf3c 100644
+--- a/tools/server/server-slot-sched.cpp
++++ b/tools/server/server-slot-sched.cpp
+@@ -164,7 +164,25 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
+     return &states.back();
+ }
+ 
+-std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_better(const server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, int & lcp) const {
++// Slipstream: restore a copy of a large cached prompt when it shares a long prefix with the new one
++// (an agent's system prompt + tools at the start of a new conversation). The upstream rule below
++// skips cached prompts that would keep < 25 % of their tokens, because restoring moves the entry out
++// of the cache and the rest would be lost; restoring a copy keeps the entry, so nothing is trashed.
++// Lossless: the same state + checkpoints are restored as on a normal hit. SLIPSTREAM_PROMPT_COPY=0
++// disables it.
++static bool slipstream_prompt_copy_enabled() {
++    static const bool on = [] {
++        const char * v = getenv("SLIPSTREAM_PROMPT_COPY");
++        return !(v && v[0] == '0');
++    }();
++    return on;
++}
++static constexpr int SLIPSTREAM_PROMPT_COPY_MIN_GAIN = 256; // tokens more than the slot shares nominally (its usable checkpoint is often far lower)
++
++std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_better(const server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, int & lcp, bool * keep_entry) const {
++    if (keep_entry) {
++        *keep_entry = false;
++    }
+     // a prompt made with another lora config is cleared before the new one starts, so it counts as empty
+     const bool is_empty = prompt.tokens.empty() || lora_should_clear_cache(prompt.lora, lora_new);
+ 
+@@ -176,6 +194,8 @@ std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_b
+     SRV_TRC(" - looking for better prompt, base f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
+ 
+     auto it_best = states.cend();
++    bool best_is_copy = false;
++    const int lcp_base = lcp;
+ 
+     // find the most similar cached prompt, that would also preserve the most context
+     for (auto it = states.cbegin(); it != states.cend(); ++it) {
+@@ -193,13 +213,23 @@ std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_b
+ 
+         // don't trash large prompts
+         if (f_keep_cur < 0.25f) {
++            // ... but a long shared prefix can be restored from a copy (Slipstream, see above)
++            if (keep_entry && slipstream_prompt_copy_enabled() &&
++                lcp_cur >= lcp_base + SLIPSTREAM_PROMPT_COPY_MIN_GAIN && f_sim_best < f_sim_cur) {
++                f_sim_best   = f_sim_cur;
++                lcp          = lcp_cur;
++                it_best      = it;
++                best_is_copy = true;
++                SRV_TRC("   - prompt with length %7zu: restore a copy (shared prefix %d tokens)\n", it->prompt.tokens.size(), lcp_cur);
++            }
+             continue;
+         }
+ 
+         if (f_keep_best < f_keep_cur && f_sim_best < f_sim_cur) {
+-            f_keep_best = f_keep_cur;
+-            f_sim_best  = f_sim_cur;
+-            lcp         = lcp_cur;
++            f_keep_best  = f_keep_cur;
++            f_sim_best   = f_sim_cur;
++            lcp          = lcp_cur;
++            best_is_copy = false;
+ 
+             it_best = it;
+         }
+@@ -208,20 +238,25 @@ std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_b
+     if (it_best != states.cend()) {
+         SRV_TRC(" - found better prompt with f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
+     }
++    if (keep_entry) {
++        *keep_entry = best_is_copy;
++    }
+ 
+     return it_best;
+ }
+ 
+ bool server_prompt_cache::has_better(const server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new) const {
+     int lcp = 0;
++    bool keep_entry = false;
+ 
+-    return find_better(prompt, tokens_new, lora_new, lcp) != states.cend();
++    return find_better(prompt, tokens_new, lora_new, lcp, &keep_entry) != states.cend();
+ }
+ 
+ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+     int lcp_best = 0;
++    bool keep_entry = false;
+ 
+-    const auto it_found = find_better(prompt, tokens_new, lora_new, lcp_best);
++    const auto it_found = find_better(prompt, tokens_new, lora_new, lcp_best, &keep_entry);
+ 
+     // an empty erase gives a mutable iterator to the same entry, its prompt is moved out below
+     const auto it_best = states.erase(it_found, it_found);
+@@ -264,9 +299,16 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
+             SRV_DBG("%s", "__TEST_TAG_PROMPT_CACHE_FULL_RESTORE__\n");
+         }
+ 
+-        prompt = std::move(it_best->prompt);
++        if (keep_entry) {
++            // a large prompt that shares only a prefix: the slot gets a copy, the entry stays cached
++            SRV_INF("slot %d: restored a copy of a cached prompt (%zu tokens, %d shared), entry kept\n",
++                    id_slot, it_best->prompt.tokens.size(), lcp_best);
++            prompt = it_best->prompt.clone();
++        } else {
++            prompt = std::move(it_best->prompt);
+ 
+-        states.erase(it_best);
++            states.erase(it_best);
++        }
+ 
+         SRV_TRC("slot %d: prompt cache restore took %.2f ms\n", id_slot, (ggml_time_us() - t_start) / 1000.0);
+     }
+diff --git a/tools/server/server-slot-sched.h b/tools/server/server-slot-sched.h
+index f1be0fe2f..a426b6e3e 100644
+--- a/tools/server/server-slot-sched.h
++++ b/tools/server/server-slot-sched.h
+@@ -100,7 +100,9 @@ struct server_prompt_cache {
+     // the cached state that is a better starting point than `prompt` for `tokens_new`, states.end() if none
+     // lcp: the common prefix of that state with `tokens_new`
+     // lora_new: the lora config of the new prompt, the states made with another config are skipped
+-    std::list<server_prompt_cache_state>::const_iterator find_better(const server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, int & lcp) const;
++    // keep_entry (Slipstream): set when the best match is a large cached prompt that shares only a
++    // prefix (e.g. an agent's system prompt + tools); it is restored as a copy and stays cached
++    std::list<server_prompt_cache_state>::const_iterator find_better(const server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, int & lcp, bool * keep_entry = nullptr) const;
+ 
+     bool has_better(const server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new) const;
+ 
 diff --git a/tools/server/server.cpp b/tools/server/server.cpp
 index e022355dc..628ef03bb 100644
 --- a/tools/server/server.cpp

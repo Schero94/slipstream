@@ -3919,3 +3919,24 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   both out=38b5b06864f1 (= bundle041) · swap Δ 0 MB · peak RSS 8.96 GB. lm_decodes 0 (57-token prompt).
 - App launch from DMG + osascript quit: quit in 2 s, ports 8080/8081 free, no llama-server left.
 - Tests: workspace 183/183, Tauri 107/107, Python 44/44, UI contracts 7/7, headless assets PASS.
+
+## E6 — realistic agent request shape + prompt-cache copy restore — KEEP — 2026-11-28
+
+- Method: `bench/fetchwall/e6_agentlike.sh` (app regime, Fast prompt reading on, 4 GiB,
+  --cache-ram 2048). OpenCode/Kilo-style request: system prompt with an <env> block (cwd, date)
+  + `tools` array (12 tools) + user task; source files (~29k tokens) arrive as a tool result.
+  C1 = conversation 1 (37,407 tokens); then a short title request (same tools); C2 = NEW
+  conversation, same system + tools, new task; C3 = new conversation with the date changed.
+- Before (upstream prompt-cache rule): C2 read 2,745 of 4,432 tokens, 18.3 s. Cause: the title
+  request replaced the slot state, and the cached C1 state (which has a checkpoint at the
+  system+tools / user boundary, 4,406) was skipped by the rule "don't load a cached prompt that
+  keeps < 25 % of its tokens" (restoring moves the entry out of the cache).
+- Change (tools/server/server-slot-sched.cpp): if such a large cached prompt shares ≥ 256 tokens
+  more with the new prompt than the slot does, restore a copy (clone) and keep the entry cached.
+  SLIPSTREAM_PROMPT_COPY=0 disables. Same restore path as a normal hit → lossless.
+- After: **C2 26 tokens read, 1.6 s** (was 18.3 s); output 86b8ff31ee95 identical in both arms.
+  C3 (date changed, divergence inside the system prompt): 11.9 s → 22.1 s, because no checkpoint
+  lies before the date any more — a once-a-day cost vs. a saving on every new conversation.
+- Note: first threshold 1,024 never fired (nominal slot prefix 3,714 vs usable checkpoint 1,687);
+  256 fires. Hashes in earlier E6 runs differed only by the server's random tool-call ids (fixed:
+  the script now hashes function name + arguments).
