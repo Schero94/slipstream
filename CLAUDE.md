@@ -112,6 +112,10 @@ the current state, understandable for a non-expert. A change is not done until t
 - Never commit models (`*.gguf`, `*.pgrn`), binaries, or `llama.cpp-slipstream/`.
 
 ## Lessons
+- Never touch system-wide settings from tests (2026-11-28: an mDNS test announced under the system
+  host name, macOS treated it as a conflict and renamed the Mac's LocalHostName to "...-2").
+  mDNS announcements use `slipstream-<fp>.local.`; anything needing sudo or changing system state
+  needs the user.
 - The app runs streamed models with lookahead and WITHOUT MTP. `bench/fetchwall/run_arm_server.sh`
   enabled MTP (draft 4) by default until 2026-11-28 (now no MTP by default) — check the speculative flags of any harness
   against `app/src-tauri/src/main.rs` before calling a run "app regime".
