@@ -554,3 +554,5 @@ e6 gate052b swap_delta_mb=0
 20261128-121134	srv	label=groot-decay	cache=2	decode_tps=7.07	prompt_n=57	ttft_s=2.0	prefill_tps=28.2	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=4833	lm_decodes=0	out=3a83d0323170	spec=none	env=PGRN_EVICT=decay
 20261128-121238	srv	label=groot-la	cache=2	decode_tps=6.94	prompt_n=57	ttft_s=2.2	prefill_tps=25.5	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=4833	lm_decodes=0	out=3a83d0323170	spec=none	env=
 20261128-121343	srv	label=groot-decay	cache=2	decode_tps=7.02	prompt_n=57	ttft_s=2.1	prefill_tps=27.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=4832	lm_decodes=0	out=3a83d0323170	spec=none	env=PGRN_EVICT=decay
+20261128-122121	srv	label=bundle053-qwen36-default	cache=4	decode_tps=10.51	prompt_n=57	ttft_s=2.2	prefill_tps=25.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8957	lm_decodes=0	out=38b5b06864f1	spec=none	env=PGRN_LAYER_MAJOR=1 PGRN_EVICT=decay
+20261128-122308	srv	label=bundle053-groot-default	cache=4	decode_tps=17.05	prompt_n=57	ttft_s=1.4	prefill_tps=40.1	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=7602	lm_decodes=0	out=3a83d0323170	spec=none	env=PGRN_LAYER_MAJOR=1 PGRN_EVICT=decay

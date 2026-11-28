@@ -4349,3 +4349,35 @@ and not negative.
   bundle smoke, decay, single rep — not an interleaved A/B); 8 GiB already holds 85 % of Groot's experts (~29 tok/s).
 - Verdict: KEEP. Works out of the box (no engine change), lossless, 0 swap, fastest model tested so far at small caches.
   Script: bench/fetchwall/newmodel_groot.sh. Files stay in ~/Modelle/groot-19b-a3b-q4/.
+
+## 0.5.3 release artifacts — bundle verification — 2026-11-28
+
+- 0.5.3 changes only the app (app/dist/app.js: Groot-19B-A3B in the model list, compatibility text) and docs; engine
+  unchanged since 0.5.2 (`git diff a011c90 HEAD -- engine patches apply.sh` empty). build-static llama-server 10:57:24 >
+  newest source 10:00:44 (src/models/qwen35moe.cpp); llama-pgrn-convert 04:21:17 > all its sources; `make -n` shows
+  nothing to rebuild for llama-server, pgrn-convert or the 14 test-peregrine binaries. engine_sync --verify PASS.
+  Shipped sha256 = 0.5.2: llama-server 88f31072229a…, pgrn-convert ed0223ee7aeb…; otool -L system frameworks/usr/lib
+  only (same set as 0.5.2). ctest -R peregrine 14/14 on this build.
+- Bundled-engine smoke from the mounted DMG (run_arm_server.sh, BIN=/Volumes/Slipstream/…/llama-server,
+  SPEC_ARGS=" ", CTX=40960, -b 40960 -ub 2048, --cache-ram 2048 -fa on --jinja --no-warmup --metrics, 4 GiB,
+  PGRN_LAYER_MAJOR=1 PGRN_EVICT=decay (the app sets decay at 4 GiB for both: Qwen3.6 4 < 0.45 × 18.75 GiB, Groot
+  4 < 0.45 × 9.35 GiB), no MTP, prompt_code.txt, 160 tokens greedy, GGUF + PGRN from ~/Modelle):
+  Qwen3.6-35B-A3B Q4 10.51 tok/s, out=38b5b06864f1 (= bundle052/051/050/041), peak RSS 8.96 GB ·
+  Groot-19B-A3B Q4_K_M 17.05 tok/s, out=3a83d0323170 (= all 22 no-MTP runs of the Groot entry, which used ctx 4096,
+  -b 2048, no layer-major → also unchanged by layer-major + the larger logical batch), peak RSS 7.60 GB ·
+  swap Δ 0 MB both · lm_decodes 0 (57-token prompt). Single rep per model (smoke, not an A/B).
+- DMG: hdiutil verify VALID; mounted codesign --deep --strict OK (adhoc,runtime); 0.5.3 (CFBundleShortVersionString
+  and CFBundleVersion); 476 resource files (Contents/Resources/resources; same file list as the 0.5.2 app);
+  16/16 runtime components (all executables +x); 0 __pycache__/.pyc; 0 Ollama; 5 Mach-O all arm64. Only Info.plist
+  and the peregrine-control binary differ from the 0.5.2 app (diff -r). MLX parts (omlx/, uv 0.11.10,
+  libpgrn_host.dylib) staged from the v0.5.2 release zip (sha 6446025a… = the 0.5.2 table), overlays applied,
+  pycache removed, test_staged_resources_complete.py 4/4.
+- Embedded frontend: the brotli asset tauri-codegen wrote for app.js (OUT_DIR/tauri-codegen-assets/6be9ea83….js)
+  occurs byte-for-byte in the mounted peregrine-control and decompresses to exactly app/dist/app.js (sha256
+  967da2a6dec1…), with the groot-19b model entry and the EN+DE note.groot strings.
+- App launch from DMG + osascript quit: quit in 0.2 s, ports 8080/8081 free, no peregrine-control/llama-server left.
+- Zip (ditto -c -k --sequesterRsrc --keepParent from the mounted app): unpacks byte-identical to the DMG app (diff -r),
+  codesign OK. Node tarball: slipstream-node 0.5.3 arm64 (system frameworks only), same layout as 0.5.2.
+- Tests: workspace 183/183, Tauri 108/108, Python 44/44 (+2 subtests), UI contracts 7/7, headless assets PASS.
+- Artifacts: Slipstream_0.5.3_aarch64.dmg 70,100,416 B sha256 0b9d3ddb9855… · zip 68,562,551 B eef0d982b275… ·
+  slipstream-node_0.5.3_macos_aarch64.tar.gz 5,452,070 B 17b9e4cfcf40….
