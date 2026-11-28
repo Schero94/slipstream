@@ -109,6 +109,7 @@ pub async fn rig(opts: RigOptions) -> Rig {
             spare_stream: opts.spare_stream,
             token: opts.token,
             local: opts.local,
+            discovery: None,
             verbose: false,
         },
     )

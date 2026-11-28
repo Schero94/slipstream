@@ -30,7 +30,7 @@ p2p-core = { workspace = true }
 p2p-crypto = { workspace = true }
 p2p-engine = { workspace = true }
 p2p-ledger = { workspace = true }
-p2p-net = { workspace = true }
+p2p-net = { workspace = true, features = ["mdns"] }
 p2p-libp2p = { workspace = true }
 p2p-forward = { workspace = true }
 p2p-router = { workspace = true }
@@ -41,7 +41,7 @@ rand = "0.8"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"

@@ -259,6 +259,7 @@ async fn binds_ipv6_loopback_too_and_refuses_if_taken() {
             spare_stream: false,
             token: None,
             local: LocalLimits::default(),
+            discovery: None,
             verbose: false,
         },
     )

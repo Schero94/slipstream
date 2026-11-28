@@ -710,7 +710,51 @@ pub async fn pair_with(
     info: PairInfo,
     paired: &PairedConfig,
 ) -> Result<TrustedPeer, PairError> {
-    let conn = connect(node, addr, paired).await?;
+    pair_with_checked(node, store, std::slice::from_ref(addr), code, info, paired, None).await
+}
+
+/// Dial every address at once; the first QUIC connection wins (LAN discovery can list
+/// several addresses, some unreachable from here).
+pub async fn connect_first(
+    node: &NodeKeypair,
+    addrs: &[Multiaddr],
+    paired: &PairedConfig,
+) -> Result<(PairConnection, Multiaddr), PairError> {
+    if addrs.is_empty() {
+        return Err(PairError::Unreachable("no address to try".into()));
+    }
+    let attempts = addrs.iter().map(|a| {
+        Box::pin(async move { connect(node, a, paired).await.map(|c| (c, a.clone())) })
+    });
+    match futures::future::select_ok(attempts).await {
+        Ok((won, _rest)) => Ok(won),
+        Err(e) => Err(e),
+    }
+}
+
+/// [`pair_with`], and when `expect_fp` is set (the Mac was picked from LAN discovery),
+/// the connected PeerId's fingerprint must start with it — checked right after the QUIC
+/// handshake, before any pairing message (so a different Mac answering at a discovered
+/// address costs the real window nothing).
+pub async fn pair_with_checked(
+    node: &NodeKeypair,
+    store: &TrustStore,
+    addrs: &[Multiaddr],
+    code: &PairingCode,
+    info: PairInfo,
+    paired: &PairedConfig,
+    expect_fp: Option<&str>,
+) -> Result<TrustedPeer, PairError> {
+    let (conn, addr) = connect_first(node, addrs, paired).await?;
+    let addr = &addr;
+    if let Some(fp) = expect_fp {
+        let got = crate::lan::fingerprint(&conn.remote);
+        if !got.starts_with(fp) {
+            return Err(PairError::Protocol(format!(
+                "the Mac at {addr} has fingerprint {got}, not {fp}; refusing to pair"
+            )));
+        }
+    }
     let mut control = conn.control.clone();
     let stream = tokio::time::timeout(Duration::from_secs(3), control.open_stream(conn.remote, PAIR_PROTOCOL_V1))
         .await

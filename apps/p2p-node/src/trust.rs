@@ -38,6 +38,8 @@ pub const WATCH_INTERVAL: Duration = Duration::from_millis(250);
 const MAC_SALT: &[u8] = b"slipstream-trust-store-v1";
 const MAC_INFO: &[u8] = b"trust-store";
 const MAX_FILE: u64 = 1024 * 1024;
+/// `last_addrs` kept per peer (newest first).
+pub const MAX_LAST_ADDRS: usize = 4;
 
 /// The other Mac's role relative to this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -396,6 +398,35 @@ impl TrustStore {
         })
     }
 
+    /// A pinned dial to `peer` succeeded at `addr` (M3): put `<addr>/p2p/<peer>` first in
+    /// `last_addrs` (at most [`MAX_LAST_ADDRS`]) and refresh `last_seen`. Skips the write
+    /// when nothing changed and `last_seen` is younger than a minute. Returns whether it
+    /// wrote.
+    pub fn record_seen(&self, peer: &PeerId, addr: &libp2p::Multiaddr) -> io::Result<bool> {
+        use libp2p::multiaddr::Protocol;
+        let bare: libp2p::Multiaddr = addr.iter().filter(|p| !matches!(p, Protocol::P2p(_))).collect();
+        if bare.is_empty() {
+            return Ok(false);
+        }
+        let pinned = bare.with(Protocol::P2p(*peer)).to_string();
+        let now = unix_now();
+        let Some(cur) = self.get(peer) else { return Ok(false) };
+        if cur.last_addrs.first() == Some(&pinned) && cur.last_seen.is_some_and(|t| now.saturating_sub(t) < 60) {
+            return Ok(false);
+        }
+        let id = peer.to_string();
+        self.modify(|peers| {
+            let Some(p) = peers.iter_mut().find(|p| p.peer_id == id) else {
+                return Ok(false);
+            };
+            p.last_addrs.retain(|a| *a != pinned);
+            p.last_addrs.insert(0, pinned.clone());
+            p.last_addrs.truncate(MAX_LAST_ADDRS);
+            p.last_seen = Some(now);
+            Ok(true)
+        })
+    }
+
     pub fn list(&self) -> Vec<TrustedPeer> {
         self.state.lock().unwrap().peers.clone()
     }
@@ -521,25 +552,36 @@ fn reset_hint(store: &TrustStore) -> &'static str {
 /// `/p2p/<PeerId>` of a paired Mac; `None` = the only Mac that shares with this one.
 /// Returns the pinned dial address. Never returns an address for an unpaired PeerId.
 pub fn resolve_use_target(store: &TrustStore, selector: Option<&str>) -> Result<(PeerId, libp2p::Multiaddr), String> {
+    let (peer, addr) = resolve_use_peer(store, selector)?;
+    match addr {
+        Some(a) => Ok((peer, a)),
+        None => {
+            let name = store.get(&peer).map(|p| p.name).unwrap_or_default();
+            Err(format!("no known address for \"{name}\"; pass --peer <multiaddr>"))
+        }
+    }
+}
+
+/// Like [`resolve_use_target`], but a paired Mac without a stored address is fine
+/// (`None`): LAN discovery (M3) finds it by its fingerprint.
+pub fn resolve_use_peer(store: &TrustStore, selector: Option<&str>) -> Result<(PeerId, Option<libp2p::Multiaddr>), String> {
     use libp2p::multiaddr::Protocol;
-    let pinned = |entry: &TrustedPeer, addr: Option<libp2p::Multiaddr>| -> Result<(PeerId, libp2p::Multiaddr), String> {
+    let pinned = |entry: &TrustedPeer, addr: Option<libp2p::Multiaddr>| -> Result<(PeerId, Option<libp2p::Multiaddr>), String> {
         let peer = entry.peer().ok_or("bad PeerId in the trust store")?;
         let addr = match addr {
             Some(a) => a,
-            None => entry
-                .last_addrs
-                .first()
-                .ok_or_else(|| format!("no known address for \"{}\"; pass --peer <multiaddr>", entry.name))?
-                .parse::<libp2p::Multiaddr>()
-                .map_err(|e| format!("bad stored address: {e}"))?,
+            None => match entry.last_addrs.first() {
+                None => return Ok((peer, None)),
+                Some(a) => a.parse::<libp2p::Multiaddr>().map_err(|e| format!("bad stored address: {e}"))?,
+            },
         };
         match addr.iter().last() {
-            Some(Protocol::P2p(id)) if id == peer => Ok((peer, addr)),
+            Some(Protocol::P2p(id)) if id == peer => Ok((peer, Some(addr))),
             Some(Protocol::P2p(id)) => Err(format!(
                 "{addr} pins {id}, but \"{}\" is {peer}: refusing to dial a different Mac",
                 entry.name
             )),
-            _ => Ok((peer, addr.with(Protocol::P2p(peer)))),
+            _ => Ok((peer, Some(addr.with(Protocol::P2p(peer))))),
         }
     };
     let all = store.list();
@@ -666,6 +708,35 @@ mod tests {
         let ok = TrustStore::load(dir.path(), &me).unwrap();
         assert_eq!(ok.list().len(), 1);
         assert!(!ok.pairings_reset());
+    }
+
+    #[test]
+    fn record_seen_puts_the_working_address_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let me = NodeKeypair::generate();
+        let store = TrustStore::load(dir.path(), &me).unwrap();
+        let a = NodeKeypair::generate();
+        store.add(sample(&a, "Mac Studio", PeerRole::Share)).unwrap();
+        let pa = p2p_forward::transport_identity(&a).public().to_peer_id();
+        // no address yet: resolvable without one (discovery finds it)
+        assert_eq!(resolve_use_peer(&store, None).unwrap(), (pa, None));
+        assert!(resolve_use_target(&store, None).is_err());
+        let addr: libp2p::Multiaddr = "/ip4/10.0.0.7/udp/9003/quic-v1".parse().unwrap();
+        assert!(store.record_seen(&pa, &addr).unwrap());
+        assert!(!store.record_seen(&pa, &addr).unwrap(), "unchanged + fresh: no write");
+        let e = store.get(&pa).unwrap();
+        assert_eq!(e.last_addrs, vec![format!("/ip4/10.0.0.7/udp/9003/quic-v1/p2p/{pa}")]);
+        assert!(e.last_seen.is_some());
+        for port in 1..=5u16 {
+            let a2: libp2p::Multiaddr = format!("/ip4/10.0.0.8/udp/{port}/quic-v1").parse().unwrap();
+            store.record_seen(&pa, &a2).unwrap();
+        }
+        let e = store.get(&pa).unwrap();
+        assert_eq!(e.last_addrs.len(), MAX_LAST_ADDRS);
+        assert!(e.last_addrs[0].contains("/udp/5/"));
+        assert_eq!(resolve_use_target(&store, None).unwrap().1.to_string(), e.last_addrs[0]);
+        // persisted and still MAC-valid
+        assert_eq!(TrustStore::load(dir.path(), &me).unwrap().get(&pa).unwrap().last_addrs, e.last_addrs);
     }
 
     #[test]

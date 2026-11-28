@@ -32,11 +32,11 @@ pub mod status;
 pub mod trust;
 pub mod worker;
 
-pub use client::{start_use, LocalLimits, UseConfig, UseHandle};
+pub use client::{start_use, AddrBook, LocalLimits, UseConfig, UseDiscovery, UseEvent, UseHandle};
 pub use trust::{PeerTrust, StaticTrust, TrustEpoch};
 pub use worker::{parse_upstream, start_share, ShareConfig, ShareHandle, ShareLimits};
 
-pub(crate) fn unix_ms() -> u128 {
+pub fn unix_ms() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())

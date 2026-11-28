@@ -1,0 +1,2 @@
+/* Local Network prompt (macOS). */
+"NSLocalNetworkUsageDescription" = "Slipstream finds your other Macs on this network and connects only to the ones you paired, so one Mac can use the model running on another.";

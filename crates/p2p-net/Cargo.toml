@@ -8,7 +8,7 @@ description = "LAN/dev TCP transport for Slipstream P2P token-torrent (length-pr
 [features]
 default = []
 # Optional LAN discovery via mDNS (mdns-sd). Bootstrap list remains primary.
-mdns = ["dep:mdns-sd"]
+mdns = ["dep:mdns-sd", "dep:if-addrs"]
 
 [dependencies]
 serde = { workspace = true }
@@ -18,7 +18,9 @@ tokio = { workspace = true }
 p2p-security = { workspace = true }
 hex = "0.4"
 mdns-sd = { version = "0.22", optional = true }
+if-addrs = { version = "0.15", optional = true }
 
 [dev-dependencies]
+mdns-sd = "0.22"
 tokio = { workspace = true }
 p2p-security = { workspace = true }

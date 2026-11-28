@@ -1,0 +1,2 @@
+/* Hinweis für den Zugriff auf das lokale Netzwerk (macOS). */
+"NSLocalNetworkUsageDescription" = "Slipstream findet deine anderen Macs in diesem Netzwerk und verbindet sich nur mit denen, die du gekoppelt hast – so kann ein Mac das Modell eines anderen nutzen.";

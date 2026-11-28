@@ -71,7 +71,106 @@ pub struct UseConfig {
     /// `Authorization: Bearer <token>` (checked before the header is stripped).
     pub token: Option<String>,
     pub local: LocalLimits,
+    /// M3: live candidate addresses (LAN discovery + trust store) and connection events.
+    /// `None` = only `peer` is dialed (pre-M3 behaviour).
+    pub discovery: Option<UseDiscovery>,
     pub verbose: bool,
+}
+
+/// Candidate addresses of the pinned peer (M3). Every address is dialed only with the
+/// pinned `/p2p/<PeerId>` suffix; an address pinning another id is dropped.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AddrBook {
+    /// Currently announced on the LAN (mDNS, untrusted). When non-empty and the live
+    /// connection's address is not among them (e.g. the share restarted on a new port),
+    /// they are dialed at once; a new connection that authenticates replaces the old one.
+    pub discovered: Vec<Multiaddr>,
+    /// Last addresses that worked (trust store `last_addrs`): dialed while disconnected.
+    pub known: Vec<Multiaddr>,
+}
+
+impl AddrBook {
+    fn all(&self) -> impl Iterator<Item = &Multiaddr> {
+        self.discovered.iter().chain(self.known.iter())
+    }
+}
+
+/// What the use side reports to its owner (M3: record `last_addrs`, re-browse).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UseEvent {
+    /// A connection to the pinned peer authenticated at `addr` (without `/p2p`).
+    Connected { addr: Multiaddr },
+    /// A dial attempt failed (unreachable, or an impostor at that address).
+    DialFailed { error: String },
+    /// The last connection closed.
+    Disconnected,
+}
+
+#[derive(Clone)]
+pub struct UseDiscovery {
+    pub addrs: watch::Receiver<AddrBook>,
+    pub events: tokio::sync::mpsc::UnboundedSender<UseEvent>,
+}
+
+/// Extra wait for a first LAN answer when the use side starts with discovery.
+pub const DISCOVERY_WAIT: Duration = Duration::from_secs(3);
+
+/// `addr` without `/p2p/...`.
+pub fn strip_p2p(addr: &Multiaddr) -> Multiaddr {
+    addr.iter().filter(|p| !matches!(p, Protocol::P2p(_))).collect()
+}
+
+/// Keep only dialable addresses for `peer`, each ending in `/p2p/<peer>` (appended when
+/// missing). Addresses pinning another PeerId or without a transport part are dropped.
+pub fn pinned_candidates<'a>(peer: PeerId, addrs: impl IntoIterator<Item = &'a Multiaddr>) -> Vec<Multiaddr> {
+    let mut out: Vec<Multiaddr> = Vec::new();
+    for a in addrs {
+        let pinned_other = a.iter().any(|p| matches!(p, Protocol::P2p(id) if id != peer));
+        let bare = strip_p2p(a);
+        if pinned_other || bare.is_empty() {
+            continue;
+        }
+        let full = bare.with(Protocol::P2p(peer));
+        if !out.contains(&full) {
+            out.push(full);
+        }
+    }
+    out
+}
+
+async fn book_changed(rx: &mut Option<watch::Receiver<AddrBook>>) -> AddrBook {
+    match rx {
+        Some(r) => match r.changed().await {
+            Ok(()) => r.borrow_and_update().clone(),
+            Err(_) => {
+                *rx = None;
+                std::future::pending().await
+            }
+        },
+        None => std::future::pending().await,
+    }
+}
+
+fn dial_candidates(
+    swarm: &mut libp2p::Swarm<p2p_libp2p::paired::PairedBehaviour>,
+    peer: PeerId,
+    addrs: Vec<Multiaddr>,
+    always: bool,
+    verbose: bool,
+) {
+    use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
+    if addrs.is_empty() {
+        return;
+    }
+    if verbose {
+        eprintln!("use event=dial peer={peer} addrs={addrs:?} always={always}");
+    }
+    let cond = if always { PeerCondition::Always } else { PeerCondition::Disconnected };
+    if let Err(e) = swarm.dial(DialOpts::peer_id(peer).addresses(addrs).condition(cond).build()) {
+        if verbose {
+            eprintln!("use event=dial_error error={e}");
+        }
+    }
 }
 
 /// Limits of the local editor listener.
@@ -313,25 +412,79 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
 
     let mut swarm = build_paired_swarm(identity, &cfg.paired);
     let local = *swarm.local_peer_id();
-    swarm.add_peer_address(peer, cfg.peer.clone());
-    swarm.dial(cfg.peer.clone()).map_err(other)?;
+    // Pinned dialing only: `cfg.peer` (if it has a transport part) plus the address book,
+    // every candidate with the `/p2p/<peer>` suffix.
+    let configured = pinned_candidates(peer, std::iter::once(&cfg.peer));
+    let (mut book_rx, events) = match &cfg.discovery {
+        Some(d) => (Some(d.addrs.clone()), Some(d.events.clone())),
+        None => (None, None),
+    };
+    let emit = move |e: UseEvent| {
+        if let Some(tx) = &events {
+            let _ = tx.send(e);
+        }
+    };
+    let mut book = book_rx.as_mut().map(|r| r.borrow_and_update().clone()).unwrap_or_default();
+    let candidates = move |book: &AddrBook| pinned_candidates(peer, configured.iter().chain(book.all()));
+    let first = candidates(&book);
+    if first.is_empty() && book_rx.is_none() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "no address to dial for the paired Mac"));
+    }
+    dial_candidates(&mut swarm, peer, first.clone(), false, cfg.verbose);
     let started = Instant::now();
-    tokio::time::timeout(DIAL_TIMEOUT, async {
+    let wait = if book_rx.is_some() { DIAL_TIMEOUT + DISCOVERY_WAIT } else { DIAL_TIMEOUT };
+    let mut last_error: Option<String> = None;
+    let mut dialed: Vec<Multiaddr> = first.clone();
+    let first_conn = tokio::time::timeout(wait, async {
         loop {
-            match swarm.select_next_some().await {
-                SwarmEvent::ConnectionEstablished { peer_id, .. } if peer_id == peer => return Ok(()),
-                SwarmEvent::OutgoingConnectionError { error, .. } => return Err(other(error)),
-                _ => {}
+            tokio::select! {
+                event = swarm.select_next_some() => match event {
+                    SwarmEvent::ConnectionEstablished { peer_id, connection_id, endpoint, .. } if peer_id == peer => {
+                        return Ok((connection_id, strip_p2p(endpoint.get_remote_address())));
+                    }
+                    SwarmEvent::ConnectionEstablished { connection_id, .. } => {
+                        swarm.close_connection(connection_id);
+                    }
+                    SwarmEvent::OutgoingConnectionError { error, .. } => {
+                        let msg = error.to_string();
+                        emit(UseEvent::DialFailed { error: msg.clone() });
+                        if book_rx.is_none() {
+                            return Err(other(msg));
+                        }
+                        last_error = Some(msg);
+                    }
+                    _ => {}
+                },
+                b = book_changed(&mut book_rx) => {
+                    book = b;
+                    // only addresses not tried yet (records trickle in one by one)
+                    let c: Vec<Multiaddr> = candidates(&book).into_iter().filter(|a| !dialed.contains(a)).collect();
+                    dialed.extend(c.iter().cloned());
+                    dial_candidates(&mut swarm, peer, c, false, cfg.verbose);
+                }
             }
         }
     })
-    .await
-    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "dial timed out (is the other Mac awake and sharing?)"))??;
+    .await;
+    let (first_id, first_addr) = match first_conn {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => return Err(e),
+        Err(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                match last_error {
+                    Some(e) => format!("could not reach the paired Mac: {e}"),
+                    None => "dial timed out (is the other Mac awake and sharing?)".into(),
+                },
+            ))
+        }
+    };
     eprintln!(
-        "use event=connected peer={peer} dial_ms={:.2} unix_ms={}",
+        "use event=connected peer={peer} addr={first_addr} dial_ms={:.2} unix_ms={}",
         started.elapsed().as_secs_f64() * 1e3,
         unix_ms()
     );
+    emit(UseEvent::Connected { addr: first_addr.clone() });
     let stats = SharedUseStats::default();
     stats.lock().unwrap().connections_established += 1;
     let (conn_tx, conn_rx) = watch::channel(Some(1u64));
@@ -354,13 +507,16 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
 
     let swarm_stats = stats.clone();
     let verbose = cfg.verbose;
-    // No behaviour stores peer addresses, so re-dial with the full pinned multiaddr.
-    let redial_addr = cfg.peer.clone();
     let trust = cfg.trust.clone();
     let notify_control = shared.control.lock().unwrap().clone();
     let swarm_task = tokio::spawn(async move {
         let mut generation = 1u64;
-        let mut open_conns = 1usize;
+        // An address-change dial is in flight: its connection replaces the old ones.
+        // Any other extra connection (late duplicates of the start-up race) is closed.
+        let mut switch_pending = false;
+        // live connections to the pinned peer → remote address (without /p2p)
+        let mut conns: std::collections::HashMap<libp2p::swarm::ConnectionId, Multiaddr> =
+            std::collections::HashMap::from([(first_id, first_addr)]);
         let mut redial = tokio::time::interval(Duration::from_secs(2));
         redial.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut epoch = trust.subscribe();
@@ -400,6 +556,28 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
                         let _ = swarm.disconnect_peer_id(peer);
                     }
                 }
+                b = book_changed(&mut book_rx) => {
+                    book = b;
+                    if suspended {
+                        continue;
+                    }
+                    if conns.is_empty() {
+                        let c = candidates(&book);
+                        dial_candidates(&mut swarm, peer, c, false, verbose);
+                    } else if !book.discovered.is_empty() {
+                        // Connected, but is the share still where we are connected? If
+                        // its announced addresses no longer include ours (restart on a
+                        // new port, new IP), dial them now; the old connection is only
+                        // replaced once a new one authenticates as the pinned peer.
+                        let announced: Vec<Multiaddr> = book.discovered.iter().map(strip_p2p).collect();
+                        if !conns.values().any(|a| announced.contains(a)) {
+                            let c = pinned_candidates(peer, book.discovered.iter());
+                            eprintln!("use event=address_changed peer={peer} unix_ms={}", unix_ms());
+                            switch_pending = true;
+                            dial_candidates(&mut swarm, peer, c, true, verbose);
+                        }
+                    }
+                }
                 event = swarm.select_next_some() => match event {
                     SwarmEvent::Behaviour(PairedEvent::Ping(event)) => {
                         if let Some(rtt) = handle_ping(&mut swarm, &event) {
@@ -415,32 +593,51 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
                         // Only the pinned, still-trusted peer may hold a connection.
                         swarm.close_connection(connection_id);
                     }
-                    SwarmEvent::ConnectionEstablished { peer_id, .. } if peer_id == peer => {
-                        open_conns += 1;
-                        if open_conns == 1 {
-                            generation += 1;
-                            swarm_stats.lock().unwrap().connections_established += 1;
-                            let _ = conn_tx.send(Some(generation));
-                            eprintln!("use event=connected peer={peer_id} unix_ms={}", unix_ms());
-                        }
+                    SwarmEvent::ConnectionEstablished { connection_id, .. } if !conns.is_empty() && !switch_pending => {
+                        // a duplicate: keep the connection we already use
+                        swarm.close_connection(connection_id);
                     }
-                    SwarmEvent::ConnectionClosed { peer_id, cause, num_established, .. } if peer_id == peer => {
-                        open_conns = num_established as usize;
-                        if num_established == 0 {
+                    SwarmEvent::ConnectionEstablished { peer_id, connection_id, endpoint, .. } if peer_id == peer => {
+                        switch_pending = false;
+                        let addr = strip_p2p(endpoint.get_remote_address());
+                        // The newest authenticated connection wins (it proved the current
+                        // address); older ones are closed so streams use the live one.
+                        let olds: Vec<_> = conns.keys().copied().collect();
+                        conns.insert(connection_id, addr.clone());
+                        for old in &olds {
+                            swarm.close_connection(*old);
+                        }
+                        generation += 1;
+                        swarm_stats.lock().unwrap().connections_established += 1;
+                        let _ = conn_tx.send(Some(generation));
+                        eprintln!(
+                            "use event=connected peer={peer_id} addr={addr} replaced={} unix_ms={}",
+                            olds.len(),
+                            unix_ms()
+                        );
+                        emit(UseEvent::Connected { addr });
+                    }
+                    SwarmEvent::ConnectionClosed { peer_id, connection_id, cause, .. } if peer_id == peer => {
+                        let was_live = conns.remove(&connection_id).is_some();
+                        if was_live && conns.is_empty() {
                             swarm_stats.lock().unwrap().connections_closed += 1;
                             let _ = conn_tx.send(None);
                             eprintln!("use event=closed peer={peer_id} cause={cause:?} unix_ms={}", unix_ms());
+                            emit(UseEvent::Disconnected);
                         }
+                    }
+                    SwarmEvent::OutgoingConnectionError { peer_id, error, .. } if peer_id.is_none() || peer_id == Some(peer) => {
+                        if verbose {
+                            eprintln!("use event=dial_failed error={error}");
+                        }
+                        emit(UseEvent::DialFailed { error: error.to_string() });
                     }
                     _ => {}
                 },
                 _ = redial.tick() => {
-                    if !suspended && open_conns == 0 && !swarm.is_connected(&peer) {
-                        if let Err(e) = swarm.dial(redial_addr.clone()) {
-                            if verbose {
-                                eprintln!("use event=redial_error error={e}");
-                            }
-                        }
+                    if !suspended && conns.is_empty() && !swarm.is_connected(&peer) {
+                        let c = candidates(&book);
+                        dial_candidates(&mut swarm, peer, c, false, verbose);
                     }
                 }
             }

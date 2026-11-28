@@ -4608,3 +4608,78 @@ Design (what was built):
   authenticated handshake on every stream). New tests 3/3 repeat runs green.
 - Not measured / open: real two-Mac pairing (Wi-Fi), `pair --show-code` and `share` cannot listen on the same UDP port at once
   (headless: stop share while pairing; the app (M4) opens the window inside the running share via `NodeTrust::set_window`).
+
+## v0.6 M3 discovery — LAN discovery via mDNS `_slipstream._udp` — all M3 acceptance tests green on one host — 2026-11-28
+
+Plan: docs/plans/2026-11-28-use-your-other-mac.md §1 / §5 / §7 / §9 M3. Code: `crates/p2p-net/src/discovery.rs` (feature `mdns`,
+mdns-sd 0.22: `announce_share`/`ShareHandle`, `browse_continuous`/`Discovery`, `DiscoveryEvent{Found,Lost}`), `apps/p2p-node/src/lan.rs`
+(fingerprint, share announcer, use-side address book), `apps/p2p-node/src/control.rs` (share control socket),
+`crates/p2p-forward/src/client.rs` (`AddrBook`, `UseEvent`, multi-address pinned dialing, address-change switch),
+`apps/p2p-node/src/trust.rs` (`record_seen`, `resolve_use_peer`), `apps/p2p-node/src/main.rs` (`discover`, `pair --peer <fp>`,
+`share --no-announce`, `use --no-discovery`, SIGTERM/SIGHUP → clean exit), `app/src-tauri/Info.plist` + `locales/{en,de}.lproj`.
+Host M3 Pro 36 GB (Mac15,6), macOS 27.0.1, Wi-Fi en0 192.168.178.x, base 482d1d7 + this change, debug builds.
+
+Design (what was built):
+- **Announcement**: service `_slipstream._udp.local.`, instance `Slipstream-<fp4>`, TXT **exactly** `v=1`, `fp=<16 hex>` (first 8 bytes
+  of SHA-256 over the PeerId bytes) and `pair=1` only while a pairing window is open. Addresses follow interface changes (mdns-sd
+  `addr_auto`). A flag change re-registers the same instance with the new TXT; dropping the handle unregisters (goodbye, repeated after
+  120 ms) and stops the responder. `share` announces only when it listens on an unspecified or non-loopback address (`--no-announce`
+  opts out); a standalone `pair --show-code` announces with `pair=1` too, so the other Mac needs no address.
+- **SRV host name = `slipstream-<fp>.local.`, not the system host name (deviation from the plan, measured):** the first version
+  announced the system `LocalHostName`; mdns-sd publishes its own A/AAAA records for the SRV target, macOS mDNSResponder saw a
+  conflict and **renamed this Mac** (`Scherwans-MacBook-Pro` → `Scherwans-MacBook-Pro-2`, persistent; restoring it needs admin:
+  System Settings → General → Sharing → Local hostname, or `sudo scutil --set LocalHostName …`). A per-identity name cannot collide
+  and reveals nothing beyond the fingerprint already in the TXT. No `{ip}.local.` either.
+- **Browse**: one background thread per `Discovery`; events are aggregated per fingerprint (union of addresses over every instance
+  claiming that fp, so an impostor cannot hide the real Mac's addresses; IPv6 link-local dropped — a multiaddr has no scope); TXT
+  without `v=1` or a valid fp is ignored. Re-browse (stop + fresh query; instances not answering within 3 s → `Lost`) on: interface set
+  change (if-addrs polled every 5 s), `Discovery::rebrowse()` (the use side calls it on every dial failure and disconnect; ≥ 1 s apart),
+  and every 10 s while anything is known (re-verification, see the missed-goodbye finding below).
+- **Use side** (`slipstream-node use`): the target is still chosen from the trust store (name / PeerId / only share peer); its
+  fingerprint is computed from the **stored PeerId** and matched against announcements. The forwarder gets an `AddrBook {discovered,
+  known}` (discovered = announced IP:port, known = trust-store `last_addrs`), every address rewritten to end in the pinned
+  `/p2p/<PeerId>` (an address pinning another id is dropped). Dials race all candidates (`DialOpts::peer_id(..).addresses(..)`); the QUIC
+  TLS handshake proves the PeerId, so a spoofed announcement can only produce a failed dial. Start-up waits ≤ 3 s + 3 s for the first
+  LAN answer when no stored address works; only addresses not tried yet are dialed as records trickle in. While connected, if the
+  announced addresses no longer include the live connection's address (share restarted on a new port / new IP), the new addresses are
+  dialed at once (`PeerCondition::Always`); the new connection replaces the old one only after it authenticated; other duplicate
+  connections are closed. A successful connection writes `<addr>/p2p/<id>` first into `last_addrs` (max 4, `last_seen`, skipped if
+  unchanged and < 60 s old). `use --no-discovery` keeps the pre-M3 behaviour.
+- **Pairing window inside a running share (M2 risk 1)**: `share` serves a local control socket `<data_dir>/share.sock` (chmod 0600,
+  peer uid must equal the socket owner; a live socket = "another share is running with this data dir", a stale one is replaced);
+  `pair --show-code` first tries it — the share opens the window (`NodeTrust::set_window`), the gate admits guests, the announcer sets
+  `pair=1` (polled every 200 ms + on trust epoch), the CLI prints code / fp and waits for `closed` (paired / expired / 3 wrong codes);
+  Ctrl-C on the CLI cancels the window. Without a running share the standalone listener is used as before. Chosen over a signal (no
+  way to return the code) and over `share --pairing-window` (cannot pair more Macs later without restarting the share).
+- **`discover`** lists `fp`, `paired "<name>"` / `not paired`, pairing `open` / `-`, addresses; **`pair --peer <fp or ≥ 4-hex prefix>
+  --code <6 digits>`** browses for a Mac with that fp **and** `pair=1` (re-querying every second), listens 500 ms more for further
+  address records, races all addresses, and refuses before any pairing message if the connected PeerId's fingerprint does not match
+  (the code still authenticates the pairing itself).
+
+| Acceptance (plan §7 / §9 M3) | Test | Result |
+|---|---|---|
+| found ≤ 3 s, same host | `mdns_live` (in-process, fresh announcement incl. mdns-sd probing) · `discovery.rs` (separate `use` process, share already running) | fresh announcement → Found **913 / 959 / 988 ms** (3 runs); `use` process start → first Found **42–91 ms** (12 runs), connected to the discovered address 116–157 ms after start |
+| TXT keys exactly {v, fp, pair?} | `mdns::tests::txt_is_exactly_v_fp_and_pair_only_while_open` (txt set + the ServiceInfo's properties) · `mdns_live` / `discovery.rs` (flag observed by a browser) | PASS: `["fp","v"]`, with window `["fp","pair","v"]`, values `1` / 16 hex / `1`, nothing else |
+| pair flag appears / disappears with the window | `mdns_live` (4 window cycles, ≥ 1.1 s apart) · `discovery.rs` (window opened inside the running share via the control socket, closed by a successful pairing) | in-process on: 780–1172 ms (mdns-sd re-probes the changed TXT ≈ 750 ms), off: 11–15 ms (one cycle per run ≈ 800 ms); CLI: seen by the first `discover --timeout-ms 1500` after it changed (≤ 1.5 s, both directions; one run 3.1 s off) |
+| Lost when the share stops | `mdns_live` (drop) · `discovery.rs` (SIGTERM to `share`) | in-process **1130–1137 ms** (3/3); CLI: 1.1 s in 6/10 runs; in the others the using process never got mdns-sd's `ServiceRemoved` (raw events traced with `SLIPSTREAM_MDNS_DEBUG=1`; `dns-sd -B` on the same host *did* see `Rmv` at 1.10 s every time) → caught by the 10 s re-verification: 3.2–4.7 s observed, bound 13 s |
+| use re-dials ≤ 10 s after the share restarts on a new port | `discovery.rs` (share SIGTERM → new share process, new random UDP port; time from the new `sharing` line to a new authenticated connection **and** `GET /v1/models` 200 through `use`) | **810–1047 ms** (12 runs); the new connection's address carries the new port |
+| spoof: an announced fp that does not match the pinned PeerId is never dialed as that peer | `discovery::spoofed_fingerprint_is_never_dialed_as_the_paired_mac`: real share off; impostor (another identity, `pair --show-code` on 0.0.0.0) + an announcement of the **paired Mac's fp** at the impostor's port | PASS: `use` sees the spoofed Found, dials it only as `/p2p/<pinned id>`, the QUIC TLS check fails, `use` exits non-zero without listening; `last_addrs` unchanged; nothing paired with the impostor. Unit: candidates never keep an address pinning another id |
+| pair by fingerprint without an address | `discovery.rs` (third data dir: `pair --peer <fp[..6]> --code`) | PASS, CLI process **1.0–1.8 s** incl. browse (one run 4.1 s before the re-query fix; 1 of 11 runs in a stress loop found the Mac but not yet `pair=1` within 5 s → re-query every second added) |
+| Info.plist (macOS Local Network prompt) | `scripts/heavy.sh cargo tauri build --bundles app` (61 s, release, incremental) | PASS: bundle `Info.plist` has `NSLocalNetworkUsageDescription` (EN), `NSBonjourServices = ["_slipstream._udp"]`, `CFBundleDevelopmentRegion = en`, `CFBundleLocalizations = [en, de]`; `Resources/{en,de}.lproj/InfoPlist.strings` (DE string) via `bundle.macOS.files`; codesign (ad-hoc) valid. Tauri merges `src-tauri/Info.plist` automatically |
+
+- Timings above: same-host, Wi-Fi interface + loopback multicast, debug builds; 5 consecutive full runs of `discovery.rs` green after
+  the fixes (plus 12 runs of the main test during development).
+- Bugs found and fixed while testing: (1) aborting the announcer task left the last `Arc<ShareHandle>` inside the task → no goodbye on
+  exit (task now holds a `Weak`); (2) the forwarder dialed the same addresses again for every trickling address record → up to 4
+  parallel connections replacing each other at start-up (now only new addresses, and a duplicate connection never replaces a working
+  one unless an address change asked for it); (3) the CLI `pair` tried discovered addresses one by one with a 5 s timeout each (now
+  raced). Negative: `set_requires_probe(false)` on TXT re-registration (to avoid mdns-sd re-probing) made a new browser miss `pair=1`
+  in 1 of 11 stress runs → reverted.
+- Tests: `cargo test --workspace` **283 passed** (was 273: p2p-net +3 unit, +1 `mdns_live`; p2p-node +3 `lan`, +1 `trust`
+  (`record_seen`), +2 `tests/discovery.rs`), 0 warnings; `app/src-tauri` 108/108. Multicast tests skip with `SKIP …: <reason>` when
+  `SLIPSTREAM_NO_MULTICAST` is set, no non-loopback IPv4 interface exists (mdns-sd does not announce on loopback alone) or the mDNS
+  socket cannot be opened — they did **not** skip on this host.
+- Not measured / open for M4–M6: real two-Mac discovery on Wi-Fi (AP isolation, mesh routers), the macOS Local Network prompt with the
+  ad-hoc bundle (first browse/announce from the app must follow a user click), the missed-goodbye cause inside mdns-sd 0.22 (mitigated,
+  not understood), Wi-Fi↔Ethernet roaming (interface poll path is covered by code, not by a test), mDNS query rate (one query per 10 s
+  per using Mac while a share is known — small, but above RFC 6762's backoff).

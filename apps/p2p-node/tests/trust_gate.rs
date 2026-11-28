@@ -61,6 +61,7 @@ async fn use_side(book: &Mac, selector: Option<&str>) -> std::io::Result<(UseHan
             spare_stream: true,
             token: None,
             local: Default::default(),
+            discovery: None,
             verbose: false,
         },
     )
@@ -281,6 +282,7 @@ async fn dial_with_wrong_pinned_peer_id_is_refused() {
             spare_stream: false,
             token: None,
             local: Default::default(),
+            discovery: None,
             verbose: false,
         },
     )

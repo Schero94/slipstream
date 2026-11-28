@@ -295,6 +295,7 @@ async fn untrusted_peer_is_disconnected() {
             spare_stream: true,
             token: None,
             local: Default::default(),
+            discovery: None,
             verbose: false,
         },
     )

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- v0.6 "Use your other Mac" (M3): Tauri merges this file into the bundle's Info.plist. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Slipstream finds your other Macs on this network and connects only to the ones you paired, so one Mac can use the model running on another.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_slipstream._udp</string>
+	</array>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>de</string>
+	</array>
+</dict>
+</plist>

@@ -2,6 +2,8 @@
 
 pub mod admission;
 pub mod config;
+pub mod control;
+pub mod lan;
 pub mod mesh;
 pub mod pairing;
 pub mod runtime;
