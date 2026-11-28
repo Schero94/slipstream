@@ -3905,3 +3905,17 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   c4062b92a557 (same as every earlier arm and the fresh control). Peak RSS 10.5 GB.
 - E5: S1 136.3 s · save 0.93 s (39,564 tokens, 1,026 MB) · restart · restore 0.31 s · S2 2.3 s,
   hash c4062b92a557.
+
+## 0.5.0 release artifacts — bundle verification — 2026-11-28
+
+- Engine: build-static llama-server 01:21:38 > newest source 01:21:24 (src/tools/common/include/ggml/src);
+  working tree = pin 33aeb17f8586 + engine/ + slipstream-seams.patch (diff-verified). llama-server
+  sha256 6dd91adc5265…, pgrn-convert aee8fc8f8b0b… (unchanged since 11-26, make: up to date).
+  ctest -R peregrine 14/14 on this build.
+- Bundled-engine smoke from the mounted DMG (run_arm_server.sh, BIN=/Volumes/Slipstream/…/llama-server,
+  SPEC_ARGS=" ", CTX=40960, --cache-ram 2048 -fa on --jinja --no-warmup --metrics, 4 GiB, prompt_code.txt,
+  160 tokens greedy, Qwen3.6-35B-A3B Q4 from ~/Modelle):
+  default (PGRN_LAYER_MAJOR=1, -b 40960 -ub 2048) 10.53 tok/s · layer-major off (-ub 4096) 10.55 tok/s ·
+  both out=38b5b06864f1 (= bundle041) · swap Δ 0 MB · peak RSS 8.96 GB. lm_decodes 0 (57-token prompt).
+- App launch from DMG + osascript quit: quit in 2 s, ports 8080/8081 free, no llama-server left.
+- Tests: workspace 183/183, Tauri 107/107, Python 44/44, UI contracts 7/7, headless assets PASS.
