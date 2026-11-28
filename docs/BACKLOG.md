@@ -31,7 +31,8 @@ open score. Add every new idea here with a one-line hypothesis.
 | — | Layer-major prefill | done v0.4.1 opt-in; default-on pending cancellation + 16 GB check | | | | done |
 | — | Colibrì latest optimizations review | done 2026-11-25: main e479104, dev 8ea9e9d; items added above | | | | done |
 | — | Dependencies semver refresh | done: cargo update both workspaces + Tauri 2.12.7 merged (183/96/44/7 tests, dmg build ok) | | | | done |
-| 6.0 | llama.cpp re-port: 45 upstream commits since 33aeb17f8586 | stay current cheaply while the gap is small (engine_sync + apply + parity) | 3 | 4 | 2 | open |
+| — | llama.cpp re-port 33aeb17f8586 → 8e23278c7c36 (106 commits) | done 2026-11-28: docs/PORT_UPSTREAM_8e23278.md; parity hashes unchanged, decode 4 GiB +0.8 %, 10 GiB +4.7 % | | | | done |
+| 3.0 | Upstream chunked Metal commit (#32947) for resident / non-PGRN runs | opt-in GGML_METAL_CHUNK_COMMIT=1 since the 8e23278 port (with PGRN it cost 3–5 % decode); measure resident decode/prefill with it on/off, consider enabling it only without --pgrn | 2 | 3 | 2 | open |
 | — | Low-risk dependency majors | done: libp2p 0.57.1 (codec → native async fn; pulls aws-lc-rs), ureq 3, mdns-sd 0.22 (IPv6 answers now parsed), base64 0.23; 183/96 tests + mdns 15/15, dmg build ok; Dockerfile.node rebuild not verified | | | | done |
 | 4.0 | MLX runtime lock refresh (chore/deps-latest 992c7e7) + live oMLX/PGRN serve smoke | newer starlette/pydantic/hf-hub; must serve an MLX model before release | 2 | 4 | 2 | open |
 | 2.0 | RustCrypto 3.x + rand 0.10 together (16 call sites, wire crypto) | needs interop tests between old/new nodes | 2 | 3 | 3 | open |

@@ -3,12 +3,12 @@
 # repo's source of truth: Slipstream-owned files -> engine/, upstream edits -> the seams
 # patch. Then optionally prove the round-trip with a fresh apply.sh.
 #
-# usage: scripts/engine_sync.sh [--verify]
+# usage: [TREE=<tree>] scripts/engine_sync.sh [--verify]
 #   --verify  reconstruct into a temp dir (local clone of the tree's upstream objects)
 #             and diff it against the working tree; exits non-zero on any mismatch.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-TREE="$HERE/llama.cpp-slipstream"
+TREE=${TREE:-"$HERE/llama.cpp-slipstream"}   # TREE=<dir> syncs from another tree (e.g. an upstream port)
 PIN=$(sed -n 's/^PIN=//p' "$HERE/apply.sh")
 [ -d "$TREE/.git" ] || { echo "no reconstructed tree at $TREE (run ./apply.sh)"; exit 1; }
 cd "$TREE"

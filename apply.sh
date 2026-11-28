@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reconstruct the Slipstream engine = upstream llama.cpp @ pinned commit + our engine/ + seams.
 set -euo pipefail
-PIN=33aeb17f8586
+PIN=8e23278c7c36
 DIR=${1:-llama.cpp-slipstream}
 HERE=$(cd "$(dirname "$0")" && pwd)
 git clone "${UPSTREAM:-https://github.com/ggml-org/llama.cpp}" "$DIR"

@@ -3948,3 +3948,33 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   checkpoint exists before the date inside the system prompt (upstream checkpoints only at
   user-message starts), independent of the copy choice. Known limit: at --cache-ram 1024 (Macs
   < 32 GB) one ~800 MB state fills the cache, so saving the outgoing slot evicts the entry first.
+
+## Upstream port 33aeb17f8586 → 8e23278c7c36 (106 commits) — KEEP — 2026-11-28
+
+- Details, conflicts and method: docs/PORT_UPSTREAM_8e23278.md. Port tree ../upstream-port2/llama.cpp (branch port2),
+  old binaries ../upstream-port2/bin-old (01:21 build of the 33aeb17 tree), old tree kept as
+  ../llama.cpp-slipstream.pin-33aeb17. Carries the main session's server commits up to ea5c9fa.
+  Qwen3.6-35B-A3B UD-Q4_K_XL, GGUF + PGRN from ~/Modelle, M3 Pro 36 GB. Scripts: bench/fetchwall/port2_accept.sh,
+  bench/fetchwall/port2_perfbisect.sh. Raw lines in bench/fetchwall/results/summary.tsv (labels p2*, pb*, pb2*).
+- **Negative found and fixed — upstream chunked Metal commit (#32947) slows PGRN decode.** Port as merged, llama-server
+  app regime (SPEC_ARGS=" ", lookahead default, prompt_code.txt, 160 tokens, interleaved, 25 s cooldown):
+  4 GiB old 10.10, 10.53 → new 10.02, 10.00 (−3.0 %); 10 GiB old 18.61, 18.80 → new 18.08, 17.49 (−4.9 %).
+  Bisect with env toggles in one binary, 10 GiB, 2 reps: old 18.13, 18.38 · new 17.36, 18.25 · chunked path off
+  19.00, 18.95 · #33175 reverted 17.90, 17.98 · #30139 reverted (recurrent states gathered) 17.11, 17.12.
+  Round 2: 10 GiB old 18.72, 18.69 · new 18.09, 17.74 · chunk off 18.94, 18.95 · small first chunk 19.03, 18.59;
+  4 GiB old 10.28, 10.29 · new 9.95, 9.91 · chunk off 10.43, 10.35 · small first chunk 10.28, 10.18.
+  All out=38b5b06864f1, swap 0. Fix: chunked path opt-in (GGML_METAL_CHUNK_COMMIT=1), default = old submit path.
+- **Acceptance, final port binary (03:31):**
+  - ctest -R "peregrine|arg-parser|chat-auto-parser" 15/16 in the port tree (e2e: repo-root layout only); e2e by hand
+    all PARITY_OK nmse=0/max_abs=0, layer-major bitwise=yes, identity rejection OK. Rebuilt in the repo layout
+    (llama.cpp-slipstream at the new pin, 04:03): ctest -R peregrine **14/14**; otool system frameworks only.
+  - Parity run_arm.sh 4 GiB default: old 10.63, 10.50 · new 10.69, 10.46 · repo-layout build 10.36; out
+    **e6c6a36552db** in all, hit 69.01 %, recall 82.87 %, swap 0.
+  - E4 LM=1: S1 39,517 tokens 135.9 s, S2 33 tokens 2.1 s, **a9f8c4863784 / c4062b92a557**, peak RSS 10.5 GB, swap 0.
+  - Decode run_arm_server.sh interleaved old/new: 4 GiB 10.49, 10.43 → 10.58, 10.50 (**+0.8 %**); 10 GiB 18.01, 18.47
+    → 19.10, 19.08 (**+4.7 %**); out 38b5b06864f1, swap 0, peak RSS 8.2 / 14.4 GB.
+  - lm_progress: 332 events, monotonic, median gap 0.31 s, first token 133.9 s, out 54edf738c5a8 (= before).
+    lm_abort: aborted 0.072 s after the cancel (layer 7/40), short reply identical 5dd272b4f316.
+- Numerics unchanged by the upstream range (identical hashes everywhere) → no KLD run needed.
+- Patch: 60 upstream files, 5,849 lines (was 11,534: two stray .orig files removed; CUDA fattn + test-backend-ops
+  hunks dropped for upstream's versions). engine_sync --verify PASS (exit 0).

@@ -323,3 +323,38 @@ e6 nocopy2 swap_delta_mb=0
 20261128-025913	srv	label=pb-all	cache=10	decode_tps=17.90	prompt_n=57	ttft_s=0.8	prefill_tps=70.5	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14379	lm_decodes=0	out=38b5b06864f1	env=PORT_NOCHUNK=1 PORT_FUSE_LAST=1 PORT_RS_NOINPLACE=1
 20261128-030050	e6	label=usable	C1_prompt_n=37407	C1_ttft_s=132.4	C2_prompt_n=26	C2_cache_n=4406	C2_ttft_s=1.6	C3_prompt_n=4432	C3_cache_n=0	C3_ttft_s=22.1	C1_out=fc14398b032c	C2_out=86b8ff31ee95	C3_out=86b8ff31ee95
 e6 usable swap_delta_mb=0
+20261128-030524	srv	label=pb2-old	cache=10	decode_tps=18.72	prompt_n=57	ttft_s=0.8	prefill_tps=71.0	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14378	lm_decodes=0	out=38b5b06864f1	env=
+20261128-030656	srv	label=pb2-new	cache=10	decode_tps=18.09	prompt_n=57	ttft_s=0.9	prefill_tps=64.5	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=38b5b06864f1	env=
+20261128-030828	srv	label=pb2-nochunk	cache=10	decode_tps=18.94	prompt_n=57	ttft_s=0.8	prefill_tps=71.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14381	lm_decodes=0	out=38b5b06864f1	env=PORT_NOCHUNK=1
+20261128-030958	srv	label=pb2-chunkfirst	cache=10	decode_tps=19.03	prompt_n=57	ttft_s=0.8	prefill_tps=72.0	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14381	lm_decodes=0	out=38b5b06864f1	env=PORT_CHUNK_FIRST=1
+20261128-031128	srv	label=pb2-old	cache=10	decode_tps=18.69	prompt_n=57	ttft_s=0.8	prefill_tps=71.0	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=38b5b06864f1	env=
+20261128-031300	srv	label=pb2-new	cache=10	decode_tps=17.74	prompt_n=57	ttft_s=0.9	prefill_tps=63.1	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14381	lm_decodes=0	out=38b5b06864f1	env=
+20261128-031433	srv	label=pb2-nochunk	cache=10	decode_tps=18.95	prompt_n=57	ttft_s=0.8	prefill_tps=71.4	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14381	lm_decodes=0	out=38b5b06864f1	env=PORT_NOCHUNK=1
+20261128-031604	srv	label=pb2-chunkfirst	cache=10	decode_tps=18.59	prompt_n=57	ttft_s=0.8	prefill_tps=71.0	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14382	lm_decodes=0	out=38b5b06864f1	env=PORT_CHUNK_FIRST=1
+20261128-031734	srv	label=pb2-old	cache=4	decode_tps=10.28	prompt_n=57	ttft_s=2.6	prefill_tps=21.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8236	lm_decodes=0	out=38b5b06864f1	env=
+20261128-031914	srv	label=pb2-new	cache=4	decode_tps=9.95	prompt_n=57	ttft_s=2.7	prefill_tps=21.5	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8236	lm_decodes=0	out=38b5b06864f1	env=
+20261128-032054	srv	label=pb2-nochunk	cache=4	decode_tps=10.43	prompt_n=57	ttft_s=2.6	prefill_tps=21.8	draft_acc=None/None	swap_delta_mb=-8.00	peak_rss_mb=8234	lm_decodes=0	out=38b5b06864f1	env=PORT_NOCHUNK=1
+20261128-032235	srv	label=pb2-chunkfirst	cache=4	decode_tps=10.28	prompt_n=57	ttft_s=2.6	prefill_tps=21.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8235	lm_decodes=0	out=38b5b06864f1	env=PORT_CHUNK_FIRST=1
+20261128-032416	srv	label=pb2-old	cache=4	decode_tps=10.29	prompt_n=57	ttft_s=2.6	prefill_tps=21.9	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8236	lm_decodes=0	out=38b5b06864f1	env=
+20261128-032556	srv	label=pb2-new	cache=4	decode_tps=9.91	prompt_n=57	ttft_s=2.7	prefill_tps=20.9	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8236	lm_decodes=0	out=38b5b06864f1	env=
+20261128-032736	srv	label=pb2-nochunk	cache=4	decode_tps=10.35	prompt_n=57	ttft_s=2.6	prefill_tps=21.9	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8235	lm_decodes=0	out=38b5b06864f1	env=PORT_NOCHUNK=1
+20261128-032917	srv	label=pb2-chunkfirst	cache=4	decode_tps=10.18	prompt_n=57	ttft_s=2.7	prefill_tps=21.2	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8235	lm_decodes=0	out=38b5b06864f1	env=PORT_CHUNK_FIRST=1
+20261128-033216	label=p2old-default	cache=4	decode_tps=10.63	prefill_tps=20.97	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=
+20261128-033349	label=p2new-default	cache=4	decode_tps=10.69	prefill_tps=20.90	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=
+20261128-033522	label=p2old-default	cache=4	decode_tps=10.50	prefill_tps=20.85	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=
+20261128-033656	label=p2new-default	cache=4	decode_tps=10.46	prefill_tps=20.43	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=
+20261128-033829	e4	label=p2new-lm	S1_prompt_n=39517	S1_ttft_s=135.9	B_prompt_n=23	S2_prompt_n=33	S2_cache_n=39476	S2_ttft_s=2.1	S1_out=a9f8c4863784	S2_out=c4062b92a557
+e4 p2new-lm peak_rss_mb=10473 swap_delta_mb=0
+20261128-034219	srv	label=p2old-srv	cache=4	decode_tps=10.49	prompt_n=57	ttft_s=2.6	prefill_tps=21.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8233	lm_decodes=0	out=38b5b06864f1	env=
+20261128-034359	srv	label=p2new-srv	cache=4	decode_tps=10.58	prompt_n=57	ttft_s=2.6	prefill_tps=21.9	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8236	lm_decodes=0	out=38b5b06864f1	env=
+20261128-034539	srv	label=p2old-srv	cache=4	decode_tps=10.43	prompt_n=57	ttft_s=2.6	prefill_tps=21.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8234	lm_decodes=0	out=38b5b06864f1	env=
+20261128-034718	srv	label=p2new-srv	cache=4	decode_tps=10.50	prompt_n=57	ttft_s=2.6	prefill_tps=21.9	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8236	lm_decodes=0	out=38b5b06864f1	env=
+20261128-034858	srv	label=p2old-srv	cache=10	decode_tps=18.01	prompt_n=57	ttft_s=0.8	prefill_tps=69.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14379	lm_decodes=0	out=38b5b06864f1	env=
+20261128-035028	srv	label=p2new-srv	cache=10	decode_tps=19.10	prompt_n=57	ttft_s=0.8	prefill_tps=71.0	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14381	lm_decodes=0	out=38b5b06864f1	env=
+20261128-035159	srv	label=p2old-srv	cache=10	decode_tps=18.47	prompt_n=57	ttft_s=0.8	prefill_tps=72.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14379	lm_decodes=0	out=38b5b06864f1	env=
+20261128-035330	srv	label=p2new-srv	cache=10	decode_tps=19.08	prompt_n=57	ttft_s=0.8	prefill_tps=71.9	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14381	lm_decodes=0	out=38b5b06864f1	env=
+20261128-035501	lmprog	label=p2new	prompt_n=39515	events=332	first_event_s=0.03	last_event_s=133.9	first_token_s=133.9	gap_max_s=14.68	gap_median_s=0.31	monotonic=True	out=54edf738c5a8
+lmprog p2new peak_rss_mb=9450 swap_delta_mb=0
+20261128-035835	lmabort	label=p2new	kill_after_s=20	abort_seen_s=0.34	short_ref_s=1.8	short_after_s=0.3	short_same=True	short_out=5dd272b4f316	srv="decode: layer-major prefill aborted 0.072 s after the cancel of its task"	eng="layer-major prefill aborted at layer 7/40, ubatch 10 (7 layer passes done)"
+lmabort p2new peak_rss_mb=9334 swap_delta_mb=0
+20261128-040325	label=p2main-default	cache=4	decode_tps=10.36	prefill_tps=20.46	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=

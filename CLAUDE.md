@@ -7,8 +7,8 @@ M3 Pro, 36 GB unified memory. Read README.md, BENCHMARKS.md and docs/ARCH.md fir
 ## Source of truth (most important rule)
 
 - The engine is **reconstructed**, not vendored: `./apply.sh` clones upstream
-  llama.cpp @ the pinned commit (`PIN` in apply.sh; ported to upstream 2026-11-24 =
-  `33aeb17f8586`, see upstream-port notes in bench/RESULTS.md) into `llama.cpp-slipstream/` (gitignored), copies
+  llama.cpp @ the pinned commit (`PIN` in apply.sh; ported to upstream 2026-11-28 =
+  `8e23278c7c36`, see docs/PORT_UPSTREAM_8e23278.md and bench/RESULTS.md) into `llama.cpp-slipstream/` (gitignored), copies
   `engine/` over it and applies `patches/slipstream-seams.patch`.
 - You may develop inside `llama.cpp-slipstream/`, but work is **lost** unless it is
   synced back before committing. Use the `engine-sync` skill:
