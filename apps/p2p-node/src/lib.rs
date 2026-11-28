@@ -7,6 +7,7 @@ pub mod lan;
 pub mod mesh;
 pub mod pairing;
 pub mod runtime;
+pub mod session;
 pub mod spawn_guard;
 pub mod trust;
 pub mod wire;

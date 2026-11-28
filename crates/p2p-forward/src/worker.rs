@@ -91,6 +91,8 @@ pub struct ShareConfig {
     pub admission: AdmissionLimits,
     pub limits: ShareLimits,
     pub name: String,
+    /// App-side model lifecycle for `StartModel` / `StopModel` (M4); `None` = headless.
+    pub model: Option<Arc<dyn crate::status::ModelControl>>,
     pub verbose: bool,
 }
 
@@ -180,6 +182,7 @@ struct Ctx {
     trust: Arc<dyn PeerTrust>,
     upstream: SocketAddr,
     name: String,
+    model: Option<Arc<dyn crate::status::ModelControl>>,
     admission: Admission,
     limits: ShareLimits,
     idle: Arc<Mutex<HashMap<PeerId, usize>>>,
@@ -327,6 +330,7 @@ pub async fn start_share(
         trust: cfg.trust.clone(),
         upstream: cfg.upstream,
         name: cfg.name.clone(),
+        model: cfg.model.clone(),
         admission: admission.clone(),
         limits: cfg.limits,
         idle: Arc::default(),
@@ -404,7 +408,7 @@ async fn handle_status(ctx: &Ctx, peer: PeerId, peer_key: [u8; 32], stream: libp
     let req: StatusRequest = serde_json::from_slice(&frame.payload)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     ctx.stats.lock().unwrap().status_requests += 1;
-    let reply = status::answer(req, &ctx.name, ctx.upstream, ctx.admission.load()).await;
+    let reply = status::answer(req, &ctx.name, ctx.upstream, ctx.admission.load(), peer, ctx.model.as_ref()).await;
     writer.send_json(FrameType::StatusResp, &reply).await?;
     writer.finish().await
 }

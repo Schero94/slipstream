@@ -74,6 +74,11 @@ pub struct UseConfig {
     /// M3: live candidate addresses (LAN discovery + trust store) and connection events.
     /// `None` = only `peer` is dialed (pre-M3 behaviour).
     pub discovery: Option<UseDiscovery>,
+    /// The Slipstream app's own window (v0.6 M4), e.g. `tauri://localhost`: requests with
+    /// exactly this `Origin` are not refused as browser requests (they still need the bearer
+    /// token, so `token` must be set), CORS preflights from it are answered locally, and its
+    /// responses carry `Access-Control-Allow-Origin` for it. No web page can send this origin.
+    pub app_origin: Option<String>,
     pub verbose: bool,
 }
 
@@ -269,6 +274,7 @@ struct Shared {
     spare_enabled: bool,
     stats: SharedUseStats,
     token: Option<String>,
+    app_origin: Option<String>,
     local_limits: LocalLimits,
     verbose: bool,
 }
@@ -406,6 +412,19 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
             "the local token must be at least 16 visible ASCII characters",
         ));
     }
+    if cfg.app_origin.is_some() && cfg.token.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "app_origin needs a local token (the app window must authenticate like an editor)",
+        ));
+    }
+    if cfg
+        .app_origin
+        .as_deref()
+        .is_some_and(|o| o.is_empty() || o == "null" || !o.bytes().all(|b| b.is_ascii_graphic()))
+    {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad app_origin"));
+    }
     let (listener, listener_companion) = bind_loopback_pair(cfg.bind).await?;
     let bind = listener.local_addr()?;
     let bind_companion = listener_companion.local_addr()?;
@@ -501,6 +520,7 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
         spare_enabled: cfg.spare_stream,
         stats: stats.clone(),
         token: cfg.token.clone(),
+        app_origin: cfg.app_origin.clone(),
         local_limits: cfg.local,
         verbose: cfg.verbose,
     });
@@ -802,28 +822,43 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
     if !allowlist::host_allowed(head.header("host"), port) || head.header_count("host") != 1 {
         return refuse(shared, &mut w, &http::forbidden()).await;
     }
-    if allowlist::browser_origin_refused(&head.headers) {
+    // The app's own window (exact Origin, exactly one Origin header) is the only browser
+    // context let through; everything else with an Origin / Sec-Fetch-Site is refused.
+    let app = app_origin_of(&head.headers, shared.app_origin.as_deref());
+    let cors = app.map(str::to_string);
+    if app.is_none() && allowlist::browser_origin_refused(&head.headers) {
         return refuse(shared, &mut w, &http::forbidden()).await;
+    }
+    if let Some(origin) = app {
+        if head.method == "OPTIONS" {
+            return refuse(shared, &mut w, &preflight_response(origin)).await;
+        }
     }
     if let Some(token) = &shared.token {
         if !bearer_ok(&head.headers, token) {
             shared.stats.lock().unwrap().unauthorized += 1;
-            return refuse(shared, &mut w, &http::unauthorized()).await;
+            return refuse(shared, &mut w, &with_cors(http::unauthorized(), cors.as_deref())).await;
         }
     }
     let Some(canon) = allowlist::canonical(&head.method, &head.target) else {
-        return refuse(shared, &mut w, &http::forbidden()).await;
+        return refuse(shared, &mut w, &with_cors(http::forbidden(), cors.as_deref())).await;
     };
     let kind = match body_kind(&head) {
         Ok(k) => k,
-        Err(msg) => return refuse(shared, &mut w, &http::error_response(400, "bad_request", msg)).await,
+        Err(msg) => {
+            return refuse(shared, &mut w, &with_cors(http::error_response(400, "bad_request", msg), cors.as_deref()))
+                .await
+        }
     };
     if let BodyKind::Length(n) = kind {
         if n > MAX_BODY {
             return refuse(
                 shared,
                 &mut w,
-                &http::error_response(413, "body_too_large", "Request body larger than 32 MiB."),
+                &with_cors(
+                    http::error_response(413, "body_too_large", "Request body larger than 32 MiB."),
+                    cors.as_deref(),
+                ),
             )
             .await;
         }
@@ -842,10 +877,9 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
         Err(e) => {
             return reply(
                 &mut w,
-                &http::error_response(
-                    502,
-                    "peer_unreachable",
-                    &format!("The other Mac is not reachable ({e})."),
+                &with_cors(
+                    http::error_response(502, "peer_unreachable", &format!("The other Mac is not reachable ({e}).")),
+                    cors.as_deref(),
                 ),
             )
             .await
@@ -860,7 +894,10 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
     if let Err(e) = writer.send_json(FrameType::ReqHead, &req).await {
         return reply(
             &mut w,
-            &http::error_response(502, "peer_unreachable", &format!("The other Mac is not reachable ({e}).")),
+            &with_cors(
+                http::error_response(502, "peer_unreachable", &format!("The other Mac is not reachable ({e}).")),
+                cors.as_deref(),
+            ),
         )
         .await;
     }
@@ -870,7 +907,10 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
         ClientGone,
         BodyRefused(&'static str),
     }
-    let mut state = RespState::default();
+    let mut state = RespState {
+        cors: cors.clone(),
+        ..RespState::default()
+    };
     let end = {
         let up = upload_then_watch(&mut r, early_body, kind, &mut writer, shared.local_limits.body_idle_timeout);
         let down = relay_response(&mut reader, &mut w, &mut state);
@@ -911,10 +951,9 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
                 }
             } else {
                 let _ = w
-                    .write_all(&http::error_response(
-                        502,
-                        "peer_lost",
-                        &format!("The other Mac stopped answering ({e})."),
+                    .write_all(&with_cors(
+                        http::error_response(502, "peer_lost", &format!("The other Mac stopped answering ({e}).")),
+                        cors.as_deref(),
                     ))
                     .await;
             }
@@ -938,7 +977,7 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
                 } else {
                     400
                 };
-                let _ = reply(&mut w, &http::error_response(status, "bad_request", msg)).await;
+                let _ = reply(&mut w, &with_cors(http::error_response(status, "bad_request", msg), cors.as_deref())).await;
             }
         }
     }
@@ -950,6 +989,50 @@ struct RespState {
     head_sent: bool,
     chunked: bool,
     event_stream: bool,
+    /// The app window's origin when the request came from it (CORS headers added).
+    cors: Option<String>,
+}
+
+/// `Some(origin)` when the request carries exactly one `Origin` header equal to the
+/// configured app origin.
+fn app_origin_of<'a>(headers: &[(String, String)], app: Option<&'a str>) -> Option<&'a str> {
+    let app = app?;
+    let mut origins = headers.iter().filter(|(k, _)| k == "origin").map(|(_, v)| v.trim());
+    match (origins.next(), origins.next()) {
+        (Some(o), None) if o == app => Some(app),
+        _ => None,
+    }
+}
+
+/// Local answer to the app window's CORS preflight (never forwarded, no token needed:
+/// browsers send preflights without credentials).
+fn preflight_response(origin: &str) -> Vec<u8> {
+    format!(
+        "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {origin}\r\n\
+         Access-Control-Allow-Methods: GET, POST\r\n\
+         Access-Control-Allow-Headers: authorization, content-type\r\n\
+         Access-Control-Max-Age: 600\r\nVary: Origin\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+    .into_bytes()
+}
+
+/// Add `Access-Control-Allow-Origin: <origin>` + `Vary: Origin` to a response (head or a
+/// complete response), dropping any `Access-Control-*` header the other side sent.
+/// Unchanged when `origin` is `None` or the bytes hold no complete head.
+pub fn with_cors(bytes: Vec<u8>, origin: Option<&str>) -> Vec<u8> {
+    let Some(origin) = origin else { return bytes };
+    let Some(end) = http::find_head_end(&bytes) else { return bytes };
+    let head = String::from_utf8_lossy(&bytes[..end]);
+    let mut lines: Vec<&str> = head.split("\r\n").filter(|l| !l.is_empty()).collect();
+    lines.retain(|l| {
+        let name = l.split(':').next().unwrap_or("").trim().to_ascii_lowercase();
+        !(name.starts_with("access-control-") || name == "vary")
+    });
+    let mut out = lines.join("\r\n");
+    out.push_str(&format!("\r\nAccess-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n\r\n"));
+    let mut v = out.into_bytes();
+    v.extend_from_slice(&bytes[end..]);
+    v
 }
 
 enum Upload {
@@ -1061,7 +1144,8 @@ async fn relay_response(
                     state.chunked = h.is_chunked();
                     state.event_stream = h.is_event_stream();
                 }
-                w.write_all(&frame.payload).await?;
+                let head = with_cors(frame.payload, state.cors.as_deref());
+                w.write_all(&head).await?;
                 w.flush().await?;
                 state.head_sent = true;
             }
@@ -1075,8 +1159,11 @@ async fn relay_response(
             FrameType::Error if !state.head_sent => {
                 let err: WireError = serde_json::from_slice(&frame.payload)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                w.write_all(&http::error_response(err.status, &err.code, &err.message))
-                    .await?;
+                w.write_all(&with_cors(
+                    http::error_response(err.status, &err.code, &err.message),
+                    state.cors.as_deref(),
+                ))
+                .await?;
                 w.flush().await?;
                 state.head_sent = true;
                 return Ok(());

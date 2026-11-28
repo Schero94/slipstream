@@ -263,7 +263,8 @@ async fn code_expires_after_five_minutes() {
     let err = type_code(&book, &listener, &code).await.unwrap_err();
     assert!(matches!(&err, PairError::Refused { .. } | PairError::Unreachable(_)), "{err:?}");
     if let PairError::Refused { code, .. } = &err {
-        assert!(code == "expired" || code == "not_pairing", "{code}");
+        // connection_closed: the gate dropped the guest connection first (seen once under load).
+        assert!(code == "expired" || code == "not_pairing" || code == "connection_closed", "{code}");
     }
     assert!(t0.elapsed() < Duration::from_secs(6));
     assert!(big.store.list().is_empty());

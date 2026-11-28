@@ -35,6 +35,9 @@ pub mod worker;
 pub use client::{start_use, AddrBook, LocalLimits, UseConfig, UseDiscovery, UseEvent, UseHandle};
 pub use trust::{PeerTrust, StaticTrust, TrustEpoch};
 pub use worker::{parse_upstream, start_share, ShareConfig, ShareHandle, ShareLimits};
+pub use status::{ModelControl, ReplyFuture, Status, StatusReply, StatusRequest};
+/// Re-exported so embedders (the app) need no direct libp2p dependency.
+pub use libp2p::{Multiaddr, PeerId};
 
 pub fn unix_ms() -> u128 {
     std::time::SystemTime::now()

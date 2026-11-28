@@ -4683,3 +4683,56 @@ Design (what was built):
   ad-hoc bundle (first browse/announce from the app must follow a user click), the missed-goodbye cause inside mdns-sd 0.22 (mitigated,
   not understood), Wi-Fi↔Ethernet roaming (interface poll path is covered by code, not by a test), mDNS query rate (one query per 10 s
   per using Mac while a share is known — small, but above RFC 6762's backoff).
+
+## v0.6 M4 app integration — "Your Macs" (use another Mac / share this one) in the app — all M4 acceptance checks green — 2026-11-28
+
+Plan: docs/plans/2026-11-28-use-your-other-mac.md §4–§6 / §9 M4. Code: `app/src-tauri/src/remote.rs` (RemoteState, 16 `remote_*`
+commands, ModelControl for the big Mac, use/awake monitors, tray line), `apps/p2p-node/src/session.rs` (new: `Node`, `ShareSession`,
+`UseSession` with re-dial supervisor + "removed" detection, `LanBrowser`, `pair_with_target` — the app runs share/use in-process, no
+shell-out), `crates/p2p-forward` (`ModelControl` hook in `ShareConfig`; `UseConfig.app_origin`), `app/src-tauri/src/main.rs`
+(`start_server_impl`, `server_state` "remote", `remote_active` refusal, last start config persisted, editor patch writes the local token),
+`tray.rs`, `teardown.rs`, `app/dist/{index.html,app.js,style.css}`, mock `app/ui-review/mock/tauri_mock.js` (`__M.remote`). Host M3 Pro
+36 GB, macOS 27.0.1, base 65ab6ee + this change. No performance claim in this entry (the forwarder numbers are M1/M2); this records
+behaviour and tests.
+
+Decisions:
+- **In-process, one runtime:** `RemoteState` owns a 2-worker tokio runtime; async Tauri commands spawn onto it. One `Node` (key + trust
+  store + 250 ms file watcher) per data dir (`SLIPSTREAM_P2P_DIR` override, default `~/Library/Application Support/Slipstream/p2p`).
+- **API key:** the Connect-editor patch (and every copy snippet) always uses this install's token `<p2p dir>/local.token` (0600). llama-server
+  ignores it, the forwarder requires it, so switching local ↔ remote never needs a re-patch.
+- **App Chat through the forwarder:** only the exact origin `tauri://localhost` (one Origin header) passes the browser guard, still with the
+  token; its CORS preflight is answered locally (never forwarded), responses get exactly one `Access-Control-Allow-Origin`. Any other
+  origin / `null` / two Origin headers stay 403. The window sends the key only while using another Mac.
+- **Port 8080 safety:** while using, `server_state` = "remote", `is_running` counts only the own child, `start_server` refuses
+  `[remote_active]`, and `stop_server_impl` never probes/kills the port (teardown also skips the app's own pid) — the old lsof fallback
+  would have SIGTERMed the app's own forwarder. slotstate save/restore only runs for a local model (no local child → nothing saved;
+  `/slots/*` writes are refused by the forwarder anyway).
+- **Model control (big Mac):** StartModel → `start_server_impl` with the last start config (persisted in
+  `Application Support/Slipstream/last_server.json`) = same RAM admission and refusals; StopModel only if a paired Mac started it and the
+  local `/slots` shows no busy slot without a paired request in flight; "Paired Macs may start and stop the model" (default on) gates both
+  live (`can_start_model` in status). Sharing and using exclude each other.
+- **mDNS only after a click:** the first browse is the "Find my Macs" click, the first announce the "Share this Mac" click; later app
+  starts resume what was on (`<p2p dir>/app_remote.json`: `use_peer`, `share`, `may_start_model`).
+- **Awake:** `caffeinate -i -w <app pid>` child while sharing on AC power and during a remote request on battery (checked every 5 s).
+
+| Acceptance (plan §9 M4) | Test | Result |
+|---|---|---|
+| pairing ≤ 3 clicks MacBook / 1 big Mac | `browser_click_walk.js` §6 + manual walk (Playwright MCP, mock) | big Mac **1** ("Share this Mac" → code at once); MacBook **2** ("Find my Macs" → code + Enter; a single Mac showing a code opens its code field), **3** with a running local model (confirm) or several Macs ("Pair" on the row). Tab navigation not counted (as in the plan). |
+| 0 clicks daily | `remote.rs` resume + settings test | choice persisted, resumed at app start; cleared when the other Mac removes this one |
+| EN/DE | `test_remote_macs_ui.mjs` | 108 keys, identical EN/DE key sets and placeholders; every `data-i18n` on the panel and every `t("macs.*")` resolves; walk finds no raw keys |
+| pill modes / start refused while remote | `test_remote_macs_ui.mjs`, walk | remote-on / waking / off / busy; `start_server` → `[remote_active]` (main.rs + mock) |
+| in-process share + use, pairing via the command layer | `remote::tests::share_and_use_in_process_against_mock_llama` (two RemoteStates, data dirs a/b, separate ports, mock llama, no mDNS) | wrong code → `[pair_wrong_code]`; pair; use asks before stopping the local model; SSE through 127.0.0.1:<port> with the token (401 without); StartModel through the app (fake model), StopModel refused while the mock's slot is busy and for a locally started model, refused with model control off; big Mac revokes → MacBook shows "removed", port released, stored choice cleared — 3.2 s |
+| StopModel success path | `remote::tests::remote_stop_of_a_remotely_started_model` | stop of a remotely started model on an idle server; start on a running model answers "running" without marking it remote |
+| forwarder hooks | `crates/p2p-forward/tests/app_hooks.rs` (3) | app origin: preflight 204 local, 401 without token (with CORS), 200 with one ACAO, evil/null/double origin 403, nothing reaches upstream; `app_origin` without token refused at start; StartModel/StopModel via `ModelControl`, `can_start_model`, headless refusal unchanged |
+
+- Tests: `cargo test --workspace` **286 passed** (283 + 3 `app_hooks`), 0 failed; `app/src-tauri` **111/111** (108 + 3); `node
+  app/scripts/test_*.mjs` 8/8 (new `test_remote_macs_ui.mjs`; `test_prefer_local_p2p.mjs` extended: remote mode never routes Chat to the
+  mesh); `browser_click_walk.js` 0 failures, 0 console errors; `scripts/heavy.sh cargo tauri build --bundles app` OK.
+- Flake fixed: `apps/p2p-node/tests/pairing.rs::code_expires_after_five_minutes` failed once under load with refusal code
+  `connection_closed` (the gate dropped the expired guest before the refusal message) — a valid outcome, now accepted (3/3 reruns green
+  before the change too).
+- Screenshots: `app/ui-review/journey/v06-en-0{1..7}-*.png`, `v06-de-0{1..3}-*.png`; journey in `app/ui-review/JOURNEY.md` (v0.6).
+- Not measured / open for M5–M6: real two-Mac run (Local Network prompt with the bundle, Wi-Fi), Wake-on-LAN and a bounded "waking" phase
+  (now a 5 s re-dial loop shown as Waking → unreachable), version-mismatch message, editor re-patch when the other Mac's context differs,
+  `Unpair` is only delivered while a share/use connection is up (a revoke with sharing off tells the other Mac at its next connection
+  attempt, which is refused), the CLI `share`/`use` still have their own copies of the session code (could move onto `session.rs`).

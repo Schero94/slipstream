@@ -905,6 +905,7 @@ async fn cmd_share(
             admission: p2p_forward::admission::AdmissionLimits::default(),
             limits: p2p_forward::ShareLimits::default(),
             name: name.clone(),
+            model: None,
             verbose,
         },
     )
@@ -1007,6 +1008,7 @@ async fn cmd_use(
             token: token.clone(),
             local: p2p_forward::LocalLimits::default(),
             discovery: lan_inputs,
+            app_origin: None,
             verbose,
         },
     )

@@ -19,7 +19,11 @@ p2p-core = { path = "../../crates/p2p-core" }
 p2p-crypto = { path = "../../crates/p2p-crypto" }
 p2p-ledger = { path = "../../crates/p2p-ledger" }
 p2p-node = { path = "../../apps/p2p-node" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+p2p-forward = { path = "../../crates/p2p-forward" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = "1"

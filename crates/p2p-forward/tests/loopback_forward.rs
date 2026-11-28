@@ -296,6 +296,7 @@ async fn untrusted_peer_is_disconnected() {
             token: None,
             local: Default::default(),
             discovery: None,
+            app_origin: None,
             verbose: false,
         },
     )

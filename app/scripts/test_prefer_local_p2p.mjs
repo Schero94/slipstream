@@ -84,4 +84,17 @@ for (const p2p of [true, false, 1, 0, null, undefined]) {
 // Privacy default: an available P2P connection alone never exports a prompt.
 assert.equal(preferLocalChatRoute(false, true, false), "hint");
 
+// --- v0.6 "Use another Mac": the paired Mac is reached through 127.0.0.1:8080 (the
+// forwarder), so Chat treats it like the local server and never falls back to the community
+// mesh while it answers. pollRemote sets state.running from the paired Mac's model.
+assert.match(appJs, /async function pollRemote\(\)[\s\S]*?state\.running = !!\(u && u\.state === "connected" && u\.model_running\);/);
+assert.match(appJs, /if \(sstate === "remote"\) \{\s*await pollRemote\(\);/);
+const pollRemoteBody = appJs.slice(appJs.indexOf("async function pollRemote("), appJs.indexOf("async function poll()"));
+assert.doesNotMatch(pollRemoteBody, /p2p_chat|sendChatViaP2p/, "remote mode never routes Chat to the mesh");
+// Mirror: paired Mac in use + its model running ⇒ "local" route (forwarder on 8080).
+const remoteRoute = (useConnected, modelRunning, p2p, remoteChat) =>
+  preferLocalChatRoute(useConnected && modelRunning, p2p, remoteChat);
+assert.equal(remoteRoute(true, true, true, true), "local");
+assert.equal(remoteRoute(true, false, false, false), "hint", "remote model off: hint, no silent export");
+
 console.log("test_prefer_local_p2p.mjs: OK");

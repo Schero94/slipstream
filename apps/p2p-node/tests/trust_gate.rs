@@ -35,6 +35,7 @@ async fn share(big: &Mac, mock: &MockLlama) -> Running {
             admission: Default::default(),
             limits: Default::default(),
             name: big.name.clone(),
+            model: None,
             verbose: false,
         },
     )
@@ -62,6 +63,7 @@ async fn use_side(book: &Mac, selector: Option<&str>) -> std::io::Result<(UseHan
             token: None,
             local: Default::default(),
             discovery: None,
+            app_origin: None,
             verbose: false,
         },
     )
@@ -245,6 +247,7 @@ async fn dial_with_wrong_pinned_peer_id_is_refused() {
             admission: Default::default(),
             limits: Default::default(),
             name: "Mac Studio".into(),
+            model: None,
             verbose: false,
         },
     )
@@ -283,6 +286,7 @@ async fn dial_with_wrong_pinned_peer_id_is_refused() {
             token: None,
             local: Default::default(),
             discovery: None,
+            app_origin: None,
             verbose: false,
         },
     )

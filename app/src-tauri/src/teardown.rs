@@ -214,7 +214,8 @@ pub fn stop_server(
     // 4) Last resort: the single listener(s) on our bound port (no name match).
     if port_still_alive(server_port) {
         for pid in listener_pids_on_port(server_port) {
-            if owned == Some(pid) {
+            // Never this app itself (its forwarder listens on the port while using another Mac).
+            if owned == Some(pid) || pid == std::process::id() {
                 continue;
             }
             let _ = terminate_pid(pid, 1500);

@@ -34,6 +34,8 @@
           <option value="de">DE</option>
         </select>
         <span id="statusPill" class="pill pill-off">○ Gestoppt</span>
+        <!-- Big Mac while sharing: "Shared · 1 request" (Your Macs). -->
+        <span id="shareBadge" class="share-badge" role="status" aria-live="polite" hidden></span>
       </div>
       <div class="power-wrap">
         <p class="start-tip" id="startTip" data-i18n="hint.startPath">Models folder → Backend Auto → Start</p>
@@ -61,6 +63,8 @@
       <!-- The first-run journey in order: model → Start (top right) → editor. -->
       <button class="tab" data-tab="models" role="tab" aria-selected="false"><span class="nav-ico">◇</span><span data-i18n="nav.models">Modelle</span></button>
       <button class="tab" data-tab="connect" role="tab" aria-selected="false"><span class="nav-ico">⇄</span><span data-i18n="nav.connect">Connect editor</span></button>
+      <!-- v0.6: use another Mac's model / share this one. Always visible (data-tab stays "cluster"). -->
+      <button class="tab" data-tab="cluster" id="navCluster" data-i18n-tip="tip.macs" role="tab" aria-selected="false"><span class="nav-ico">⌗</span><span data-i18n="nav.cluster">Your Macs</span></button>
       <!-- Serving, streaming, memory and system used to be four entries showing
            overlapping numbers from two measurement chains. One entry now, four
            sections inside it, one source per figure. -->
@@ -70,8 +74,6 @@
       <button class="tab" data-tab="downloads" role="tab" aria-selected="false"><span class="nav-ico">↓</span><span data-i18n="nav.downloads">Downloads</span></button>
       <button class="tab" data-tab="benchmarks" role="tab" aria-selected="false"><span class="nav-ico">▲</span><span data-i18n="nav.benchmarks">Benchmarks</span></button>
       <button class="tab" data-tab="logs" role="tab" aria-selected="false"><span class="nav-ico">≡</span><span data-i18n="nav.logs">Logs</span></button>
-      <!-- Soft-hidden from primary journey; still reachable (PRODUCT_CLICK_JOURNEY). -->
-      <button class="tab nav-soft" data-tab="cluster" id="navCluster" data-i18n-tip="tip.cluster" role="tab" aria-selected="false"><span class="nav-ico">⌗</span><span data-i18n="nav.cluster">Cluster</span></button>
     </nav>
 
     <div class="content">
@@ -528,11 +530,98 @@
         </div>
       </section>
 
-      <!-- ============ CLUSTER / P2P ============ -->
-      <!-- Primary Slipstream P2P surface. Gate: localStorage `slipstream.p2p` (default OFF).
-           Independent of Metal/MLX start_server. -->
+      <!-- ============ YOUR MACS (v0.6) + community mesh (Advanced) ============ -->
+      <!-- "Use another Mac" / "Share this Mac" (remote.rs, docs/plans/2026-11-28-use-your-other-mac.md §6).
+           The community mesh moved into the collapsed Advanced section, still gated by
+           localStorage `slipstream.p2p` (default OFF). -->
       <section class="panel" data-panel="cluster" hidden>
-        <div class="card">
+        <div class="card macs-head">
+          <div class="card-head">
+            <h2 data-i18n="macs.title">Your Macs</h2>
+            <span id="macsBadge" class="badge" hidden></span>
+          </div>
+          <p class="hint section-lead" data-i18n="macs.lead">Use the model of a bigger Mac in your network from this Mac's editor, or share this Mac's model with your other Macs.</p>
+          <div id="macsRemoved" class="macs-alert" role="alert" hidden>
+            <span id="macsRemovedText"></span>
+            <button type="button" id="macsRemovedOk" class="btn btn-ghost" data-i18n="macs.ok">OK</button>
+          </div>
+          <p id="macsReset" class="macs-alert" role="alert" data-i18n="macs.pairingsReset" hidden>Your pairings were reset because the list of paired Macs failed its integrity check. Pair your Macs again.</p>
+        </div>
+        <div class="macs-grid">
+          <div class="card macs-card" id="macsUseCard">
+            <div class="card-head"><h3 data-i18n="macs.useTitle">Use another Mac</h3></div>
+            <p class="hint" data-i18n="macs.useLead">Your editor keeps its address (http://127.0.0.1:8080/v1); the answers come from the other Mac.</p>
+            <div id="macsUsing" class="macs-using" hidden>
+              <p id="macsUsingText" class="macs-status" role="status" aria-live="polite"></p>
+              <p id="macsUsingHint" class="hint"></p>
+              <div class="p2p-actions">
+                <button type="button" id="macsStartModel" class="btn btn-primary" hidden></button>
+                <button type="button" id="macsStopModel" class="btn" hidden></button>
+                <button type="button" id="macsStopUsing" class="btn" data-i18n="btn.stopRemote">Stop using</button>
+              </div>
+            </div>
+            <div id="macsFindBox">
+              <div class="p2p-actions">
+                <button type="button" id="macsFind" class="btn btn-primary" data-i18n="macs.find">Find my Macs</button>
+              </div>
+              <p id="macsFindStatus" class="hint" role="status" aria-live="polite"></p>
+              <ul id="macsFound" class="macs-list" data-i18n-aria="macs.foundList" aria-label="Macs on this network"></ul>
+              <form id="macsPairForm" class="macs-pair" hidden>
+                <label for="macsCodeIn" id="macsCodeLabel" data-i18n="macs.codeLabel">Code shown on the other Mac</label>
+                <div class="macs-pair-row">
+                  <input type="text" id="macsCodeIn" inputmode="numeric" autocomplete="one-time-code" maxlength="7" spellcheck="false" placeholder="123 456" />
+                  <button type="submit" id="macsPairBtn" class="btn btn-primary" data-i18n="macs.pairBtn">Pair</button>
+                  <button type="button" id="macsPairCancel" class="btn btn-ghost" data-i18n="macs.cancel">Cancel</button>
+                </div>
+                <p id="macsPairErr" class="macs-err" role="alert"></p>
+              </form>
+              <details id="macsManual" class="paths">
+                <summary data-i18n="macs.manual">Not listed? Enter its address</summary>
+                <label for="macsAddr" data-i18n="macs.addrLabel">Address shown on the other Mac</label>
+                <input type="text" id="macsAddr" spellcheck="false" placeholder="/ip4/192.168.1.20/udp/9003/quic-v1" />
+                <p class="hint" data-i18n="macs.manualHint">On the other Mac, "Share this Mac" shows its address under the code. Then enter the code here.</p>
+                <div class="p2p-actions"><button type="button" id="macsAddrGo" class="btn" data-i18n="macs.addrGo">Next: enter code</button></div>
+              </details>
+            </div>
+            <div class="macs-sub">
+              <h4 data-i18n="macs.pairedUse">Paired Macs you can use</h4>
+              <ul id="macsPairedUse" class="macs-list"></ul>
+              <p id="macsPairedUseEmpty" class="hint" data-i18n="macs.noPairedUse">None yet.</p>
+            </div>
+          </div>
+          <div class="card macs-card" id="macsShareCard">
+            <div class="card-head">
+              <h3 data-i18n="macs.shareTitle">Share this Mac</h3>
+              <label class="chk macs-switch"><input type="checkbox" id="macsShareToggle" role="switch" /><span data-i18n="macs.shareToggle">Share this Mac</span></label>
+            </div>
+            <p class="hint" data-i18n="macs.shareLead">Your other Macs can use this Mac's model. Only Macs you pair with a code can connect.</p>
+            <div id="macsCodeBox" class="macs-codebox" hidden>
+              <div id="macsCode6" class="macs-code" aria-live="polite" aria-atomic="true"></div>
+              <p id="macsCodeHint" class="hint"></p>
+              <p id="macsAddrInfo" class="hint macs-addr"></p>
+              <div class="p2p-actions">
+                <button type="button" id="macsNewCode" class="btn btn-ghost" data-i18n="macs.newCode">New code</button>
+                <button type="button" id="macsCodeClose" class="btn btn-ghost" data-i18n="macs.cancel">Cancel</button>
+              </div>
+            </div>
+            <p id="macsShareStatus" class="macs-status" role="status" aria-live="polite"></p>
+            <div class="p2p-actions"><button type="button" id="macsAddMac" class="btn" data-i18n="macs.addMac" hidden>Pair another Mac</button></div>
+            <label class="chk macs-may"><input type="checkbox" id="macsMayStart" /><span data-i18n="macs.mayStart">Paired Macs may start and stop the model</span></label>
+            <p class="hint" data-i18n="macs.mayStartHint">They can start it with your last settings (only when there is enough free memory) and stop only a model they started — never while this Mac is answering its own request.</p>
+            <div class="macs-sub">
+              <h4 data-i18n="macs.pairedShare">Macs that use this Mac</h4>
+              <ul id="macsPairedShare" class="macs-list"></ul>
+              <p id="macsPairedShareEmpty" class="hint" data-i18n="macs.noPairedShare">None yet.</p>
+            </div>
+          </div>
+        </div>
+        <div class="card macs-privacy">
+          <h3 data-i18n="macs.privacyTitle">Private by design</h3>
+          <p class="hint" data-i18n="macs.privacy">Only Macs you paired with a code can connect.</p>
+        </div>
+        <details class="card macs-mesh" id="meshAdvanced">
+          <summary data-i18n="macs.advancedMesh">Advanced: community mesh (experimental)</summary>
+        <div class="mesh-inner">
           <div class="card-head">
             <h2 data-i18n="sec.cluster">Cluster / P2P</h2>
             <span id="p2pPill" class="badge p2p-pill p2p-offline">offline</span>
@@ -649,6 +738,7 @@
             <p class="hint p2p-note" id="p2pNote"></p>
           </div>
         </div>
+        </details>
       </section>
 
       <!-- ============ LOGS ============ -->

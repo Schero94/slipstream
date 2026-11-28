@@ -2,12 +2,18 @@
 //!
 //! The use side sends one `StatusReq` frame (JSON [`StatusRequest`]), the share side
 //! answers with one `StatusResp` frame (JSON [`StatusReply`]) and FIN. `StartModel` /
-//! `StopModel` are answered with a clear refusal in the headless share (the app-side
-//! implementation through `start_server` + RAM admission is M4).
+//! `StopModel` are answered with a clear refusal in the headless share; the app (M4)
+//! passes a [`ModelControl`] that starts the model through its own `start_server` path
+//! (same RAM admission) and stops only models a paired Mac started.
 
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
+
+use libp2p::PeerId;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -41,6 +47,23 @@ pub struct Status {
 pub enum StatusReply {
     Status(Status),
     Refused { code: String, message: String },
+}
+
+/// Future returned by [`ModelControl`] calls.
+pub type ReplyFuture = Pin<Box<dyn Future<Output = StatusReply> + Send + 'static>>;
+
+/// The share side's model lifecycle, provided by the app (v0.6 M4). The headless share
+/// passes none and refuses `StartModel` / `StopModel`.
+pub trait ModelControl: Send + Sync + 'static {
+    /// Whether `peer` may start / stop the model right now ("Paired Macs may start and
+    /// stop the model"). Reported as `Status::can_start_model`.
+    fn allowed(&self, peer: &PeerId) -> bool;
+    /// Start the model (through the app's RAM admission). Answer with a status or a
+    /// refusal; the model may still be loading when this returns.
+    fn start(&self, peer: PeerId) -> ReplyFuture;
+    /// Stop the model — only one a paired Mac started, and only with no local request
+    /// in flight.
+    fn stop(&self, peer: PeerId) -> ReplyFuture;
 }
 
 pub const HEADLESS_REFUSAL: &str =
@@ -111,19 +134,33 @@ pub async fn collect(name: &str, upstream: SocketAddr, load: (usize, usize)) -> 
     status
 }
 
-/// Answer one request (headless share).
+/// Answer one request from `peer`. Without `model` (headless share) start/stop are
+/// refused; with it they go to the app and `can_start_model` says whether `peer` may.
 pub async fn answer(
     req: StatusRequest,
     name: &str,
     upstream: SocketAddr,
     load: (usize, usize),
+    peer: PeerId,
+    model: Option<&Arc<dyn ModelControl>>,
 ) -> StatusReply {
-    match req {
-        StatusRequest::Status => StatusReply::Status(collect(name, upstream, load).await),
-        StatusRequest::StartModel | StatusRequest::StopModel => StatusReply::Refused {
+    let allowed = model.is_some_and(|m| m.allowed(&peer));
+    match (req, model) {
+        (StatusRequest::Status, _) => {
+            let mut s = collect(name, upstream, load).await;
+            s.can_start_model = allowed;
+            StatusReply::Status(s)
+        }
+        (StatusRequest::StartModel | StatusRequest::StopModel, None) => StatusReply::Refused {
             code: "not_supported_headless".into(),
             message: HEADLESS_REFUSAL.into(),
         },
+        (_, Some(_)) if !allowed => StatusReply::Refused {
+            code: "model_control_off".into(),
+            message: "This Mac does not let paired Macs start or stop its model.".into(),
+        },
+        (StatusRequest::StartModel, Some(m)) => m.start(peer).await,
+        (StatusRequest::StopModel, Some(m)) => m.stop(peer).await,
     }
 }
 

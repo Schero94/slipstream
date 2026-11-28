@@ -48,6 +48,8 @@ pub struct RigOptions {
     pub share_limits: ShareLimits,
     pub token: Option<String>,
     pub local: LocalLimits,
+    pub app_origin: Option<String>,
+    pub model: Option<Arc<dyn p2p_forward::ModelControl>>,
 }
 
 impl Default for RigOptions {
@@ -60,6 +62,8 @@ impl Default for RigOptions {
             share_limits: ShareLimits::default(),
             token: None,
             local: LocalLimits::default(),
+            app_origin: None,
+            model: None,
         }
     }
 }
@@ -84,6 +88,7 @@ pub async fn rig(opts: RigOptions) -> Rig {
             admission: opts.admission,
             limits: opts.share_limits,
             name: "Test Studio".into(),
+            model: opts.model.clone(),
             verbose: false,
         },
     )
@@ -110,6 +115,7 @@ pub async fn rig(opts: RigOptions) -> Rig {
             token: opts.token,
             local: opts.local,
             discovery: None,
+            app_origin: opts.app_origin.clone(),
             verbose: false,
         },
     )

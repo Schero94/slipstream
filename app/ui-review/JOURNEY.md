@@ -1,5 +1,41 @@
 # First-run journey review
 
+## v0.6 review (2026-11-28): "Your Macs" — use another Mac / share this one
+
+**Goal of the user:** "My MacBook's editor should use the model on my Mac Studio at home, privately,
+without changing the editor's settings — and tomorrow it should just work."
+
+Mock: `python3 app/ui-review/mock/serve.py 4317`, knobs on `window.__M.remote` (see `tauri_mock.js`:
+`found`, `code`, `useState`, `modelRunning`, `busy`/`queue`, `activity`, `removedBy`, `pairingsReset`,
+`shareRequests`, `peerPairs()`). `browser_click_walk.js` section 6 walks the pairing (0 failures, no
+console errors). Screenshots `journey/v06-en-*.png`, `journey/v06-de-*.png` (1200×800).
+
+| Who | Clicks | What happens |
+|---|---|---|
+| Big Mac (Mac Studio) | **1**: "Share this Mac" | Sharing starts, nothing is paired yet, so a 6-digit code appears at once with a 5-minute countdown and the Mac's address for the manual fallback (`v06-de-01-share-code.png`). |
+| MacBook | **2**: "Find my Macs" → type the code + Enter | The first click is also the first local-network search (macOS Local Network prompt appears here, never at app start). One Mac showing a code → its code field opens by itself (with two or more: + "Pair" on the row = 3). After pairing the MacBook switches to the Mac Studio right away; pill "Waking Mac Studio…" → "Using Mac Studio", power button "Stop using" (`v06-en-02…04`). |
+| MacBook with its own model running | **3**: the two above + "OK" on "This Mac's model is running. Stop it and use Mac Studio instead?" | The local model is stopped only after this confirm (`v06-de-03-using.png`). |
+| Daily use | **0** | The choice is stored (`<p2p dir>/app_remote.json`); at the next app start the forwarder comes back on 127.0.0.1:8080 by itself and re-dials while the Mac Studio sleeps. Sharing on the big Mac resumes the same way. |
+
+Tab navigation ("Your Macs" in the sidebar) is not counted, as in the plan's journey; counting it, it is
+1 + 1 (big Mac) and 1 + 2 (MacBook).
+
+What the user sees while using the other Mac (`v06-en-05-chat-remote-reading.png`): the activity strip shows
+the Mac Studio's prompt progress ("Reading your prompt 12,250 of 39,517 tokens (30 %)") from its sanitized
+`/slots`, the pill tooltip says "Using Mac Studio · reading the prompt 30 %", the menubar line reads
+"Nutzt Mac Studio · liest Prompt 30 %". The app's own Chat works through the forwarder (the window's
+origin `tauri://localhost` is the only browser origin let through, with the local key). The big Mac shows
+"Shared · 1 request" next to its pill and in the card (`v06-de-02-shared-1-request.png`).
+
+States covered: unreachable (`v06-en-06`, "Mac Studio is not reachable. Is it awake and sharing? Slipstream
+keeps trying."), "Mac Studio removed this Mac. Pair again to use it." (`v06-en-07`, M2 risk 3), "pairings were
+reset" (integrity check failed), port 8080 taken, the other Mac's model off ("Start it on Mac Studio" when it
+allows model control), busy with its own work (pill "Mac Studio busy").
+
+Open (for M5/M6): Wake-on-LAN and a "waking" phase with a timeout (now: retry every 5 s, shown as "Waking…"
+then "unreachable"); version-mismatch message; the real macOS Local Network prompt with the signed/ad-hoc
+bundle (needs a second Mac); one-click editor re-patch when the other Mac's context size differs.
+
 ## v0.5 review (2026-11-27): 5 clicks → 3, and the engine always says what it is doing
 
 **Goal of the user:** "I have a Mac. I want a fast local coding model running and connected to my editor —

@@ -791,3 +791,49 @@ details.manual-steps .badge { font-size: 11px; }
 .preset-help { margin: -6px 0 var(--sp-3); }
 #cacheAuto { margin-right: 6px; vertical-align: 1px; }
 details.manual-steps .manual-model { margin: 8px 0 0; }
+
+/* ---- Your Macs (v0.6) ---------------------------------------------------- */
+.pill-remote-on { color: var(--green); background: var(--green-tint); }
+.pill-remote-waking { color: var(--yellow); background: var(--yellow-tint); }
+.pill-remote-busy { color: var(--yellow); background: var(--yellow-tint); }
+.pill-remote-off { color: var(--red); background: var(--red-tint); }
+.share-badge {
+  font-size: 11.5px; font-weight: 600; padding: 5px 10px; border-radius: var(--radius-sm);
+  color: var(--muted); white-space: nowrap;
+}
+.share-badge.is-active { color: var(--green); background: var(--green-tint); }
+.macs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--sp-3); margin-top: var(--sp-3); }
+.macs-card h3, .macs-privacy h3 { margin: 0; font-size: 15px; }
+.macs-card .card-head { gap: var(--sp-2); flex-wrap: wrap; }
+.macs-sub { margin-top: var(--sp-3); border-top: 1px solid var(--rule); padding-top: var(--sp-2); }
+.macs-sub h4 { margin: 0 0 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.macs-list { list-style: none; margin: var(--sp-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.macs-list:empty { margin: 0; }
+.macs-item { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  padding: 8px 10px; border-radius: var(--radius-sm); background: var(--panel-2); }
+.macs-info { display: flex; flex-direction: column; min-width: 0; }
+.macs-info b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.macs-sub-t { font-size: 11.5px; color: var(--muted); }
+.macs-act { display: flex; gap: 6px; flex: none; }
+.macs-pair { margin-top: var(--sp-2); }
+.macs-pair label { display: block; font-size: 12.5px; color: var(--text); margin-bottom: 6px; }
+.macs-pair-row { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+.macs-pair-row input { width: 9em; font-size: 18px; letter-spacing: 0.12em; font-variant-numeric: tabular-nums; text-align: center; }
+.macs-err { min-height: 16px; margin: 6px 0 0; font-size: 12px; color: var(--red); }
+.macs-status { margin: var(--sp-2) 0 0; font-size: 13px; color: var(--text); }
+.macs-using .macs-status { font-weight: 600; }
+.macs-codebox { margin-top: var(--sp-2); padding: var(--sp-3); border-radius: var(--radius); background: var(--panel-2); text-align: center; }
+.macs-code { font-size: 34px; font-weight: 700; letter-spacing: 0.14em; font-variant-numeric: tabular-nums; color: var(--text); }
+.macs-code.is-closed { color: var(--muted); }
+.macs-addr { overflow-wrap: anywhere; user-select: text; }
+.macs-codebox .p2p-actions { justify-content: center; }
+.macs-may { margin-top: var(--sp-3); }
+.macs-alert { margin: var(--sp-2) 0 0; padding: 8px 12px; border-radius: var(--radius-sm); background: var(--yellow-tint);
+  color: var(--yellow); font-size: 12.5px; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.macs-alert[hidden] { display: none; }
+.macs-privacy { margin-top: var(--sp-3); }
+.macs-privacy .hint { margin: 6px 0 0; }
+.macs-mesh { margin-top: var(--sp-3); }
+.macs-mesh > summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 500; }
+.macs-mesh[open] > summary { margin-bottom: var(--sp-2); }
+@media (max-width: 720px) { .macs-grid { grid-template-columns: 1fr; } }

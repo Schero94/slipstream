@@ -397,7 +397,14 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
                 .and_then(|_| crate::http_body_timeout(&slots_url, 1))
                 .as_deref()
                 .and_then(crate::slotactivity::parse_slots);
-            let status = tray_status_line(activity.as_ref());
+            // Using another Mac: "Nutzt Mac Studio · liest Prompt 31 %"; sharing: a badge.
+            let remote = handle.state::<crate::remote::RemoteState>();
+            let mut status = remote
+                .tray_line()
+                .unwrap_or_else(|| tray_status_line(activity.as_ref()));
+            if let Some(badge) = remote.share_badge() {
+                status = format!("{status} · {badge}");
+            }
             let experts = expert_cache(&handle.state::<AppState>()).or_else(|| {
                 extras.has_pgrn().then(|| ExpertCache {
                     hits: extras.pgrn_hits.unwrap_or(0),

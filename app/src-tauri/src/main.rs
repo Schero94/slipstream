@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 mod mlx;
 mod p2p;
+mod remote;
 mod runtime;
 mod servestats;
 mod slotactivity;
@@ -42,6 +43,8 @@ struct AppState {
     setup: Mutex<Option<Child>>,
     /// Prompt-state file key of the running llama-server (restart persistence, slotstate.rs).
     slot_key: Mutex<Option<(u16, String)>>,
+    /// Last configuration a start used (a paired Mac's StartModel reuses it, remote.rs).
+    last_cfg: Mutex<Option<ServerConfig>>,
 }
 
 /// The readings the menubar poller takes, held where the window can read them
@@ -280,7 +283,7 @@ fn kill(slot: &Mutex<Option<Child>>) {
 
 // ---------------------------------------------------------------- server ----
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Clone)]
 struct ServerConfig {
     server: String,
     model: String,
@@ -492,8 +495,59 @@ mod ui_msg_tests {
     }
 }
 
+/// Where the last start configuration is kept across app restarts (remote StartModel).
+fn last_cfg_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    std::path::PathBuf::from(home).join("Library/Application Support/Slipstream/last_server.json")
+}
+
+fn remember_cfg(state: &AppState, cfg: &ServerConfig) {
+    if let Ok(mut g) = state.last_cfg.lock() {
+        *g = Some(cfg.clone());
+    }
+    let path = last_cfg_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(bytes) = serde_json::to_vec_pretty(cfg) {
+        let _ = std::fs::write(&path, bytes);
+    }
+}
+
+fn last_cfg(state: &AppState) -> Option<ServerConfig> {
+    if let Some(c) = state.last_cfg.lock().ok().and_then(|g| g.clone()) {
+        return Some(c);
+    }
+    serde_json::from_slice(&std::fs::read(last_cfg_path()).ok()?).ok()
+}
+
 #[tauri::command]
-fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>) -> Result<String, String> {
+fn start_server(
+    app: tauri::AppHandle,
+    cfg: ServerConfig,
+    state: State<AppState>,
+    remote: State<remote::RemoteState>,
+) -> Result<String, String> {
+    // Port 8080 belongs to the forwarder while this Mac uses another Mac (plan §5).
+    if remote::using() {
+        return Err(ui_err(
+            "remote_active",
+            &[],
+            "This Mac is using another Mac's model. Stop using it first (Your Macs).",
+        ));
+    }
+    let out = start_server_impl(&app, cfg, &state)?;
+    remote.local_lifecycle();
+    Ok(out)
+}
+
+/// The one start path: the window's Start and a paired Mac's StartModel (remote.rs) both go
+/// through it, so both get the same RAM admission and refusals.
+fn start_server_impl(app: &tauri::AppHandle, cfg: ServerConfig, state: &AppState) -> Result<String, String> {
+    if remote::using() {
+        return Err(ui_err("remote_active", &[], "This Mac is using another Mac's model."));
+    }
+    remember_cfg(state, &cfg);
     let mut guard = state.server.lock().map_err(|e| e.to_string())?;
     if guard.is_some() {
         return Err(ui_err("server_running", &[], "The model server is already running. Stop it first."));
@@ -509,7 +563,7 @@ fn start_server(app: tauri::AppHandle, cfg: ServerConfig, state: State<AppState>
     let has_experts = mlx::any_experts_sidecar(&mlx_model_dir);
     let effective = mlx::resolve_backend(&cfg.backend, cfg.prompt_chars, has_experts);
     if effective == "mlx" {
-        let msg = start_mlx_server(&app, &cfg, &mut *guard)?;
+        let msg = start_mlx_server(app, &cfg, &mut *guard)?;
         return Ok(annotate_auto_backend(&cfg.backend, effective, msg));
     }
     if file_size(&cfg.model) == 0 {
@@ -898,18 +952,21 @@ fn stop_server_impl(state: &AppState) {
     }
     // Owned PID → lockfile holder → port-scoped llama → lsof listeners.
     // No broad `pkill -f omlx-server` (CRASH_AVOIDANCE).
+    // While using another Mac, port 8080 is this app's own forwarder: never probe or kill it.
+    let using = remote::using();
     teardown::stop_server(
         &state.server,
         SERVER_PORT,
-        port_alive,
+        |p| !using && port_alive(p),
         &teardown::default_lock_path(),
         &teardown::default_hands_off_path(),
     );
 }
 
 #[tauri::command(async)]
-fn stop_server(state: State<'_, AppState>) -> Result<String, String> {
+fn stop_server(state: State<'_, AppState>, remote: State<'_, remote::RemoteState>) -> Result<String, String> {
     stop_server_impl(&state);
+    remote.local_lifecycle();
     Ok("Server stopped.".into())
 }
 
@@ -934,15 +991,21 @@ fn tray_status_line(activity: Option<&slotactivity::SlotActivity>) -> String {
     }
 }
 
+/// The local model runs (this app's child, or another llama-server on 8080). While this Mac
+/// uses another Mac, 8080 is the forwarder, so only the own child counts.
 #[tauri::command]
 fn is_running(state: State<AppState>) -> bool {
-    alive(&state.server) || port_alive(SERVER_PORT)
+    alive(&state.server) || (!remote::using() && port_alive(SERVER_PORT))
 }
 
 /// "down" | "loading" | "ready" - based on a real /health probe, so it is
-/// correct even for a server this app instance did not spawn.
+/// correct even for a server this app instance did not spawn. "remote" while this Mac uses
+/// another Mac (port 8080 is the forwarder; the window reads remote_status for details).
 #[tauri::command]
 fn server_state() -> String {
+    if remote::using() {
+        return "remote".into();
+    }
     match http_status(&format!("http://127.0.0.1:{SERVER_PORT}/health")) {
         200 => "ready".into(),
         0 => "down".into(),
@@ -1681,10 +1744,13 @@ fn patch_kilo_config(cfg: KiloConfig) -> Result<String, String> {
     let mut models = Map::new();
     models.insert(cfg.model.clone(), Value::Object(model_info));
 
+    // Always this install's local token (remote.rs "API key decision"): llama-server ignores
+    // it, the forwarder requires it — the same config works locally and with another Mac.
+    let api_key = remote::api_key().unwrap_or(cfg.api_key);
     let provider_entry = json!({
         "npm": "@ai-sdk/openai-compatible",
         "name": "Peregrine Local",
-        "options": { "baseURL": cfg.base_url, "apiKey": cfg.api_key },
+        "options": { "baseURL": cfg.base_url, "apiKey": api_key },
         "models": Value::Object(models),
     });
     let mut provider = Map::new();
@@ -1718,11 +1784,32 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+/// The big Mac's model lifecycle for paired Macs (remote.rs `AppModel`).
+struct TauriModel(tauri::AppHandle);
+
+impl remote::AppModel for TauriModel {
+    fn running(&self) -> bool {
+        let state = self.0.state::<AppState>();
+        alive(&state.server) || (!remote::using() && port_alive(SERVER_PORT))
+    }
+    fn start(&self) -> Result<String, String> {
+        let state = self.0.state::<AppState>();
+        let cfg = last_cfg(&state).ok_or_else(|| {
+            ui_err("no_last_config", &[], "The model was never started on this Mac; start it here once first.")
+        })?;
+        start_server_impl(&self.0, cfg, &state)
+    }
+    fn stop(&self) {
+        stop_server_impl(&self.0.state::<AppState>());
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .manage(p2p::P2pState::default())
+        .manage(remote::RemoteState::from_env())
         .invoke_handler(tauri::generate_handler![
             start_server, stop_server, is_running, server_state, read_log, system_stats,
             model_status, path_is_dir, list_ext_model_bases, remote_size, start_download, cancel_download,
@@ -1732,7 +1819,13 @@ fn main() {
             read_file_data_url,
             // Slipstream P2P (UI gate: localStorage `slipstream.p2p`; Cluster tab)
             p2p::p2p_status, p2p::p2p_start, p2p::p2p_stop, p2p::p2p_send_test_job,
-            p2p::p2p_chat, p2p::p2p_peers, p2p::p2p_recent_peers, p2p::p2p_credits
+            p2p::p2p_chat, p2p::p2p_peers, p2p::p2p_recent_peers, p2p::p2p_credits,
+            // Your Macs (v0.6): use another Mac / share this one (remote.rs)
+            remote::remote_status, remote::remote_share_start, remote::remote_share_stop,
+            remote::remote_pair_code, remote::remote_pair_cancel, remote::remote_discover, remote::remote_pair,
+            remote::remote_use, remote::remote_stop_using, remote::remote_trusted, remote::remote_revoke,
+            remote::remote_start_model, remote::remote_stop_model, remote::remote_set_model_control,
+            remote::remote_dismiss_removed, remote::remote_api_key
         ])
         .setup(|app| {
             app.manage(Live {
@@ -1742,6 +1835,12 @@ fn main() {
                 slots: Mutex::new(None),
             });
             tray::install(app)?;
+            let rs = app.state::<remote::RemoteState>();
+            rs.set_model(std::sync::Arc::new(TauriModel(app.handle().clone())));
+            // Daily reuse: what the user turned on last time comes back without a click
+            // (off the main thread: resuming may wait for the share to bind).
+            let handle = app.handle().clone();
+            std::thread::spawn(move || handle.state::<remote::RemoteState>().resume());
             Ok(())
         })
         .on_window_event(|window, event| {

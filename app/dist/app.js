@@ -457,11 +457,11 @@ const I18N = {
     "hint.p2pWorkerDisclosure": "Traffic is encrypted, but the selected worker decrypts and sees the plaintext prompt for inference. Sensitive and Secret requests stay local by default.",
     "hint.p2p": "Off by default. Local Metal/MLX path unchanged.",
     "hint.p2pL3": "L3 expert peer mirror (separate from sealed jobs; default OFF): host — l3_expert_mirror.py export-mirror then serve-mirror; consumer — SLIPSTREAM_PGRN_L3=peer + SLIPSTREAM_PGRN_PEER_BASE=http://host:8765. See docs/P2P_MVP.md § L3.",
-    "hint.p2pSettings": "Start/stop, peers, jobs, and credits are on the Cluster tab.",
+    "hint.p2pSettings": "Start/stop, peers, jobs, and credits are under Your Macs → Advanced: community mesh.",
     "hint.p2pEngine": "mock = in-process demo (safe default). mlx/llama/auto = HTTP attach to an already-running Slipstream on :8080 — Start the app serve first; UI never spawns engines.",
     "hint.p2pMulti": "Two machines: Start node on each (different listen ports), put the other host:port in Bootstrap/Peer, Probe, then Ask. Keep engine=mock until :8080 is already up.",
     "hint.p2pRecentEmpty": "No peers yet — probe an address or send a job.",
-    "btn.p2pGotoCluster": "Open Cluster",
+    "btn.p2pGotoCluster": "Open community mesh",
     "lbl.p2pListen": "Listen address", "lbl.p2pListenShort": "Listen",
     "lbl.p2pNodeId": "Node ID", "lbl.p2pCredits": "Credits", "lbl.p2pEngine": "Engine",
     "lbl.p2pState": "Listener", "lbl.p2pSettlement": "Last settle",
@@ -594,11 +594,11 @@ const I18N = {
     "hint.p2pWorkerDisclosure": "Die Übertragung ist verschlüsselt, aber der ausgewählte Worker entschlüsselt und sieht den Klartext-Prompt für die Inferenz. Sensible und geheime Anfragen bleiben standardmäßig lokal.",
     "hint.p2p": "Standard aus. Lokaler Metal/MLX-Pfad unverändert.",
     "hint.p2pL3": "L3-Experten-Peer-Mirror (getrennt von versiegelten Jobs; Standard AUS): Host — l3_expert_mirror.py export-mirror, dann serve-mirror; Consumer — SLIPSTREAM_PGRN_L3=peer + SLIPSTREAM_PGRN_PEER_BASE=http://host:8765. Siehe docs/P2P_MVP.md § L3.",
-    "hint.p2pSettings": "Start/Stop, Peers, Jobs und Credits sind im Cluster-Tab.",
+    "hint.p2pSettings": "Start/Stop, Peers, Jobs und Credits sind unter Deine Macs → Erweitert: Community-Mesh.",
     "hint.p2pEngine": "mock = In-Prozess-Demo (sicherer Default). mlx/llama/auto = HTTP-Attach an schon laufendes Slipstream auf :8080 — Serve zuerst starten; UI spawnt keine Engines.",
     "hint.p2pMulti": "Zwei Macs: auf jedem Node starten (andere Listen-Ports), die andere host:port in Bootstrap/Peer, Peers prüfen, dann Fragen. engine=mock lassen, bis :8080 schon läuft.",
     "hint.p2pRecentEmpty": "Noch keine Peers — Adresse prüfen oder Job senden.",
-    "btn.p2pGotoCluster": "Cluster öffnen",
+    "btn.p2pGotoCluster": "Community-Mesh öffnen",
     "lbl.mlxStream": "MLX-Streaming",
     "mlx.stream.ready": "Streaming bereit",
     "mlx.stream.resident": "nur resident",
@@ -1353,6 +1353,234 @@ const UX05_I18N = {
   },
 };
 Object.keys(UX05_I18N).forEach((l) => Object.assign(I18N[l], UX05_I18N[l]));
+
+// v0.6 "Your Macs": use another Mac / share this one (remote.rs; plan §6). EN + DE complete
+// (test_remote_macs_ui.mjs checks parity); zh/es fall back to English.
+const REMOTE_I18N = {
+  en: {
+    "nav.cluster": "Your Macs",
+    "tip.macs": "Use the model of a bigger Mac in your network, or share this Mac's model with your other Macs.",
+    "macs.title": "Your Macs",
+    "macs.lead": "Use the model of a bigger Mac in your network from this Mac's editor, or share this Mac's model with your other Macs.",
+    "macs.useTitle": "Use another Mac",
+    "macs.useLead": "Your editor keeps its address (http://127.0.0.1:8080/v1); the answers come from the other Mac.",
+    "macs.find": "Find my Macs",
+    "macs.findAgain": "Search again",
+    "macs.searching": "Looking for Macs that share in this network…",
+    "macs.noneFound": "No sharing Mac found yet. On the bigger Mac, open Slipstream → Your Macs and turn on “Share this Mac”.",
+    "macs.foundList": "Macs on this network",
+    "macs.unknownMac": "Mac {fp}",
+    "macs.readyToPair": "showing a code",
+    "macs.notOpen": "not showing a code",
+    "macs.pairedMac": "paired",
+    "macs.pair": "Pair",
+    "macs.use": "Use",
+    "macs.inUse": "in use",
+    "macs.remove": "Remove",
+    "macs.cancel": "Cancel",
+    "macs.ok": "OK",
+    "macs.codeLabel": "Code shown on the other Mac",
+    "macs.codeFor": "Enter the 6-digit code shown on {name}",
+    "macs.pairBtn": "Pair",
+    "macs.pairing": "Pairing…",
+    "macs.pairedOk": "Paired with {name}.",
+    "macs.manual": "Not listed? Enter its address",
+    "macs.addrLabel": "Address shown on the other Mac",
+    "macs.manualHint": "On the other Mac, “Share this Mac” shows its address under the code. Then enter the code here.",
+    "macs.addrGo": "Next: enter code",
+    "macs.addrBad": "That does not look like an address. It starts with /ip4/ and ends with /quic-v1.",
+    "macs.pairedUse": "Paired Macs you can use",
+    "macs.noPairedUse": "None yet.",
+    "macs.shareTitle": "Share this Mac",
+    "macs.shareToggle": "Share this Mac",
+    "macs.shareLead": "Your other Macs can use this Mac's model. Only Macs you pair with a code can connect.",
+    "macs.codeHint": "Enter this code on your other Mac ({time} left).",
+    "macs.codeExpired": "The code expired. Ask for a new one.",
+    "macs.codeTooMany": "Three wrong codes: this code is closed. Ask for a new one.",
+    "macs.codePaired": "{name} is now paired.",
+    "macs.addrInfo": "Not listed on the other Mac? Its address for this Mac: {addr}",
+    "macs.newCode": "New code",
+    "macs.addMac": "Pair another Mac",
+    "macs.mayStart": "Paired Macs may start and stop the model",
+    "macs.mayStartHint": "They can start it with your last settings (only when there is enough free memory) and stop only a model they started — never while this Mac is answering its own request.",
+    "macs.pairedShare": "Macs that use this Mac",
+    "macs.noPairedShare": "None yet.",
+    "macs.shareOff": "Not shared.",
+    "macs.sharedIdle": "Shared · ready",
+    "macs.sharedReq": "Shared · 1 request",
+    "macs.sharedReqs": "Shared · {n} requests",
+    "macs.sharedNoModel": "Shared · the model is not running on this Mac",
+    "macs.stayAwake": "This Mac stays awake while it shares.",
+    "macs.privacyTitle": "Private by design",
+    "macs.privacy": "Only Macs you paired with a code can connect. Your prompts travel encrypted inside your own network and are processed on the other Mac — whoever administers that Mac could see them. Nothing goes to the internet or to strangers.",
+    "macs.removedYou": "{name} removed this Mac. Pair again to use it.",
+    "macs.pairingsReset": "Your pairings were reset because the list of paired Macs failed its integrity check. Pair your Macs again.",
+    "macs.advancedMesh": "Advanced: community mesh (experimental)",
+    "macs.statusConnected": "Using {name} · {model}",
+    "macs.statusConnecting": "Connecting to {name}…",
+    "macs.statusUnreachable": "{name} is not reachable. Is it awake and sharing? Slipstream keeps trying.",
+    "macs.statusPortBusy": "Port 8080 on this Mac is taken by another program, so editors cannot reach {name}. Quit that program.",
+    "macs.statusModelOff": "The model on {name} is not running.",
+    "macs.modelUnknown": "model",
+    "macs.reading": "reading the prompt {pct} %",
+    "macs.writing": "writing the answer",
+    "macs.busy": "{name} is busy with its own work; your request waits.",
+    "macs.battery": "{name} runs on battery.",
+    "macs.editorSame": "Your editor keeps http://127.0.0.1:8080/v1 — nothing to change.",
+    "macs.startModel": "Start it on {name}",
+    "macs.stopModel": "Stop the model on {name}",
+    "macs.startingModel": "Starting the model on {name}…",
+    "macs.confirmStopLocal": "This Mac's model is running. Stop it and use {name} instead?",
+    "macs.confirmRemove": "Remove {name}? It can no longer connect until you pair again.",
+    "macs.removed": "{name} removed.",
+    "macs.roleShares": "shares with this Mac",
+    "macs.roleUses": "uses this Mac",
+    "macs.lastSeen": "last seen {when}",
+    "pill.remote": "Using {name}",
+    "pill.remoteWaking": "Waking {name}…",
+    "pill.remoteOff": "{name} unreachable",
+    "pill.remoteBusy": "{name} busy",
+    "btn.stopRemote": "Stop using",
+    "err.remote_active": "This Mac is using another Mac right now. Stop using it first (Your Macs).",
+    "err.sharingActive": "This Mac is sharing its model. Turn sharing off before using another Mac.",
+    "err.usingActive": "This Mac is using another Mac. Stop using it before sharing this one.",
+    "err.pairWrong": "Wrong code. Check the code on the other Mac.",
+    "err.pairUnreachable": "The other Mac could not be reached. Is it awake, in the same network and showing a code?",
+    "err.pairExpired": "The code expired. Show a new code on the other Mac.",
+    "err.pairTooMany": "Too many wrong codes. Show a new code on the other Mac.",
+    "err.pairUsed": "This code was already used. Show a new code on the other Mac.",
+    "err.pairBusy": "Another Mac is pairing right now. Try again in a moment.",
+    "err.pairNotOpen": "The other Mac is not showing a pairing code.",
+    "err.pairFormat": "The code has 6 digits.",
+    "err.pairFailed": "Pairing failed: {detail}",
+    "err.notPaired": "This Mac is not paired. Pair it first.",
+    "err.notUsing": "Not using another Mac.",
+    "err.notConnected": "The other Mac is not reachable right now.",
+    "err.modelControlOff": "The other Mac does not let paired Macs start or stop its model.",
+    "err.remoteBusy": "The other Mac is busy with its own work right now.",
+    "err.notStartedRemotely": "The model was started on the other Mac itself; only it can stop it.",
+    "err.remoteStartRefused": "The other Mac could not start its model: {detail}",
+    "err.remoteActiveThere": "The other Mac is itself using another Mac.",
+    "err.shareFailed": "Sharing could not start: {detail}",
+    "err.lanUnavailable": "The local network cannot be searched: {detail}",
+    "err.p2pDir": "The Your Macs data folder could not be used: {detail}",
+    "err.noLastConfig": "The model was never started on that Mac; start it there once first.",
+    "err.revokeFailed": "Could not remove: {detail}",
+  },
+  de: {
+    "nav.cluster": "Deine Macs",
+    "tip.macs": "Nutze das Modell eines größeren Macs in deinem Netzwerk oder teile das Modell dieses Macs mit deinen anderen Macs.",
+    "macs.title": "Deine Macs",
+    "macs.lead": "Nutze im Editor dieses Macs das Modell eines größeren Macs in deinem Netzwerk – oder teile das Modell dieses Macs mit deinen anderen Macs.",
+    "macs.useTitle": "Anderen Mac nutzen",
+    "macs.useLead": "Dein Editor behält seine Adresse (http://127.0.0.1:8080/v1); die Antworten kommen vom anderen Mac.",
+    "macs.find": "Meine Macs suchen",
+    "macs.findAgain": "Erneut suchen",
+    "macs.searching": "Suche Macs, die in diesem Netzwerk teilen…",
+    "macs.noneFound": "Noch kein teilender Mac gefunden. Öffne auf dem größeren Mac Slipstream → Deine Macs und schalte „Diesen Mac teilen“ ein.",
+    "macs.foundList": "Macs in diesem Netzwerk",
+    "macs.unknownMac": "Mac {fp}",
+    "macs.readyToPair": "zeigt einen Code",
+    "macs.notOpen": "zeigt keinen Code",
+    "macs.pairedMac": "gekoppelt",
+    "macs.pair": "Koppeln",
+    "macs.use": "Nutzen",
+    "macs.inUse": "in Benutzung",
+    "macs.remove": "Entfernen",
+    "macs.cancel": "Abbrechen",
+    "macs.ok": "OK",
+    "macs.codeLabel": "Code, der auf dem anderen Mac steht",
+    "macs.codeFor": "Gib den 6-stelligen Code ein, der auf {name} steht",
+    "macs.pairBtn": "Koppeln",
+    "macs.pairing": "Kopple…",
+    "macs.pairedOk": "Mit {name} gekoppelt.",
+    "macs.manual": "Nicht in der Liste? Adresse eingeben",
+    "macs.addrLabel": "Adresse, die auf dem anderen Mac steht",
+    "macs.manualHint": "Auf dem anderen Mac zeigt „Diesen Mac teilen“ die Adresse unter dem Code. Danach hier den Code eingeben.",
+    "macs.addrGo": "Weiter: Code eingeben",
+    "macs.addrBad": "Das sieht nicht wie eine Adresse aus. Sie beginnt mit /ip4/ und endet mit /quic-v1.",
+    "macs.pairedUse": "Gekoppelte Macs zum Nutzen",
+    "macs.noPairedUse": "Noch keine.",
+    "macs.shareTitle": "Diesen Mac teilen",
+    "macs.shareToggle": "Diesen Mac teilen",
+    "macs.shareLead": "Deine anderen Macs können das Modell dieses Macs nutzen. Verbinden können sich nur Macs, die du mit einem Code koppelst.",
+    "macs.codeHint": "Gib diesen Code auf deinem anderen Mac ein (noch {time}).",
+    "macs.codeExpired": "Der Code ist abgelaufen. Lass dir einen neuen zeigen.",
+    "macs.codeTooMany": "Dreimal falscher Code: Dieser Code ist geschlossen. Lass dir einen neuen zeigen.",
+    "macs.codePaired": "{name} ist jetzt gekoppelt.",
+    "macs.addrInfo": "Auf dem anderen Mac nicht in der Liste? Seine Adresse für diesen Mac: {addr}",
+    "macs.newCode": "Neuer Code",
+    "macs.addMac": "Weiteren Mac koppeln",
+    "macs.mayStart": "Gekoppelte Macs dürfen das Modell starten und stoppen",
+    "macs.mayStartHint": "Sie können es mit deinen letzten Einstellungen starten (nur wenn genug Speicher frei ist) und nur ein Modell stoppen, das sie selbst gestartet haben – nie, während dieser Mac eine eigene Anfrage beantwortet.",
+    "macs.pairedShare": "Macs, die diesen Mac nutzen",
+    "macs.noPairedShare": "Noch keine.",
+    "macs.shareOff": "Nicht geteilt.",
+    "macs.sharedIdle": "Geteilt · bereit",
+    "macs.sharedReq": "Geteilt · 1 Anfrage",
+    "macs.sharedReqs": "Geteilt · {n} Anfragen",
+    "macs.sharedNoModel": "Geteilt · das Modell läuft auf diesem Mac nicht",
+    "macs.stayAwake": "Dieser Mac bleibt wach, solange er teilt.",
+    "macs.privacyTitle": "Privat gebaut",
+    "macs.privacy": "Verbinden können sich nur Macs, die du mit einem Code gekoppelt hast. Deine Prompts gehen verschlüsselt durch dein eigenes Netzwerk und werden auf dem anderen Mac verarbeitet – wer diesen Mac verwaltet, könnte sie sehen. Nichts geht ins Internet oder an Fremde.",
+    "macs.removedYou": "{name} hat diesen Mac entfernt. Kopple ihn neu, um ihn zu nutzen.",
+    "macs.pairingsReset": "Deine Kopplungen wurden zurückgesetzt, weil die Liste der gekoppelten Macs ihre Integritätsprüfung nicht bestanden hat. Kopple deine Macs neu.",
+    "macs.advancedMesh": "Erweitert: Community-Mesh (experimentell)",
+    "macs.statusConnected": "Nutzt {name} · {model}",
+    "macs.statusConnecting": "Verbinde mit {name}…",
+    "macs.statusUnreachable": "{name} ist nicht erreichbar. Ist er wach und teilt? Slipstream versucht es weiter.",
+    "macs.statusPortBusy": "Port 8080 auf diesem Mac belegt ein anderes Programm, daher erreichen Editoren {name} nicht. Beende dieses Programm.",
+    "macs.statusModelOff": "Das Modell auf {name} läuft nicht.",
+    "macs.modelUnknown": "Modell",
+    "macs.reading": "liest den Prompt {pct} %",
+    "macs.writing": "schreibt die Antwort",
+    "macs.busy": "{name} ist mit eigener Arbeit beschäftigt; deine Anfrage wartet.",
+    "macs.battery": "{name} läuft auf Akku.",
+    "macs.editorSame": "Dein Editor behält http://127.0.0.1:8080/v1 – nichts zu ändern.",
+    "macs.startModel": "Auf {name} starten",
+    "macs.stopModel": "Modell auf {name} stoppen",
+    "macs.startingModel": "Starte das Modell auf {name}…",
+    "macs.confirmStopLocal": "Das Modell dieses Macs läuft. Stoppen und stattdessen {name} nutzen?",
+    "macs.confirmRemove": "{name} entfernen? Er kann sich erst nach neuer Kopplung wieder verbinden.",
+    "macs.removed": "{name} entfernt.",
+    "macs.roleShares": "teilt mit diesem Mac",
+    "macs.roleUses": "nutzt diesen Mac",
+    "macs.lastSeen": "zuletzt gesehen {when}",
+    "pill.remote": "Nutzt {name}",
+    "pill.remoteWaking": "Wecke {name}…",
+    "pill.remoteOff": "{name} nicht erreichbar",
+    "pill.remoteBusy": "{name} beschäftigt",
+    "btn.stopRemote": "Nicht mehr nutzen",
+    "err.remote_active": "Dieser Mac nutzt gerade einen anderen Mac. Beende das zuerst (Deine Macs).",
+    "err.sharingActive": "Dieser Mac teilt sein Modell. Schalte das Teilen aus, bevor du einen anderen Mac nutzt.",
+    "err.usingActive": "Dieser Mac nutzt einen anderen Mac. Beende das, bevor du diesen Mac teilst.",
+    "err.pairWrong": "Falscher Code. Prüfe den Code auf dem anderen Mac.",
+    "err.pairUnreachable": "Der andere Mac war nicht erreichbar. Ist er wach, im selben Netzwerk und zeigt er einen Code?",
+    "err.pairExpired": "Der Code ist abgelaufen. Lass auf dem anderen Mac einen neuen zeigen.",
+    "err.pairTooMany": "Zu viele falsche Codes. Lass auf dem anderen Mac einen neuen zeigen.",
+    "err.pairUsed": "Dieser Code wurde schon benutzt. Lass auf dem anderen Mac einen neuen zeigen.",
+    "err.pairBusy": "Gerade koppelt ein anderer Mac. Versuch es gleich noch einmal.",
+    "err.pairNotOpen": "Der andere Mac zeigt keinen Kopplungscode.",
+    "err.pairFormat": "Der Code hat 6 Ziffern.",
+    "err.pairFailed": "Koppeln fehlgeschlagen: {detail}",
+    "err.notPaired": "Dieser Mac ist nicht gekoppelt. Kopple ihn zuerst.",
+    "err.notUsing": "Es wird kein anderer Mac genutzt.",
+    "err.notConnected": "Der andere Mac ist gerade nicht erreichbar.",
+    "err.modelControlOff": "Der andere Mac erlaubt gekoppelten Macs nicht, sein Modell zu starten oder zu stoppen.",
+    "err.remoteBusy": "Der andere Mac ist gerade mit eigener Arbeit beschäftigt.",
+    "err.notStartedRemotely": "Das Modell wurde auf dem anderen Mac selbst gestartet; nur er kann es stoppen.",
+    "err.remoteStartRefused": "Der andere Mac konnte sein Modell nicht starten: {detail}",
+    "err.remoteActiveThere": "Der andere Mac nutzt selbst einen anderen Mac.",
+    "err.shareFailed": "Teilen ließ sich nicht starten: {detail}",
+    "err.lanUnavailable": "Das lokale Netzwerk lässt sich nicht durchsuchen: {detail}",
+    "err.p2pDir": "Der Datenordner für Deine Macs ließ sich nicht nutzen: {detail}",
+    "err.noLastConfig": "Das Modell wurde auf diesem Mac noch nie gestartet; starte es dort einmal selbst.",
+    "err.revokeFailed": "Entfernen fehlgeschlagen: {detail}",
+  },
+};
+Object.keys(REMOTE_I18N).forEach((l) => Object.assign(I18N[l], REMOTE_I18N[l]));
+I18N.zh["nav.cluster"] = "我的 Mac";
+I18N.es["nav.cluster"] = "Tus Macs";
 
 let LANG = localStorage.getItem("slipstream.lang") ||
   (navigator.language || "en").slice(0, 2);
@@ -2529,15 +2757,25 @@ async function stopServer() {
   applyBackendUi();
 }
 $("powerBtn").onclick = () => {
+  if (REMOTE_PILL[state.pillMode]) return stopUsingRemote();
   if (state.running || state.startPendingAt) return stopServer();
   if (state.modelReady === false) return goToModelSetup();
   return startServer();
 };
 
+const REMOTE_PILL = { "remote-on": "pill.remote", "remote-waking": "pill.remoteWaking", "remote-off": "pill.remoteOff", "remote-busy": "pill.remoteBusy" };
 function setPill(mode) {
   const p = $("statusPill"), b = $("powerBtn");
   state.pillMode = mode;
-  if (mode === "on") { p.className = "pill pill-on"; p.textContent = t("pill.running"); b.textContent = t("btn.stop"); b.className = "btn btn-danger btn-power"; b.disabled = false; }
+  p.title = "";
+  if (REMOTE_PILL[mode]) {
+    // Using another Mac: the pill names it, the power button stops using it.
+    p.className = "pill pill-" + mode;
+    p.textContent = fillVars(t(REMOTE_PILL[mode]), { name: remoteName(state.remote) });
+    try { if (state.remote && state.remote.use) p.title = remoteUseLine(state.remote); } catch {}
+    b.textContent = t("btn.stopRemote"); b.className = "btn btn-power"; b.disabled = false;
+  }
+  else if (mode === "on") { p.className = "pill pill-on"; p.textContent = t("pill.running"); b.textContent = t("btn.stop"); b.className = "btn btn-danger btn-power"; b.disabled = false; }
   else if (mode === "loading") { p.className = "pill pill-loading"; p.textContent = t("pill.starting"); b.textContent = t("btn.stop"); b.className = "btn btn-danger btn-power"; b.disabled = false; }
   else {
     p.className = "pill pill-off"; p.textContent = t("pill.stopped");
@@ -2547,13 +2785,14 @@ function setPill(mode) {
   try { updateChatP2pHint(); } catch {}
   const cs = $("connectState");
   if (cs) {
-    cs.textContent = t(mode === "on" ? "connect.running" : "connect.notRunning");
+    cs.textContent = t(mode === "on" || mode === "remote-on" ? "connect.running" : "connect.notRunning");
     cs.dataset.state = mode;
   }
   try { if (state.mstatus) renderPrepare(state.mstatus); } catch {}
   // The start hint is for the first run; once the engine is up it is noise.
   const tip = $("startTip");
   if (tip) tip.hidden = mode !== "off";
+  try { renderShareBadge(); } catch {}
   markJourney();
 }
 
@@ -3212,9 +3451,39 @@ function drawArena() {
   else requestAnimationFrame(drawArena);
 }
 
+/** poll() while this Mac uses another Mac: the forwarder owns 8080, the local log is not
+ *  this engine's, so state, pill and the activity strip come from remote_status. */
+async function pollRemote() {
+  const r = await refreshRemote();
+  const u = r && r.use;
+  state.startPendingAt = null;
+  state.running = !!(u && u.state === "connected" && u.model_running);
+  state.slotAct = (u && u.activity) || null;
+  state.slotActAt = Date.now();
+  const act = activityFromSlots(state.slotAct) || { phase: "idle" };
+  if (act.phase === "prefill" && state.chatAnswering) { act.phase = "decode"; act.pp = null; }
+  state.activity = act;
+  updateActivity(act);
+  setPill(remotePillMode(r));
+  if (state.running) {
+    const now = Date.now();
+    if (!state._modelsAt || now - state._modelsAt > 8000 || !state.chatModelsLive) {
+      state._modelsAt = now;
+      refreshChatModels();
+    }
+  }
+}
+
 async function poll() {
   let sstate = "down";
   try { sstate = await invoke("server_state"); } catch {}
+  if (sstate === "remote") {
+    await pollRemote();
+    drawAll();
+    refreshModel();
+    return;
+  }
+  if (REMOTE_PILL[state.pillMode]) { try { await refreshRemote(); } catch {} }
   state.running = sstate !== "down";
   if (state.startPendingAt) {
     if (state.running) {
@@ -3326,9 +3595,12 @@ function agentTimeoutNote() {
 function agentSnippetFooter() {
   return `${agentTimeoutNote()}\n${embeddingsNote()}\n# Optional: stream_options.include_usage=true`;
 }
+/** This install's local API key (remote.rs): llama-server ignores it, the "Use another Mac"
+ *  forwarder requires it, so one editor config works for both. Falls back to sk-local. */
+function apiKeyForEditors() { return state.apiKey || "sk-local"; }
 /** OpenAI-compatible paste block (Cline / Roo / Cursor). */
 function openaiCompatSnippet() {
-  return `Base URL: ${BASE_URL}\nModel: ${agentModelId()}\nAPI Key: sk-local\n${agentSnippetFooter()}`;
+  return `Base URL: ${BASE_URL}\nModel: ${agentModelId()}\nAPI Key: ${apiKeyForEditors()}\n${agentSnippetFooter()}`;
 }
 const AGENTS = [
   { id: "kilo", name: "Kilo Code", tag: "1-Klick-Patch · VS Code neu starten", action: "patch", target: "kilo", restart: "VS Code" },
@@ -3344,16 +3616,16 @@ const AGENTS = [
     snippet: () => openaiCompatSnippet() },
   { id: "continue", name: "Continue", tag: "config.yaml-Snippet kopieren", action: "copy",
     how: "how.continue",
-    snippet: () => `models:\n  - name: Slipstream Local\n    provider: openai\n    model: ${agentModelId()}\n    apiBase: ${BASE_URL}\n    apiKey: sk-local\n    requestOptions:\n      timeoutMs: 300000\n# ${embeddingsNote()}` },
+    snippet: () => `models:\n  - name: Slipstream Local\n    provider: openai\n    model: ${agentModelId()}\n    apiBase: ${BASE_URL}\n    apiKey: ${apiKeyForEditors()}\n    requestOptions:\n      timeoutMs: 300000\n# ${embeddingsNote()}` },
   { id: "aider", name: "aider", tag: ".aider.conf.yml-Snippet kopieren", action: "copy",
     how: "how.aider",
-    snippet: () => `openai-api-base: ${BASE_URL}\nopenai-api-key: sk-local\nmodel: openai/${agentModelId()}\n# Raise timeouts for cold PGRN prefills (300s+)\n# ${embeddingsNote()}` },
+    snippet: () => `openai-api-base: ${BASE_URL}\nopenai-api-key: ${apiKeyForEditors()}\nmodel: openai/${agentModelId()}\n# Raise timeouts for cold PGRN prefills (300s+)\n# ${embeddingsNote()}` },
   { id: "codex", name: "Codex / Responses", tag: "Werte kopieren -> Responses API", action: "copy",
     how: "how.codex",
-    snippet: () => `Responses URL: ${responsesUrl()}\nChat base (fallback): ${BASE_URL}\nModel: ${agentModelId()}\nAPI Key: sk-local\n${agentTimeoutNote()}\n# Example: POST {model,input:[{role:"user",content:"hi"}]}` },
+    snippet: () => `Responses URL: ${responsesUrl()}\nChat base (fallback): ${BASE_URL}\nModel: ${agentModelId()}\nAPI Key: ${apiKeyForEditors()}\n${agentTimeoutNote()}\n# Example: POST {model,input:[{role:"user",content:"hi"}]}` },
   { id: "anthropic", name: "Anthropic / Messages", tag: "Werte kopieren -> Messages API", action: "copy",
     how: "how.anthropic",
-    snippet: () => `Messages URL: ${messagesUrl()}\nChat base (fallback): ${BASE_URL}\nModel: ${agentModelId()}\nAPI Key: sk-local\n${agentTimeoutNote()}\n# Example: POST {model,max_tokens:256,messages:[{role:"user",content:"hi"}]}` },
+    snippet: () => `Messages URL: ${messagesUrl()}\nChat base (fallback): ${BASE_URL}\nModel: ${agentModelId()}\nAPI Key: ${apiKeyForEditors()}\n${agentTimeoutNote()}\n# Example: POST {model,max_tokens:256,messages:[{role:"user",content:"hi"}]}` },
 ];
 
 function renderAgents() {
@@ -3377,7 +3649,7 @@ async function doAgent(a) {
     try {
       const path = await invoke("patch_kilo_config", {
         cfg: { home: state.def ? state.def.home : "", base_url: BASE_URL, model: agentModelId(),
-               api_key: "sk-local", ctx: +$("ctx").value, max_out: 4096, target: a.target },
+               api_key: apiKeyForEditors(), ctx: +$("ctx").value, max_out: 4096, target: a.target },
       });
       const note = fillVars(t("agent.patched"), { name: a.name, path: "\u0000", app: a.restart });
       $("agentNote").textContent = "";
@@ -3474,7 +3746,7 @@ async function setupIndexing() {
     idxStep(t("idx.step4"));
     await waitUntil(async () => { const s = await idxStatus(); return s.emb_state === "ready" && s.qdrant_running; }, 60);
     await invoke("patch_kilo_config", {
-      cfg: { home: state.def.home, base_url: "http://127.0.0.1:8080/v1", model: "slipstream", api_key: "sk-local", ctx: +$("ctx").value, max_out: 4096 },
+      cfg: { home: state.def.home, base_url: "http://127.0.0.1:8080/v1", model: "slipstream", api_key: apiKeyForEditors(), ctx: +$("ctx").value, max_out: 4096 },
     });
     idxStep(t("idx.doneStep"));
     toast(t("idx.doneToast"));
@@ -3504,7 +3776,7 @@ $("sendBtn").onclick = async () => {
   messages.push({ role: "user", content: prompt });
   try {
     const r = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
-      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer sk-local" },
+      method: "POST", headers: srvHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ model: "slipstream", messages, max_tokens: 1024, temperature: 0 }),
     });
     const j = await r.json();
@@ -4311,7 +4583,7 @@ function maybePrimeLlamaTools() {
   };
   const promise = fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: srvHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(primeBody),
     signal: controller.signal,
   }).then(async (response) => {
@@ -4419,7 +4691,7 @@ async function refreshChatModels() {
     const to = setTimeout(() => ac.abort(), 2500);
     let res;
     try {
-      res = await fetch(`http://127.0.0.1:${PORT}/v1/models`, { signal: ac.signal });
+      res = await fetch(`http://127.0.0.1:${PORT}/v1/models`, { signal: ac.signal, headers: srvHeaders() });
     } finally {
       clearTimeout(to);
     }
@@ -4791,7 +5063,7 @@ async function streamChatCompletion(messages, ui, opts) {
   }
   const res = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: srvHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
     signal: chat.abort.signal,
   });
@@ -5385,7 +5657,7 @@ function initP2p() {
     };
   }
   if ($("p2pGotoCluster")) {
-    $("p2pGotoCluster").onclick = () => showTab("cluster");
+    $("p2pGotoCluster").onclick = () => { showTab("cluster"); const d = $("meshAdvanced"); if (d) d.open = true; };
   }
   if ($("p2pCopyId")) {
     $("p2pCopyId").onclick = async () => {
@@ -5505,6 +5777,369 @@ function initP2p() {
     }
     updateChatP2pHint();
   }, 4000);
+}
+
+// ---- Your Macs (v0.6): use another Mac / share this one ----------------------
+// Backend: remote.rs (remote_* commands). Journey (plan §6): big Mac 1 click ("Share this Mac"
+// → code), MacBook ≤ 3 clicks ("Find my Macs" → "Pair" → code + Enter; a single Mac showing a
+// code is picked by itself), daily use 0 clicks (the backend resumes the choice at app start).
+// The first mDNS browse happens only on the "Find my Macs" click (macOS Local Network prompt).
+const macs = { pairTarget: null, pairAddrs: [], pairName: "", busy: false, found: [], searching: false, lastCode: null };
+
+/** Name of the used Mac for pills and lines. */
+function remoteName(r) { return (r && r.use && r.use.name) || "Mac"; }
+/** Whether this Mac is using another Mac right now (forwarder on 8080). */
+function remoteUsing() { return !!(state.remote && state.remote.mode === "using" && state.remote.use); }
+/** Authorization for requests to 127.0.0.1:8080: the forwarder needs this install's key;
+ *  a local llama-server ignores it, so it is only sent while using another Mac. */
+function srvHeaders(h) {
+  const out = Object.assign({}, h || {});
+  if (remoteUsing() && state.apiKey) out.Authorization = `Bearer ${state.apiKey}`;
+  return out;
+}
+/** Top bar pill mode for the remote states (plan §6: Using / Waking / unreachable / busy). */
+function remotePillMode(r) {
+  const u = r && r.use;
+  if (!u) return "off";
+  if (u.state === "connected") return u.busy && u.queue_len > 0 ? "remote-busy" : "remote-on";
+  if (u.state === "connecting" || u.state === "reconnecting") return "remote-waking";
+  return "remote-off";
+}
+function fmtMinSec(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+function remoteErr(e) {
+  const { code, vars, text } = parseBackendErr(e);
+  if (code === "local_running") return fillVars(t("macs.confirmStopLocal"), vars);
+  const key = code && REMOTE_BE_KEYS[code];
+  return key ? fillVars(t(key), vars) : (backendMsg(e) || text);
+}
+const REMOTE_BE_KEYS = {
+  remote_active: "err.remote_active", sharing_active: "err.sharingActive", using_active: "err.usingActive",
+  pair_wrong_code: "err.pairWrong", pair_unreachable: "err.pairUnreachable", pair_expired: "err.pairExpired",
+  pair_too_many: "err.pairTooMany", pair_used: "err.pairUsed", pair_busy: "err.pairBusy", pair_not_open: "err.pairNotOpen",
+  pair_code_format: "err.pairFormat", pair_failed: "err.pairFailed", not_paired: "err.notPaired", not_using: "err.notUsing",
+  not_connected: "err.notConnected", remote_model_control_off: "err.modelControlOff", remote_local_request: "err.remoteBusy",
+  remote_not_started_remotely: "err.notStartedRemotely", remote_start_refused: "err.remoteStartRefused",
+  remote_remote_active: "err.remoteActiveThere", share_failed: "err.shareFailed", lan_unavailable: "err.lanUnavailable",
+  p2p_dir: "err.p2pDir", revoke_failed: "err.revokeFailed", remote_no_model: "err.notConnected",
+};
+
+/** One line about the used Mac (card + pill tooltip). */
+function remoteUseLine(r) {
+  const u = r.use, name = remoteName(r);
+  if (u.state === "connecting" || u.state === "reconnecting") return fillVars(t("macs.statusConnecting"), { name });
+  if (u.state === "unreachable") return fillVars(t("macs.statusUnreachable"), { name });
+  if (u.state === "port_busy") return fillVars(t("macs.statusPortBusy"), { name });
+  if (u.model_running === false) return fillVars(t("macs.statusModelOff"), { name });
+  let what = u.model_id || t("macs.modelUnknown");
+  const a = u.activity;
+  if (a && a.phase === "prompt" && a.total > 0) {
+    what = fillVars(t("macs.reading"), { pct: Math.min(100, Math.floor((a.processed || 0) / a.total * 100)) });
+  } else if (a && a.phase === "generating") {
+    what = t("macs.writing");
+  }
+  return fillVars(t("macs.statusConnected"), { name, model: what });
+}
+
+function macsLi(label, sub, buttons) {
+  const li = document.createElement("li");
+  li.className = "macs-item";
+  const info = document.createElement("div");
+  info.className = "macs-info";
+  const b = document.createElement("b"); b.textContent = label; info.appendChild(b);
+  if (sub) { const s = document.createElement("span"); s.className = "macs-sub-t"; s.textContent = sub; info.appendChild(s); }
+  li.appendChild(info);
+  const act = document.createElement("div"); act.className = "macs-act";
+  buttons.forEach((bt) => act.appendChild(bt));
+  li.appendChild(act);
+  return li;
+}
+function macsBtn(text, cls, onclick, aria) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "btn " + (cls || ""); b.textContent = text; b.onclick = onclick;
+  if (aria) b.setAttribute("aria-label", aria);
+  return b;
+}
+
+function renderMacs() {
+  const r = state.remote;
+  if (!r || !$("macsUseCard")) return;
+  // Alerts: "this Mac removed you" (M2 risk 3) and "pairings were reset".
+  const removed = $("macsRemoved");
+  removed.hidden = !r.removed_by;
+  if (r.removed_by) $("macsRemovedText").textContent = fillVars(t("macs.removedYou"), { name: r.removed_by });
+  $("macsReset").hidden = !r.pairings_reset;
+
+  // Use card.
+  const using = r.mode === "using" && r.use;
+  $("macsUsing").hidden = !using;
+  $("macsFindBox").hidden = !!using;
+  if (using) {
+    const name = remoteName(r);
+    $("macsUsingText").textContent = remoteUseLine(r);
+    const hints = [t("macs.editorSame")];
+    if (r.use.state === "connected" && r.use.busy && r.use.queue_len > 0) hints.unshift(fillVars(t("macs.busy"), { name }));
+    if (r.use.on_battery) hints.push(fillVars(t("macs.battery"), { name }));
+    $("macsUsingHint").textContent = hints.join(" ");
+    const canCtl = r.use.state === "connected" && r.use.can_start_model;
+    const st = $("macsStartModel"), sp = $("macsStopModel");
+    st.hidden = !(canCtl && r.use.model_running === false);
+    sp.hidden = !(canCtl && r.use.model_running === true);
+    st.textContent = fillVars(t("macs.startModel"), { name });
+    sp.textContent = fillVars(t("macs.stopModel"), { name });
+  }
+  // Found list (after "Find my Macs").
+  const list = $("macsFound");
+  list.innerHTML = "";
+  macs.found.forEach((m) => {
+    const label = m.paired_name || fillVars(t("macs.unknownMac"), { fp: m.fp.slice(0, 4) });
+    const sub = m.paired_peer ? t("macs.pairedMac") : (m.pairing_open ? t("macs.readyToPair") : t("macs.notOpen"));
+    const btns = [];
+    if (m.paired_peer) {
+      btns.push(macsBtn(t("macs.use"), "btn-primary", () => macsUse(m.paired_peer, m.paired_name), `${t("macs.use")} ${label}`));
+    } else {
+      const b = macsBtn(t("macs.pair"), m.pairing_open ? "btn-primary" : "", () => macsAskCode(m.fp, m.addrs, label), `${t("macs.pair")} ${label}`);
+      btns.push(b);
+    }
+    list.appendChild(macsLi(label, sub, btns));
+  });
+  // Paired lists.
+  const paired = r.paired || [];
+  const fill = (id, emptyId, role) => {
+    const ul = $(id); ul.innerHTML = "";
+    const rows = paired.filter((p) => p.role === role);
+    rows.forEach((p) => {
+      const btns = [];
+      if (role === "share") {
+        const inUse = using && r.use.peer_id === p.peer_id;
+        if (!inUse) btns.push(macsBtn(t("macs.use"), "btn-ghost", () => macsUse(p.peer_id, p.name), `${t("macs.use")} ${p.name}`));
+      }
+      btns.push(macsBtn(t("macs.remove"), "btn-ghost", () => macsRevoke(p.peer_id, p.name), `${t("macs.remove")} ${p.name}`));
+      const inUse = role === "share" && using && r.use.peer_id === p.peer_id;
+      ul.appendChild(macsLi(p.name, inUse ? t("macs.inUse") : t(role === "share" ? "macs.roleShares" : "macs.roleUses"), btns));
+    });
+    $(emptyId).hidden = rows.length > 0;
+  };
+  fill("macsPairedUse", "macsPairedUseEmpty", "share");
+  fill("macsPairedShare", "macsPairedShareEmpty", "use");
+
+  // Share card.
+  const share = r.share;
+  const tog = $("macsShareToggle");
+  tog.checked = !!share;
+  tog.disabled = !!using;
+  $("macsMayStart").checked = !!r.may_start_model;
+  const pairing = share && share.pairing;
+  const codeOpen = !!(pairing && pairing.state === "open");
+  $("macsCodeBox").hidden = !(pairing && pairing.state !== "cancelled");
+  if (pairing) {
+    $("macsCode6").textContent = codeOpen ? `${pairing.code.slice(0, 3)} ${pairing.code.slice(3)}` : (pairing.state === "paired" ? "✓" : "— — —");
+    $("macsCode6").classList.toggle("is-closed", !codeOpen);
+    $("macsCodeHint").textContent = codeOpen ? fillVars(t("macs.codeHint"), { time: fmtMinSec(pairing.remaining_s) })
+      : pairing.state === "paired" ? fillVars(t("macs.codePaired"), { name: pairing.paired_name || "Mac" })
+      : pairing.state === "too_many_failures" ? t("macs.codeTooMany") : t("macs.codeExpired");
+    const ip = share.lan_ips && share.lan_ips[0];
+    $("macsAddrInfo").hidden = !(codeOpen && ip && share.port);
+    if (ip && share.port) $("macsAddrInfo").textContent = fillVars(t("macs.addrInfo"), { addr: `/ip4/${ip}/udp/${share.port}/quic-v1` });
+    // Closed: "Pair another Mac" below offers the next code; the box only needs to close.
+    $("macsNewCode").hidden = codeOpen || pairing.state === "paired";
+    $("macsCodeClose").textContent = codeOpen ? t("macs.cancel") : t("macs.ok");
+    if (pairing.state === "paired" && macs.lastCode !== pairing.code) {
+      macs.lastCode = pairing.code;
+      toast(fillVars(t("macs.codePaired"), { name: pairing.paired_name || "Mac" }));
+    }
+  }
+  $("macsAddMac").hidden = !share || !!(pairing && pairing.state !== "cancelled" && pairing.state !== "paired");
+  let shareLine = t("macs.shareOff");
+  if (share) {
+    const n = (share.requests || 0) + (share.queued || 0);
+    shareLine = n === 0 ? (state.running ? t("macs.sharedIdle") : t("macs.sharedNoModel"))
+      : n === 1 ? t("macs.sharedReq") : fillVars(t("macs.sharedReqs"), { n });
+    if (share.caffeinate) shareLine += ` · ${t("macs.stayAwake")}`;
+  }
+  $("macsShareStatus").textContent = shareLine;
+  // Badge in the card head (big Mac: "Shared · 1 request"; MacBook: "Using Mac Studio").
+  const badge = $("macsBadge");
+  if (using) { badge.hidden = false; badge.textContent = fillVars(t("pill.remote"), { name: remoteName(r) }); badge.className = "badge ready"; }
+  else if (share) { badge.hidden = false; badge.textContent = shareLine.split(" · ").slice(0, 2).join(" · "); badge.className = "badge ready"; }
+  else badge.hidden = true;
+  renderShareBadge();
+}
+
+/** Big-Mac badge next to the top pill while sharing: "Shared · 1 request". */
+function renderShareBadge() {
+  const el = $("shareBadge");
+  if (!el) return;
+  const s = state.remote && state.remote.share;
+  if (!s) { el.hidden = true; return; }
+  const n = (s.requests || 0) + (s.queued || 0);
+  el.hidden = false;
+  el.textContent = n === 0 ? t("macs.sharedIdle") : n === 1 ? t("macs.sharedReq") : fillVars(t("macs.sharedReqs"), { n });
+  el.classList.toggle("is-active", n > 0);
+}
+
+async function refreshRemote() {
+  try { state.remote = await invoke("remote_status"); } catch { return state.remote; }
+  if (!state.apiKey && state.remote && state.remote.mode === "using") {
+    try { state.apiKey = await invoke("remote_api_key"); } catch {}
+  }
+  if (macs.searching) {
+    try { macs.found = await invoke("remote_discover"); } catch {}
+    maybeAutoPick();
+  }
+  try { renderMacs(); } catch {}
+  return state.remote;
+}
+
+/** Exactly one unpaired Mac showing a code: open the code field for it (saves a click). */
+function maybeAutoPick() {
+  if (macs.pairTarget || macs.autoPicked) return;
+  const open = macs.found.filter((m) => m.pairing_open && !m.paired_peer);
+  if (open.length === 1) {
+    macs.autoPicked = true;
+    macsAskCode(open[0].fp, open[0].addrs, fillVars(t("macs.unknownMac"), { fp: open[0].fp.slice(0, 4) }));
+  }
+}
+
+async function macsFind() {
+  macs.searching = true;
+  macs.autoPicked = false;
+  $("macsFindStatus").textContent = t("macs.searching");
+  $("macsFind").textContent = t("macs.findAgain");
+  try {
+    macs.found = await invoke("remote_discover");
+  } catch (e) { $("macsFindStatus").textContent = remoteErr(e); return; }
+  renderMacs();
+  maybeAutoPick();
+  // Results trickle in for a few seconds.
+  setTimeout(() => {
+    if (macs.searching && !macs.found.length) $("macsFindStatus").textContent = t("macs.noneFound");
+    else if (macs.found.length) $("macsFindStatus").textContent = "";
+  }, 4000);
+}
+
+function macsAskCode(target, addrs, name) {
+  macs.pairTarget = target; macs.pairAddrs = addrs || []; macs.pairName = name;
+  $("macsPairForm").hidden = false;
+  $("macsCodeLabel").textContent = fillVars(t("macs.codeFor"), { name });
+  $("macsPairErr").textContent = "";
+  const inp = $("macsCodeIn"); inp.value = ""; inp.focus();
+}
+
+async function macsPairSubmit(ev) {
+  if (ev) ev.preventDefault();
+  if (!macs.pairTarget || macs.busy) return;
+  const code = $("macsCodeIn").value.replace(/\D/g, "");
+  if (code.length !== 6) { $("macsPairErr").textContent = t("err.pairFormat"); return; }
+  macs.busy = true;
+  $("macsPairBtn").disabled = true;
+  $("macsPairBtn").textContent = t("macs.pairing");
+  try {
+    const p = await invoke("remote_pair", { target: macs.pairTarget, addrs: macs.pairAddrs, code });
+    $("macsPairForm").hidden = true;
+    macs.pairTarget = null;
+    toast(fillVars(t("macs.pairedOk"), { name: p.name }));
+    // Pairing was for using it: switch right away (asks first if this Mac's model runs).
+    await macsUse(p.peer_id, p.name);
+  } catch (e) {
+    $("macsPairErr").textContent = remoteErr(e);
+  } finally {
+    macs.busy = false;
+    $("macsPairBtn").disabled = false;
+    $("macsPairBtn").textContent = t("macs.pairBtn");
+  }
+}
+
+async function macsUse(peer, name) {
+  try {
+    state.remote = await invoke("remote_use", { peer, confirm: false });
+  } catch (e) {
+    const { code } = parseBackendErr(e);
+    if (code === "local_running") {
+      if (!confirm(fillVars(t("macs.confirmStopLocal"), { name: name || "Mac" }))) return;
+      try { state.remote = await invoke("remote_use", { peer, confirm: true }); }
+      catch (e2) { toast(remoteErr(e2), true); return; }
+    } else { toast(remoteErr(e), true); return; }
+  }
+  macs.searching = false;
+  macs.found = [];
+  $("macsFindStatus").textContent = "";
+  $("macsFind").textContent = t("macs.find");
+  try { state.apiKey = await invoke("remote_api_key"); } catch {}
+  renderMacs();
+  poll();
+}
+
+async function stopUsingRemote() {
+  try { state.remote = await invoke("remote_stop_using"); } catch (e) { toast(remoteErr(e), true); }
+  renderMacs();
+  setPill("off");
+  poll();
+}
+
+async function macsRevoke(peer, name) {
+  if (!confirm(fillVars(t("macs.confirmRemove"), { name }))) return;
+  try { state.remote = await invoke("remote_revoke", { peer }); toast(fillVars(t("macs.removed"), { name })); }
+  catch (e) { toast(remoteErr(e), true); }
+  renderMacs();
+}
+
+async function macsShareToggle() {
+  const on = $("macsShareToggle").checked;
+  try {
+    if (on) {
+      state.remote = await invoke("remote_share_start");
+      // Nothing paired yet → show a code right away (one click on the big Mac).
+      if (!(state.remote.paired || []).some((p) => p.role === "use")) await invoke("remote_pair_code");
+    } else {
+      state.remote = await invoke("remote_share_stop");
+    }
+  } catch (e) { toast(remoteErr(e), true); }
+  await refreshRemote();
+}
+
+function initMacs() {
+  if (!$("macsUseCard")) return;
+  $("macsFind").onclick = macsFind;
+  $("macsPairForm").onsubmit = macsPairSubmit;
+  $("macsPairCancel").onclick = () => { $("macsPairForm").hidden = true; macs.pairTarget = null; };
+  $("macsCodeIn").oninput = (e) => {
+    const d = e.target.value.replace(/\D/g, "").slice(0, 6);
+    e.target.value = d.length > 3 ? `${d.slice(0, 3)} ${d.slice(3)}` : d;
+  };
+  $("macsAddrGo").onclick = () => {
+    const a = $("macsAddr").value.trim();
+    if (!/^\/ip[46]\/[^/]+\/udp\/\d+\/quic-v1(\/p2p\/\w+)?$/.test(a)) { toast(t("macs.addrBad"), true); return; }
+    macsAskCode(a, [], a);
+  };
+  $("macsStopUsing").onclick = stopUsingRemote;
+  $("macsStartModel").onclick = async () => {
+    toast(fillVars(t("macs.startingModel"), { name: remoteName(state.remote) }));
+    try { await invoke("remote_start_model"); } catch (e) { toast(remoteErr(e), true); }
+    refreshRemote();
+  };
+  $("macsStopModel").onclick = async () => {
+    try { await invoke("remote_stop_model"); } catch (e) { toast(remoteErr(e), true); }
+    refreshRemote();
+  };
+  $("macsShareToggle").onchange = macsShareToggle;
+  $("macsAddMac").onclick = async () => { try { await invoke("remote_pair_code"); } catch (e) { toast(remoteErr(e), true); } refreshRemote(); };
+  $("macsNewCode").onclick = $("macsAddMac").onclick;
+  $("macsCodeClose").onclick = async () => { try { await invoke("remote_pair_cancel"); } catch {} refreshRemote(); };
+  $("macsMayStart").onchange = async (e) => {
+    try { state.remote = await invoke("remote_set_model_control", { allowed: !!e.target.checked }); } catch (err) { toast(remoteErr(err), true); }
+    renderMacs();
+  };
+  $("macsRemovedOk").onclick = async () => { try { state.remote = await invoke("remote_dismiss_removed"); } catch {} renderMacs(); };
+  refreshRemote();
+  // Keep the code countdown and the request badge fresh while the tab is open (poll() covers
+  // the using mode every second).
+  setInterval(() => {
+    const open = document.querySelector('.tab[data-tab="cluster"].tab-active');
+    if (open || (state.remote && state.remote.mode === "sharing")) refreshRemote();
+  }, 1000);
 }
 
 // ---- boot ------------------------------------------------------------------
@@ -5631,7 +6266,7 @@ async function boot() {
   };
   renderAgents();
   wireRestartNote();
-  $("lang").onchange = (e) => { applyLang(e.target.value); setPill(state.running ? "loading" : "off"); };
+  $("lang").onchange = (e) => { applyLang(e.target.value); setPill(state.pillMode || (state.running ? "loading" : "off")); };
   applyLang(LANG);
   renderSpeed();
   renderInstalled();
@@ -5639,6 +6274,8 @@ async function boot() {
   initChat();
   initStatus();
   initP2p();
+  initMacs();
+  try { state.apiKey = await invoke("remote_api_key"); } catch {}
 
   // Core counts are hardware, so they are read once; every changing number the
   // planner needs rides along with the live reading instead.

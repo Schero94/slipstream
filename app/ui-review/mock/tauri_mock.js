@@ -9,13 +9,53 @@
 //        (Kilo/OpenCode): /slots phase + prompt_progress (live_stats.slot_activity) and the
 //        engine log lines prompt_start / prompt_progress / print_timing tail / prompt_done /
 //        n_gen / release. slots:false = log-only fallback. Ticks at 1 s / __M.speed.
+//   Your Macs (v0.6, remote_* commands): window.__M.remote knobs
+//     .found = [{fp, pairing_open, addrs, paired_peer, paired_name}]  (what "Find my Macs" sees)
+//     .code = "482913"  the code the big Mac shows (remote_pair checks it)
+//     .useState = "connected" | "connecting" | "reconnecting" | "unreachable" | "port_busy"
+//     .modelRunning, .busy, .queue, .activity ({phase, total, processed}), .canStart, .onBattery
+//     .removedBy = "Mac Studio" ("this Mac removed you"), .pairingsReset = true
+//     .shareRequests = 1 (big Mac badge), .peerPairs() = the other Mac types the code (share side)
+//     .connectMs = 1200 (connecting → connected)
 (() => {
   const GiB = 1073741824;
   const M = window.__M = Object.assign({
     phase: "fresh", srv: "down", freeRam: 21, totalRam: 36, diskFree: 412, speed: 1,
     gguf: 0, pgrn: 0, remote: 21 * GiB, pgrnTotal: 19 * GiB, convDone: 0, startErr: null,
-    prefillTokens: 0, log: "", calls: [], lastChatBody: null, slotAct: null,
+    prefillTokens: 0, log: "", calls: [], lastChatBody: null, slotAct: null, lastAuth: null,
   }, window.__M || {});
+  const R = M.remote = Object.assign({
+    mode: "off", paired: [], found: [{ fp: "3f2a9c41d07b5e88", pairing_open: true, addrs: ["/ip4/192.168.1.20/udp/9003/quic-v1"], paired_peer: null, paired_name: null }],
+    code: "482913", useState: "connected", modelRunning: true, busy: false, queue: 0, activity: null, canStart: true,
+    onBattery: false, removedBy: null, pairingsReset: false, shareRequests: 0, mayStart: true, lanStarted: false,
+    usePeer: null, pairing: null, connectMs: 1200, shareOn: false,
+  }, M.remote || {});
+  const STUDIO = "12D3KooWStudioMockPeer000000000000000000000000000";
+  const BOOK = "12D3KooWBookMockPeer00000000000000000000000000000";
+  const remoteStatus = () => {
+    const u = R.mode === "using" ? {
+      peer_id: R.usePeer, name: (R.paired.find((p) => p.peer_id === R.usePeer) || {}).name || "Mac Studio",
+      state: R.useState, error: R.useState === "unreachable" ? "dial timed out" : null, bind: "127.0.0.1:8080",
+      model_running: R.useState === "connected" ? R.modelRunning : null, model_id: "slipstream", n_ctx: 65536,
+      busy: R.busy, queue_len: R.queue, on_battery: R.onBattery, can_start_model: R.canStart, remote_version: "0.5.3",
+      activity: R.activity,
+    } : null;
+    let pairing = null;
+    if (R.pairing) {
+      const left = Math.max(0, 300 - Math.floor((Date.now() - R.pairing.at) / 1000));
+      if (R.pairing.state === "open" && left === 0) R.pairing.state = "expired";
+      pairing = { code: R.code, remaining_s: R.pairing.state === "open" ? left : 0, state: R.pairing.state,
+        paired_name: R.pairing.name || null, failed_attempts: 0 };
+    }
+    const sh = R.shareOn ? { on: true, announced: true, pairing, requests: R.shareRequests, queued: 0, port: 9003,
+      dial: "/ip4/0.0.0.0/udp/9003/quic-v1/p2p/" + STUDIO, lan_ips: ["192.168.1.20"], caffeinate: true, remote_started: false } : null;
+    return { mode: R.mode === "using" ? "using" : (R.shareOn ? "sharing" : "off"), use: u, share: sh, paired: R.paired,
+      may_start_model: R.mayStart, removed_by: R.removedBy, pairings_reset: R.pairingsReset, lan_started: R.lanStarted, fp: "a1b2c3d4e5f60718" };
+  };
+  R.peerPairs = (name = "MacBook Air") => {
+    R.paired.push({ peer_id: BOOK, name, role: "use", paired_at: 1764300000, last_seen: 1764300000, app_version: "0.5.3", fp: "77aa00bb11cc22dd" });
+    if (R.pairing) { R.pairing.state = "paired"; R.pairing.name = name; }
+  };
   let timer = null, tick = 0, misses = 120000;
   const run = () => M.srv === "ready";
   const step = () => {
@@ -51,7 +91,40 @@
   const h = {
     defaults: () => ({ model_dir: "/Users/demo/Modelle", home: "/Users/demo", server_bin: "/Applications/Slipstream.app/llama-server",
       embed_file: "nomic.gguf", embed_url: "https://example.invalid/nomic.gguf" }),
-    server_state: () => M.srv,
+    server_state: () => (R.mode === "using" ? "remote" : M.srv),
+    remote_status: () => remoteStatus(),
+    remote_api_key: () => "mock0local0token0000000000000000",
+    remote_discover: () => { R.lanStarted = true; return R.found; },
+    remote_pair: ({ target, code }) => {
+      if (String(code).replace(/\D/g, "") !== R.code) throw "[pair_wrong_code] Wrong code. Check the code on the other Mac.";
+      const p = { peer_id: STUDIO, name: "Mac Studio", role: "share", paired_at: 1764300000, last_seen: 1764300000, app_version: "0.5.3", fp: "3f2a9c41d07b5e88" };
+      R.paired = R.paired.filter((x) => x.peer_id !== STUDIO).concat([p]);
+      R.found = R.found.map((f) => (f.fp === "3f2a9c41d07b5e88" || f.fp === target ? { ...f, paired_peer: STUDIO, paired_name: "Mac Studio", pairing_open: false } : f));
+      R.removedBy = null;
+      return p;
+    },
+    remote_use: ({ peer, confirm }) => {
+      if (R.shareOn) throw "[sharing_active] This Mac is sharing its model. Turn sharing off before using another Mac.";
+      if (!R.paired.some((p) => p.peer_id === peer)) throw "[not_paired] This Mac is not paired. Pair it first.";
+      if (M.srv !== "down" && !confirm) throw "[local_running name=Mac_Studio] This Mac's model is running. Stop it to use the other Mac?";
+      if (M.srv !== "down") { M.srv = "down"; M.log = ""; }
+      R.mode = "using"; R.usePeer = peer; R.removedBy = null;
+      const target = R.useState === "connecting" ? "connected" : R.useState;
+      R.useState = "connecting";
+      setTimeout(() => { if (R.mode === "using" && R.useState === "connecting") R.useState = target; }, R.connectMs / M.speed);
+      return remoteStatus();
+    },
+    remote_stop_using: () => { R.mode = "off"; R.usePeer = null; return remoteStatus(); },
+    remote_trusted: () => R.paired,
+    remote_revoke: ({ peer }) => { R.paired = R.paired.filter((p) => p.peer_id !== peer); if (R.usePeer === peer) { R.mode = "off"; R.usePeer = null; } return remoteStatus(); },
+    remote_share_start: () => { if (R.mode === "using") throw "[using_active] This Mac is using another Mac."; R.shareOn = true; return remoteStatus(); },
+    remote_share_stop: () => { R.shareOn = false; R.pairing = null; return remoteStatus(); },
+    remote_pair_code: () => { R.shareOn = true; R.pairing = { at: Date.now(), state: "open" }; return remoteStatus().share.pairing; },
+    remote_pair_cancel: () => { if (R.pairing) R.pairing.state = "cancelled"; return remoteStatus(); },
+    remote_start_model: () => { if (!R.canStart) throw "[remote_model_control_off] no"; R.modelRunning = true; return { model_running: true }; },
+    remote_stop_model: () => { R.modelRunning = false; return { model_running: false }; },
+    remote_set_model_control: ({ allowed }) => { R.mayStart = !!allowed; return remoteStatus(); },
+    remote_dismiss_removed: () => { R.removedBy = null; return remoteStatus(); },
     read_log: () => M.log, tail_file: () => "",
     live_stats: live, clear_stats: () => null,
     system_stats: () => ({ cores: 12, perf_cores: 6 }),
@@ -69,6 +142,8 @@
       : (M.pgrn >= M.pgrnTotal ? { phase: "done" } : { phase: "idle" }),
     start_server: ({ cfg }) => {
       M.lastCfg = cfg;
+      // main.rs: port 8080 belongs to the forwarder while using another Mac.
+      if (R.mode === "using") throw "[remote_active] This Mac is using another Mac's model. Stop using it first (Your Macs).";
       if (M.startErr) throw M.startErr;
       if (M.startCrash) {
         // Engine exits during load: HTTP never answers (server_state stays "down").
@@ -147,7 +222,14 @@
   window.fetch = async (url, opts) => {
     const u = String(url);
     if (!u.startsWith("http://127.0.0.1:8080")) return realFetch(url, opts);
-    if (!run()) throw new TypeError("Failed to fetch");
+    const hdrs = (opts && opts.headers) || {};
+    M.lastAuth = hdrs.Authorization || hdrs.authorization || null;
+    if (R.mode === "using") {
+      // The forwarder: the app window must send this install's key; the remote model must run.
+      if (R.useState !== "connected") throw new TypeError("Failed to fetch");
+      if (M.lastAuth !== "Bearer mock0local0token0000000000000000") return new Response(JSON.stringify({ error: { code: 401, message: "bad_local_token" } }), { status: 401 });
+      if (!R.modelRunning) return new Response(JSON.stringify({ error: { code: 503, message: "model_not_running" } }), { status: 503 });
+    } else if (!run()) throw new TypeError("Failed to fetch");
     if (u.endsWith("/v1/models")) return new Response(JSON.stringify({ data: [{ id: "slipstream" }] }), { headers: { "Content-Type": "application/json" } });
     if (u.endsWith("/v1/chat/completions")) {
       const body = JSON.parse(opts.body || "{}");
