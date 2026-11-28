@@ -310,6 +310,14 @@ All reused answers hash-identical to a fresh computation. Where the cold 137 s g
 prompt's hottest experts last (±1 %) and prefetching only the top 6 of 8 predicted experts
 (−6 to −8 %).
 
+### Real agent request shape (v0.5.1)
+
+OpenCode/Kilo-style request: system prompt with date + working directory, 12 tool definitions,
+source files as a tool result (37.4k tokens), then a title request, then a new conversation:
+before 0.5.1 the new conversation read 2,745 tokens (18.3 s), now 26 tokens (**1.6 s**), same
+answer. The server now restores a copy of a large saved prompt instead of skipping it. When the
+date in the system prompt changes (once a day) the first new conversation costs 22 s instead of 12 s.
+
 ## What did *not* work (recorded honestly)
 
 - **OS page-cache instead of our bounded arena** — ~75 % faster, but 1000+ swapouts: it breaks "the Mac stays usable." Rejected.

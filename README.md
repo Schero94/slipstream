@@ -12,7 +12,12 @@ Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that 
 
 It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
-**New in v0.5.0:** coding agents never wait for the same prompt twice. A new conversation with
+**New in v0.5.1:** real coding agents (OpenCode, Kilo Code) now start a new conversation in
+1.6 s instead of 18 s, even after a side request such as a title; the engine runs on the newest
+llama.cpp (decode +4.7 % at a 10 GiB cache); and forcing one specific tool works again. Details in
+[`docs/RELEASE_0.5.1.md`](docs/RELEASE_0.5.1.md).
+
+**v0.5.0:** coding agents never wait for the same prompt twice. A new conversation with
 the same agent setup, and the first request after restarting the app, now start answering in
 about 2 seconds instead of 3 minutes. The first long prompt is read about a third faster by
 default (190 s → 137 s, same answers), and you can see its progress and stop it. First run takes

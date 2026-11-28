@@ -32,7 +32,7 @@
   "@type": "SoftwareApplication",
   "name": "Slipstream",
   "url": "https://schero94.github.io/slipstream/",
-  "softwareVersion": "0.5.0",
+  "softwareVersion": "0.5.1",
   "downloadUrl": "https://github.com/Schero94/slipstream/releases/latest",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS 11+ (Apple Silicon), Linux (headless node)",
@@ -241,7 +241,9 @@
 
 <section style="padding-top:44px;padding-bottom:44px">
   <div class="wrap rv" style="padding:24px;border:1px solid var(--line2);border-radius:16px;background:linear-gradient(135deg,rgba(57,192,255,.08),rgba(255,157,47,.05))">
-    <div class="eyebrow">New in v0.5.0</div>
+    <div class="eyebrow">New in v0.5.1</div>
+    <p class="muted" style="margin:10px 0 18px;max-width:72ch"><b>0.5.1:</b> with the requests real coding agents send (tool lists, the date in the system prompt), a new conversation now starts in 1.6 s instead of 18 s, the engine runs on the newest llama.cpp (+4.7 % speed at a 10 GiB cache), and forcing one specific tool works again. <a href="https://github.com/Schero94/slipstream/blob/main/docs/RELEASE_0.5.1.md" target="_blank" rel="noopener" style="color:var(--cyan)">0.5.1 notes →</a></p>
+    <div class="eyebrow">Since v0.5.0</div>
     <h2 style="font-size:clamp(24px,3vw,34px);margin-top:10px">Your coding agent never waits for the same prompt twice.</h2>
     <p class="muted" style="margin:14px 0 0;max-width:72ch">Coding agents send the same big context (instructions, tools, source files) again and again. Slipstream now reads it only once: a new conversation with the same agent setup starts answering in 2.1 s instead of 3 minutes, and so does the first request after you restart the app (2.2 s), because the context is saved to your SSD and loaded back. Every reused answer is identical to a fresh one.</p>
     <p class="muted" style="margin:10px 0 0;max-width:72ch">The first long prompt is read about a third faster by default (190 s → 137 s), you see its progress and can stop it, and a fresh install is running and connected to your editor in 3 clicks. <a href="https://github.com/Schero94/slipstream/blob/main/docs/RELEASE_0.5.0.md" target="_blank" rel="noopener" style="color:var(--cyan)">Release notes →</a></p>

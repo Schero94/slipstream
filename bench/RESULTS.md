@@ -3989,3 +3989,10 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 - Fix (tools/server/server-common.cpp): filter `tools` to the named function before the upstream
   parsing (fork behaviour since 0.3). After: read_file forced; null/auto/required → list_dir and
   none → no tool call, identical to the old binary. ctest -R peregrine 14/14, engine_sync VERIFY PASS.
+
+## 0.5.1 release gate — PASS — 2026-11-28
+
+- Final binary (port 8e23278 + copy restore + tool_choice fix), app regime, Fast prompt reading.
+- E6: C1 37,407 tokens 133.9 s · C2 new conversation 26 tokens 1.6 s · C3 (date changed) 22.2 s ·
+  outputs fc14398b032c / 86b8ff31ee95 (same as pre-port runs). E5: S1 136.1 s, save 0.60 s,
+  restore 0.19 s, S2 2.2 s, hash c4062b92a557. Swap 0 MB. tool_choice smoke identical to 0.5.0.
