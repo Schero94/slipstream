@@ -4104,3 +4104,73 @@ app) after one review pass and a 6/8/14 GiB check; `lp` alone is a smaller, simp
   unchanged); evidence caveats: MTP inflated the first numbers (confirmed: +3.5 % → +2.3–3.5 % at
   small caches, nothing at 10+ GiB), the replay does not count reads wasted on failed prefetch
   publishes ('P' 2), decay replay ≈exact (22 mismatches), decay is inert with --pgrn-hot-percent.
+
+## Eviction follow-ups: harness default, critic fixes, kick-free variant (negative), app wiring — 2026-11-28
+
+**Harness.** `bench/fetchwall/run_arm_server.sh` now defaults to the app's streamed regime: no speculative
+decoding (`SPEC_ARGS` defaults to empty, override kept; summary.tsv gains a `spec=` column). Scripts whose arms
+relied on the old MTP default now pass `SPEC_ARGS="--spec-type draft-mtp --spec-draft-n-max 4"` explicitly:
+`sweep_compact.sh` (mtp-la0, mtp-la0batch), `accept_newpin.sh` (newpin-mtpbase), `sweep_mtp_vs_none.sh` (mtp-la0).
+`sweep_evict.sh` / `trace_eviction.sh` now run without MTP. Every earlier `run_arm_server.sh` row in this file
+that does not say `SPEC_ARGS=" "` was measured WITH MTP draft 4 (incl. the first eviction A/B, 95e389e).
+
+**Critic fixes (engine, Slipstream-owned files).** `PGRN_EVICT` is matched exactly and case-insensitively
+(`off|clox|lp|decay|decay:<H>`; before, any prefix such as `lpx`/`decayed` was accepted); an unknown value logs
+one WARN and keeps CLOCK-LRU-K. The half-life must be finite and > 0 (else WARN, H = 16) and is clamped to
+≥ 1e-3 (WARN). `PGRN_EVICT=decay` with `--pgrn-hot-percent > 0` logs a WARN that decay is inert (the HOT/WARM
+tier picks victims; only lookahead-protect applies). Parser covered by a new block in test-peregrine-tier
+(ctest -R peregrine 14/14); WARN paths checked by hand. `sim_eviction.py` now counts prefetch reads wasted on a
+failed publish (read from SSD, then 'P 2' no evictable slot) in total reads, and `--engine-summary` prints the
+engine's own per-trace (= per-arm) outcomes incl. the wasted rate (P2+P3)/(P1+P2+P3).
+Wasted rate per arm (decode phase, `results/eviction_kickfree_20261128.md`):
+
+| trace | base | lp | decay |
+|---|---:|---:|---:|
+| MTP draft 4, code, 4 GiB | 0.00 % | 5.18 % (4,213 reads) | 5.37 % (4,213) |
+| MTP, code / agent, 10 GiB; agent 4 GiB (replay) | 0 % | 0 % / 0 % ; 6.39 % | 0 % / 0 % ; 6.71 % |
+| **app regime, no MTP, code, 4 GiB (engine traces)** | **0.00 %** | — | **0.00 %** |
+
+With wasted reads counted, the MTP-trace replay gains of lp/decay shrink in total reads (code 4 GiB: lp −8.6 → −5.7 %,
+decay −11.1 → −8.2 %; demand-miss deltas unchanged). Without MTP no publish ever fails (one token pins 8 experts,
+far below 45 slots).
+
+**Kick-free variant (critic's idea, `PGRN_KICKFREE=1`, tested then reverted).** The lookahead kick for layer L+1
+called `batch_begin(L+1)` before pinning, so the previous ubatch's demand pins on L+1 no longer block prefetch.
+Safety: the kick runs inside layer L's eval callback after `ggml_backend_sched` synchronized the backend (Metal waits
+for the last committed command buffer), so the previous ubatch's L+1 expert GEMM has completed and nothing of the
+current ubatch has read L+1's slots yet; L+1's resolve calls batch_begin again before any demand insert; the prior
+prefetch thread is joined first. Parity held in every run (95b22dcdb531).
+Replay (MTP traces): decay+kf −14.4 / −14.3 % demand misses at 4 GiB (code / agent) vs −13.2 / −10.5 % for decay,
+because it removes the 5–7 % wasted publishes; neutral to slightly worse at 10 GiB. App regime (no MTP) engine
+traces, code 4 GiB, all-phase SSD reads: base 57,341 · decay 54,666 (−4.7 %) · decay+kf 55,291 (−3.6 %); replay of
+the base trace predicts 54,693 / 55,310 (validated: 0 hit/miss mismatches). Nothing to unblock without MTP, and the
+early unpin lets the kick evict experts of the step just computed.
+
+A/B, app regime (run_arm_server.sh default = no MTP), `sweep_evict.sh`, binary 07:07 (newer than all sources),
+prompt_code, 400 tokens, interleaved base/decay/decay+kf, 25 s cooldown, reps 3–4 in reversed arm order, decode tok/s:
+
+| cache | base | decay | decay + kick-free | Δ decay vs base | Δ kf vs base | Δ kf vs decay |
+|---|---|---|---|---:|---:|---:|
+| 4 GiB (4 reps) | 9.79, 9.69, 9.65, 9.79 (9.73) | 9.94, 9.90, 9.82, 9.95 (9.90) | 9.77, 9.85, 9.81, 9.67 (9.78) | +1.8 % | +0.5 % | −1.3 % (decay wins 4/4) |
+| 8 GiB (4 reps) | 14.84, 14.85, 14.65, 14.81 (14.79) | 14.63, 14.72, 14.88, 15.01 (14.81) | 15.11, 15.02, 14.85, 15.11 (15.02) | +0.2 % | +1.6 % | +1.4 % (3/4) |
+| 10 GiB (2 reps) | 17.81, 17.42 (17.62) | 17.45, 17.49 (17.47) | 17.71, 17.78 (17.75) | −0.8 % | +0.7 % | +1.6 % |
+
+Output 95b22dcdb531 in all 30 A/B runs and the 3 trace runs, swap Δ 0 MB, peak RSS identical per cache (8.24 / 12.33 / 14.38 GB). Trace runs
+(tracing on, 4 GiB): base 9.48, decay 9.77, decay+kf 9.71.
+
+**Verdict kick-free: negative, reverted.** Its only mechanism (failed publishes) does not occur in the app regime;
+it reads more SSD data than decay at 4 GiB and loses there 4/4; the +1.4–1.6 % at 8–10 GiB is within the
+session-to-session spread of base itself (8 GiB base 14.61 earlier today vs 14.79 here). It would matter only with
+MTP on streamed runs, which the app does not use. The `+kf` replay variant stays in sim_eviction.py.
+
+**Decay, all no-MTP reps pooled (this + previous section):** 4 GiB 9.72 → 9.90 (+1.9 %, decay ahead in 6 of 6
+pairs) · 6 GiB +3.5 % (2 reps) · 8 GiB 14.73 → 14.88 (+1.0 %, 4 of 6) · 10 GiB 17.57 → 17.40 (−1.0 %, 2 of 4) ·
+14 GiB neutral. Rebuilt binary after the revert (08:13): decay (`PGRN_EVICT=DECAY`, upper case) 4 GiB 10.01 tok/s,
+95b22dcdb531, no WARN, swap 0. engine_sync --verify PASS (exit 0).
+
+**App wiring (lossless → default).** `start_server` sets `PGRN_EVICT=decay` for streamed runs with lookahead on when
+`cache_gb × 1 GiB < 0.45 × PGRN size` (Qwen3.6 Q4 sidecar 20.13 GB → threshold 8.44 GiB: 4/6/8 GiB on, 10/14 off),
+not for dense runs, and never over a `PGRN_EVICT` the user exported. Rust test `evict_policy_only_for_small_streamed_caches`;
+cargo test 108/108, node app/scripts/test_*.mjs 7/7. The bundled app engine needs a rebuild to honour it (older
+engines ignore the variable). 8 GiB is the weak end (+1.0 %, mixed); kept inside the threshold because it is lossless
+and not negative.
