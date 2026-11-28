@@ -7,6 +7,7 @@ Real, reproducible numbers on a **36 GB Apple-Silicon Mac**. This is an evidence
 - A **35B MoE** coder runs at **~13–19 tok/s** streamed from SSD, with the Mac staying usable.
 - A **118B MoE** (Laguna S 2.1) that does **not fit in 36 GB RAM** runs at **~2.8 tok/s** — from 0.72 before optimization (**3.9×**).
 - The single biggest lever was **storage placement**, not a clever kernel.
+- **Coding agents (v0.5.0):** a 40k-token agent prompt is read once. Cold first prompt 137 s; a new conversation with the same agent setup 2.1 s; the first request after an app restart 2.2 s; next turn 0.8 s — all with answers identical to a fresh read (see "Agent prompts" below).
 - The engine now also **streams correctly on Linux/CPU** — same tokens as resident, 487 vs 853 MiB. Correctness only; no tuned Linux numbers, CUDA untested.
 
 ---
@@ -291,6 +292,23 @@ drafts ride the same verify path, so they are off in that mode.
 so llama-completion worked, but speculative verify runs several tokens and the prediction was
 silently dropped. Fixed with a `ggml_cont`, and the engine now warns if a prediction is ever
 unreadable. The lesson is in `CLAUDE.md`: measure in the regime the app actually runs.
+
+## Agent prompts: read once, reuse everywhere (v0.5.0, 2026-11-28)
+
+Qwen3.6-35B-A3B Q4, 4 GiB cache, llama-server with the app's flags, 39.5k-token agent prompt
+(instructions + tools + source files) through the chat API, 0 MB swap growth.
+
+| Time until the first word | v0.4.1 | v0.5.0 |
+|---|---:|---:|
+| First prompt (cold) | 183–190 s | **137 s** (Fast prompt reading, now default) |
+| New conversation, same system prompt + tools | 187 s | **2.1 s** (33 tokens read instead of 39,509) |
+| First request after a server restart | 187 s | **2.2 s** (save 0.6 s / 1 GB, restore 0.3 s) |
+
+All reused answers hash-identical to a fresh computation. Where the cold 137 s goes (fit over
+10k/20k/39k prompts): fixed 13 s, linear 67 s (experts, DeltaNet, projections), quadratic 53 s
+(attention, 40 %); SSD loading ~6 s. Two decode ideas from Colibrì lost here: staging the
+prompt's hottest experts last (±1 %) and prefetching only the top 6 of 8 predicted experts
+(−6 to −8 %).
 
 ## What did *not* work (recorded honestly)
 

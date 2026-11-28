@@ -12,7 +12,13 @@ Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that 
 
 It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
-**New in v0.4.1:** coding agents get follow-up answers in under a second. A ~40k-token agent
+**New in v0.5.0:** coding agents never wait for the same prompt twice. A new conversation with
+the same agent setup, and the first request after restarting the app, now start answering in
+about 2 seconds instead of 3 minutes. The first long prompt is read about a third faster by
+default (190 s → 137 s, same answers), and you can see its progress and stop it. First run takes
+3 clicks. Details in [`docs/RELEASE_0.5.0.md`](docs/RELEASE_0.5.0.md).
+
+**v0.4.1:** coding agents get follow-up answers in under a second. A ~40k-token agent
 context now survives interleaved requests, so the next turn starts in 0.8 s instead of almost
 four minutes. The first answer to a long prompt is 22% faster by default and about 35% faster
 with the new opt-in "Fast prompt reading", lookahead prefetch works for every MoE model, and
@@ -89,6 +95,22 @@ Numbers from a 36 GB Apple-Silicon Mac, raw logs in [`bench/RESULTS.md`](bench/R
 | 14 GiB | ~19 tok/s | ~86% |
 
 Prefill of a large (~30k-token) coding-agent prompt goes from 75 to 208 tok/s, a 2.7x gain, with `ubatch 2048` and parallel I/O threads.
+
+#### Agent prompts (v0.5.0)
+
+How long until the first word appears, with a 39.5k-token coding-agent prompt (instructions,
+tools and source files), 4 GiB expert cache:
+
+| Situation | v0.4.1 | v0.5.0 |
+|---|---:|---:|
+| First prompt ever (cold) | 183–190 s | **137 s** |
+| New conversation, same agent setup | 187 s | **2.1 s** |
+| First request after restarting the app or server | 187 s | **2.2 s** |
+| Next turn in the same conversation | 0.8 s | 0.8 s |
+
+Every reused answer is identical to a freshly computed one. The cold first prompt is now close
+to what this Mac can compute (about 40 % of it is attention, which cannot be skipped without
+changing answers; SSD loading is only ~6 s), so v0.5.0 makes sure it is read only once.
 
 #### Agent prompts (v0.4.1)
 
@@ -183,7 +205,11 @@ Compact slots let single-token MoE layers execute straight out of the pinned are
 
 Speculative decoding uses MTP on Qwen models and DFlash on Laguna, drafting several tokens per target pass.
 
-Async prefetch is opt-in and still experimental. A background thread warms the next layer's experts while the current layer computes, driven either by a predictor table (`PGCT1`) or an expert-coupling table (`PGCC1`). The machinery works end to end. Getting the *prediction* accurate enough to beat the SSD-fetch wall is unsolved, and `bench/` documents how badly it currently loses.
+Lookahead prefetch is on by default and lossless. While one layer computes, the next layer's router is scored early on the same data, and the experts it will most likely pick are read from the SSD in parallel. It is right about 83 % of the time and makes decode 20–33 % faster. (The older predictor-table prefetch, `PGCT1`/`PGCC1`, never beat the SSD wall and stays hidden.)
+
+Fast prompt reading (layer-major prefill) is on by default since v0.5.0. Instead of pushing the prompt through all 40 layers in 2,048-token batches, which reloads the same experts for every batch, it runs one layer over the whole prompt, then the next. Each expert is read from the SSD once per prompt: SSD time in a 39k-token prompt drops from ~100 s to ~6 s. The output is bit-identical, the read can be stopped at any time, and it reports progress layer by layer.
+
+Prompt reuse: llama-server keeps the model's state at the start of each user message, so a follow-up turn or a new conversation with the same agent setup only reads its new words. Before the server stops, the app saves that state to the internal SSD and loads it back after the next start.
 
 A parity test asserts that streamed output is bit-identical to fully-resident output, NMSE = 0. Optimizations that only reorder eviction are parity-neutral by construction, which is what makes them safe to ship.
 
