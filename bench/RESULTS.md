@@ -4174,3 +4174,48 @@ not for dense runs, and never over a `PGRN_EVICT` the user exported. Rust test `
 cargo test 108/108, node app/scripts/test_*.mjs 7/7. The bundled app engine needs a rebuild to honour it (older
 engines ignore the variable). 8 GiB is the weak end (+1.0 %, mixed); kept inside the threshold because it is lossless
 and not negative.
+
+## Last layer: attention only for the output rows (`PGRN_CROP_Q`) — KEEP (lossless, default on) — 2026-11-28
+
+- Idea: in qwen35moe the last trunk layer cropped to the output rows (`inp_out_ids`) only after attention, so a
+  39k-token prompt still ran Q, full attention and the output projection for all 39k rows of layer 39, although
+  only the last row is used. Qwen3.6-35B-A3B: 40 trunk layers, full_attention_interval 4 → layer 39 is a
+  full-attention layer (not DeltaNet), so the crop applies.
+- Change (qwen35moe.cpp + `build_attn(..., q_rows)` in llama-graph): K/V are still computed and stored for every
+  row. Q (after its row-wise norm + RoPE) and the gate are cut to the output rows with `get_rows`; the KQ mask is
+  cut to the same rows (`get_rows` + cast back to f16 for FA); flash attention runs for those rows only. The
+  output projection Wo runs on a zero-filled tensor with the ubatch's full row count (the attention rows are
+  scattered in with `set_rows`) and is cropped afterwards: Wo with 1 row picks a different matmul kernel (CPU
+  and Metal) and differed by 6e-8 in the logits in the first version; padding to the original row count makes
+  the output rows bitwise identical. Ubatches without output rows (inner prefill ubatches) skip Wo entirely.
+  Active only when: last layer is attention, `crop_before_nextn` (MTP nextn capture keeps all rows), one
+  sequence in the ubatch (one mask stream), not training, and n_outputs < n_tokens (decode / draft verify keep
+  the plain graph). Works for the normal path and the layer-major last range graph. `PGRN_CROP_Q=0` disables.
+- Tests: test-peregrine-model --layer-major gets T4 (`PGR_CROP_Q_OK`, required by the e2e script): fixture
+  qwen35moe, 23-token prompt with only the last token as output, ubatch 4, crop off vs on in fresh contexts,
+  normal and layer-major, prefix 0/5, resident and streamed: last logits, follow-up logits and full memory
+  state bitwise identical on CPU and Metal (24 checks each, max_abs=0). ctest -R peregrine 14/14. Binary
+  (final, 2026-11-28 ~08:5x) newer than every source; engine_sync --verify PASS (exit 0).
+- Parity on the real model (Qwen3.6-35B-A3B Q4, ~/Modelle, 4 GiB), final binary, default on:
+  run_arm.sh e6c6a36552db (on and `PGRN_CROP_Q=0`), E4 LM=1 S1 a9f8c4863784 / S2 c4062b92a557,
+  E6 C1 fc14398b032c / C2 = C3 86b8ff31ee95 — all identical to the baseline hashes; swap Δ 0 MB.
+- Speed, `prefill_scaling.sh LM=1` (app regime, layer-major ub 2048 / -b 40960, 4 GiB, --cache-ram 0), 39,019 tokens,
+  prompt seconds, interleaved:
+
+  | run | off | on |
+  |---|---:|---:|
+  | first version (Wo on 1 row), r1 / r2 | 132.1 / 131.9 | 127.4 / 127.5 |
+  | final version, r1 | 132.0 | 127.4 |
+  | final r2 (both disturbed) | 151.7 | 143.4 |
+  | final r3 (on first) | 131.9 | 143.5 (disturbed) |
+  | final r4 (on first) | 152.2 (disturbed) | 136.2 (partly) |
+
+  Undisturbed runs: off 132.1, 131.9, 132.0, 131.9 vs on 127.4, 127.5, 127.4 → **−4.5 s (−3.4 %)**, matching the
+  expected ~1/10 of the 52 s quadratic (attention) share. Fit: quadratic 51.3–51.8 s → 46.6–46.7 s, linear
+  unchanged. The disturbed runs (both arms, 136–152 s) had normal fetch time (31.1–32.2 s vs 31.15 s) — the
+  extra time is compute contention from background system load (CacheDelete, Avira scan, mobileassetd,
+  Spotlight at 40–70 % CPU during the session), not the change. Mean over all 6 runs per arm: 138.6 → 134.2 s.
+  10k / 20k: −0.4 / −1.3 s in undisturbed pairs. E4 S1 131.5 s and E6 C1 129.7 s (single runs, default on) vs
+  135.9 / 133.9 s earlier today with the old binary.
+- Verdict: KEEP, default on (output byte-identical, KV state bitwise identical). First turn of a 39k agent
+  prompt ~132 → ~127.5 s in the app regime. The bundled app engine needs a rebuild at the next release.

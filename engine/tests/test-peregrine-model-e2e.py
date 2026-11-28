@@ -108,6 +108,7 @@ def main() -> int:
                 or f"device={expected_device}" not in lm_parity.stdout
                 or "bitwise=yes" not in lm_parity.stdout
                 or "max_abs=0 " not in lm_parity.stdout
+                or "PGR_CROP_Q_OK" not in lm_parity.stdout
             ):
                 raise RuntimeError(
                     f"layer-major parity proof missing:\n{lm_parity.stdout}\n{lm_parity.stderr}"

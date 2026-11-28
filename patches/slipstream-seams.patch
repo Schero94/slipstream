@@ -2860,7 +2860,7 @@ index fedc70969..9fcc8a992 100644
          const llama_grammar_rules      & rules,
          const llama_grammar_stack      & stack,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 31200d0d1..8616e90c2 100644
+index 31200d0d1..13f05d078 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -267,6 +267,22 @@ bool llm_graph_input_batch_idxs::can_reuse(const llm_graph_params & params) {
@@ -3120,8 +3120,41 @@ index 31200d0d1..8616e90c2 100644
  ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
      auto inp = std::make_unique<llm_graph_input_attn_temp>(hparams.n_attn_temp_floor_scale, hparams.f_attn_temp_scale, hparams.f_attn_temp_offset, hparams.attn_temp_pow);
  
+@@ -3486,7 +3612,8 @@ ggml_tensor * llm_graph_context::build_attn(
+         ggml_tensor * sinks,
+         ggml_tensor * v_mla, // TODO: remove
+             float     kq_scale,
+-            int       il) const {
++            int       il,
++        ggml_tensor * q_rows) const {
+     GGML_ASSERT(v_mla == nullptr);
+ 
+     if (inp->self_k_rot[il]) {
+@@ -3531,8 +3658,20 @@ ggml_tensor * llm_graph_context::build_attn(
+         v = mctx_cur->get_v(ctx0, il);
+     }
+ 
+-    const auto & kq_mask = inp->self_attn_mask.raw;
+-    const auto & kv_rows = inp->self_attn_mask.rows;
++    ggml_tensor * kq_mask = inp->self_attn_mask.raw;
++    const auto  & kv_rows = inp->self_attn_mask.rows;
++
++    if (q_rows) {
++        // Slipstream: the queries are only the output rows; keep the matching mask rows (one stream only)
++        GGML_ASSERT(kq_mask->ne[2] == 1 && kq_mask->ne[3] == 1);
++        GGML_ASSERT(q->ne[2] == q_rows->ne[0]);
++        const ggml_type mask_type = kq_mask->type;
++        kq_mask = ggml_get_rows(ctx0, kq_mask, q_rows);
++        if (kq_mask->type != mask_type) {
++            kq_mask = ggml_cast(ctx0, kq_mask, mask_type);
++        }
++        cb(kq_mask, "kq_mask_out_rows", il);
++    }
+ 
+     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il, nullptr, nullptr,
+             mctx_cur->get_k_scale(il), mctx_cur->get_v_scale(il));
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 4a1d497b7..d99ebe2d5 100644
+index 4a1d497b7..0a1387ce0 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -185,6 +185,20 @@ public:
@@ -3210,6 +3243,16 @@ index 4a1d497b7..d99ebe2d5 100644
      ggml_tensor * build_inp_mean() const;
      ggml_tensor * build_inp_cls() const;
      ggml_tensor * build_inp_moe_ids(int64_t n_used, int64_t n_rows) const;
+@@ -1391,7 +1424,8 @@ struct llm_graph_context {
+             ggml_tensor * sinks, // [n_head_q]
+             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v] // TODO: remove
+                   float   kq_scale,
+-                    int   il) const;
++                    int   il,
++            ggml_tensor * q_rows = nullptr) const; // Slipstream: q_cur holds only these ubatch rows (single stream); K/V hold all rows
+ 
+     llm_graph_input_attn_k  * build_attn_inp_k() const;
+ 
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
 index c0166d30b..a5d17d7b6 100644
 --- a/src/llama-kv-cache.cpp
@@ -4463,7 +4506,7 @@ index 177b31451..a330813e6 100644
      res->t_embd = cur;
  
 diff --git a/src/models/models.h b/src/models/models.h
-index 128722e69..2eabb9319 100644
+index 128722e69..d76c3486f 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
 @@ -1661,6 +1661,15 @@ struct llama_model_dflash : public llama_model_base {
@@ -4490,11 +4533,21 @@ index 128722e69..2eabb9319 100644
  struct llama_model_ernie4_5 : public llama_model_base {
      llama_model_ernie4_5(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
+@@ -3210,7 +3220,8 @@ struct llama_model_qwen35moe : public llama_model_base {
+         llm_graph_input_attn_kv * inp_attn,
+                     ggml_tensor * cur,
+                     ggml_tensor * inp_pos,
+-                            int   il);
++                            int   il,
++                    ggml_tensor * q_rows = nullptr);
+ 
+         ggml_tensor * build_layer_attn_linear(
+              llm_graph_input_rs * inp,
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index cf6dd9e74..918d0db82 100644
+index cf6dd9e74..2154764d0 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
-@@ -162,17 +162,38 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
+@@ -162,21 +162,62 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -4524,6 +4577,20 @@ index cf6dd9e74..918d0db82 100644
  
 -    ggml_tensor * inp_pos     = build_inp_pos();
 -    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    // Slipstream: the last layer needs K/V of every row (KV cache) but Q, attention and the output
++    // projection only for the output rows (lossless, default on; PGRN_CROP_Q=0 disables). Read per graph build so a
++    // test can compare both arms in one process (on separate contexts: graph reuse keeps the old graph).
++    const bool crop_q_env = [] {
++        const char * e = getenv("PGRN_CROP_Q");
++        const bool on = e == nullptr || atoi(e) != 0;
++        static bool logged = false;
++        if (!logged) {
++            logged = true;
++            LLAMA_LOG_INFO("%s: PGRN_CROP_Q=%d (last layer attention only for output rows)\n", __func__, on ? 1 : 0);
++        }
++        return on;
++    }();
++
 +    bool range_has_attn = false;
 +    for (int il = il0; il < il1; ++il) {
 +        range_has_attn = range_has_attn || !hparams.is_recr(il);
@@ -4539,7 +4606,34 @@ index cf6dd9e74..918d0db82 100644
          res->t_layer_inp[il] = inpL;
  
          ggml_tensor * inpSA = inpL;
-@@ -221,6 +242,12 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
+ 
++        const bool crop_last = il == n_layer - 1 && crop_before_nextn(inp_out_ids);
++        // one stream (single-sequence ubatch) keeps the KQ mask rows aligned with the ubatch rows; ubatches where
++        // every row is an output (decode, draft verify) keep the plain graph
++        const bool crop_q    = crop_last && crop_q_env && !hparams.is_recr(il) && ubatch.n_seqs_unq == 1 &&
++                               !cparams.training && n_outputs < (int64_t) n_tokens;
++
+         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
+         cb(cur, "attn_norm", il);
+ 
+@@ -188,11 +229,13 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
+             cur = build_layer_attn_linear(inp->get_recr(), cur, il);
+         } else {
+             // Full attention layer
+-            cur = build_layer_attn(inp->get_attn(), cur, inp_pos, il);
++            cur = build_layer_attn(inp->get_attn(), cur, inp_pos, il, crop_q ? inp_out_ids : nullptr);
+         }
+ 
+-        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
+-            cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
++        if (crop_last) {
++            if (!crop_q) {
++                cur = ggml_get_rows(ctx0, cur, inp_out_ids);
++            }
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+ 
+@@ -221,6 +264,12 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
          // Input for next layer
          inpL = cur;
      }
@@ -4552,7 +4646,63 @@ index cf6dd9e74..918d0db82 100644
      cur = inpL;
  
      // post-norm hidden state feeds both the LM head and the MTP seed below
-@@ -468,18 +495,27 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+@@ -274,7 +323,8 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
+         llm_graph_input_attn_kv * inp,
+         ggml_tensor *             cur,
+         ggml_tensor *             inp_pos,
+-        int                       il) {
++        int                       il,
++        ggml_tensor *             q_rows) {
+     const int64_t n_embd_head = hparams.n_embd_head_v();
+     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
+ 
+@@ -321,12 +371,24 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
+     cb(Kcur, "Kcur", il);
+     cb(Vcur, "Vcur", il);
+ 
++    if (q_rows) {
++        // Slipstream: queries and gate only for the output rows (row-wise ops above are unchanged per row)
++        const int64_t n_rows = q_rows->ne[0];
++        Qcur = ggml_reshape_2d(ctx0, Qcur, n_embd_head * n_head, n_tokens);
++        Qcur = ggml_get_rows(ctx0, Qcur, q_rows);
++        Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_rows);
++        cb(Qcur, "Qcur_out_rows", il);
++
++        gate = ggml_get_rows(ctx0, gate, q_rows);
++        cb(gate, "gate_out_rows", il);
++    }
++
+     // Attention computation
+     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
+ 
+     cur = build_attn(inp,
+                 nullptr, nullptr,
+-                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
++                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il, q_rows);
+     cb(cur, "attn_pregate", il);
+ 
+     ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
+@@ -335,7 +397,18 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
+     cur = ggml_mul(ctx0, cur, gate_sigmoid);
+     cb(cur, "attn_gated", il);
+ 
+-    cur = build_lora_mm(model.layers[il].wo, cur);
++    if (q_rows && q_rows->ne[0] > 0) {
++        // Slipstream: the output projection runs with the ubatch's full row count (zero rows elsewhere) so the
++        // matmul takes the same kernel as without the crop -> bitwise identical output rows; then crop.
++        // A ubatch without output rows (inner prefill ubatches) skips it: cur has 0 rows.
++        ggml_tensor * full = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, cur->ne[0], n_tokens), 0.0f);
++        cur = ggml_set_rows(ctx0, full, cur, q_rows);
++        cb(cur, "attn_gated_scatter", il);
++        cur = build_lora_mm(model.layers[il].wo, cur);
++        cur = ggml_get_rows(ctx0, cur, q_rows);
++    } else {
++        cur = build_lora_mm(model.layers[il].wo, cur);
++    }
+     cb(cur, "attn_output", il);
+ 
+     return cur;
+@@ -468,18 +541,27 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
      // Check if this is an MoE layer
      GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
  
@@ -4584,7 +4734,7 @@ index cf6dd9e74..918d0db82 100644
      cb(moe_out, "ffn_moe_out", il);
  
      // Add shared experts if present - following Qwen3Next reference implementation
-@@ -637,18 +673,22 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llm_graph_params & params)
+@@ -637,18 +719,22 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llm_graph_params & params)
      cb(cur, "mtp_attn_post_norm", il);
  
      // MoE FFN — routed experts plus gated shared expert (mirrors qwen35moe).

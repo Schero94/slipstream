@@ -446,3 +446,59 @@ e6 gate051 swap_delta_mb=0
 20261128-080822	srv	label=trace-decay	cache=4	decode_tps=9.77	prompt_n=57	ttft_s=2.2	prefill_tps=25.6	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8237	lm_decodes=0	out=95b22dcdb531	spec=none	env=PGRN_EVICT=decay PGRN_TRACE=/private/tmp/claude-501/-Volumes-Crucial-X10-SLipstream-clone/1fdf0379-7ccd-4bd5-a0f7-1457ad9b5c93/scratchpad/nomtp_traces/code_c4_decay.trace
 20261128-081028	srv	label=trace-decaykf	cache=4	decode_tps=9.71	prompt_n=57	ttft_s=2.2	prefill_tps=26.1	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8237	lm_decodes=0	out=95b22dcdb531	spec=none	env=PGRN_EVICT=decay PGRN_KICKFREE=1 PGRN_TRACE=/private/tmp/claude-501/-Volumes-Crucial-X10-SLipstream-clone/1fdf0379-7ccd-4bd5-a0f7-1457ad9b5c93/scratchpad/nomtp_traces/code_c4_decaykf.trace
 20261128-081356	srv	label=evict-decay-final	cache=4	decode_tps=10.01	prompt_n=57	ttft_s=2.2	prefill_tps=25.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8236	lm_decodes=0	out=95b22dcdb531	spec=none	env=PGRN_EVICT=DECAY
+20261128-082159	label=cropq-off	cache=4	decode_tps=10.71	prefill_tps=21.03	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_CROP_Q=0
+20261128-082333	label=cropq-on	cache=4	decode_tps=10.56	prefill_tps=19.37	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_CROP_Q=1
+20261128-082502	scale	label=cropq0-r1	prompt_n=10020	prompt_s=33.7	lm=1
+20261128-082502	scale	label=cropq0-r1	prompt_n=20020	prompt_s=61.2	lm=1
+20261128-082502	scale	label=cropq0-r1	prompt_n=39019	prompt_s=132.1	lm=1
+20261128-082502	scale_fit	label=cropq0-r1	a=13.0s	linear=67.3s	quadratic=51.8s	quad_share=39%
+20261128-083011	scale	label=cropq1-r1	prompt_n=10020	prompt_s=33.2	lm=1
+20261128-083011	scale	label=cropq1-r1	prompt_n=20020	prompt_s=59.9	lm=1
+20261128-083011	scale	label=cropq1-r1	prompt_n=39019	prompt_s=127.4	lm=1
+20261128-083011	scale_fit	label=cropq1-r1	a=12.6s	linear=68.2s	quadratic=46.6s	quad_share=37%
+20261128-083516	scale	label=cropq0-r2	prompt_n=10020	prompt_s=33.5	lm=1
+20261128-083516	scale	label=cropq0-r2	prompt_n=20020	prompt_s=61.1	lm=1
+20261128-083516	scale	label=cropq0-r2	prompt_n=39019	prompt_s=131.9	lm=1
+20261128-083516	scale_fit	label=cropq0-r2	a=12.5s	linear=68.9s	quadratic=50.5s	quad_share=38%
+20261128-084026	scale	label=cropq1-r2	prompt_n=10020	prompt_s=33.2	lm=1
+20261128-084026	scale	label=cropq1-r2	prompt_n=20020	prompt_s=59.9	lm=1
+20261128-084026	scale	label=cropq1-r2	prompt_n=39019	prompt_s=127.5	lm=1
+20261128-084026	scale_fit	label=cropq1-r2	a=12.7s	linear=68.2s	quadratic=46.6s	quad_share=37%
+20261128-084726	label=cropq-final-def	cache=4	decode_tps=10.70	prefill_tps=21.05	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=
+20261128-084900	label=cropq-final-off	cache=4	decode_tps=10.64	prefill_tps=21.14	hit=69.01	la_recall=82.87	swap_delta_mb=0	out=e6c6a36552db	env=PGRN_CROP_Q=0
+20261128-085033	e4	label=cropq-def-lm	S1_prompt_n=39517	S1_ttft_s=131.5	B_prompt_n=23	S2_prompt_n=33	S2_cache_n=39476	S2_ttft_s=2.0	S1_out=a9f8c4863784	S2_out=c4062b92a557
+e4 cropq-def-lm peak_rss_mb=10472 swap_delta_mb=0
+20261128-085423	e6	label=cropq-def	C1_prompt_n=37407	C1_ttft_s=129.7	C2_prompt_n=26	C2_cache_n=4406	C2_ttft_s=1.6	C3_prompt_n=4432	C3_cache_n=0	C3_ttft_s=22.0	C1_out=fc14398b032c	C2_out=86b8ff31ee95	C3_out=86b8ff31ee95
+e6 cropq-def swap_delta_mb=0
+20261128-085857	scale	label=cropqF0-r1	prompt_n=10020	prompt_s=33.6	lm=1
+20261128-085857	scale	label=cropqF0-r1	prompt_n=20020	prompt_s=61.1	lm=1
+20261128-085857	scale	label=cropqF0-r1	prompt_n=39019	prompt_s=132.0	lm=1
+20261128-085857	scale_fit	label=cropqF0-r1	a=12.7s	linear=68.0s	quadratic=51.3s	quad_share=39%
+20261128-090407	scale	label=cropqF1-r1	prompt_n=10020	prompt_s=33.2	lm=1
+20261128-090407	scale	label=cropqF1-r1	prompt_n=20020	prompt_s=59.8	lm=1
+20261128-090407	scale	label=cropqF1-r1	prompt_n=39019	prompt_s=127.4	lm=1
+20261128-090407	scale_fit	label=cropqF1-r1	a=12.6s	linear=68.0s	quadratic=46.7s	quad_share=37%
+20261128-090911	scale	label=cropqF0-r2	prompt_n=10020	prompt_s=33.5	lm=1
+20261128-090911	scale	label=cropqF0-r2	prompt_n=20020	prompt_s=63.6	lm=1
+20261128-090911	scale	label=cropqF0-r2	prompt_n=39019	prompt_s=151.7	lm=1
+20261128-090911	scale_fit	label=cropqF0-r2	a=14.6s	linear=52.0s	quadratic=85.2s	quad_share=56%
+20261128-091444	scale	label=cropqF1-r2	prompt_n=10020	prompt_s=33.4	lm=1
+20261128-091444	scale	label=cropqF1-r2	prompt_n=20020	prompt_s=64.8	lm=1
+20261128-091444	scale	label=cropqF1-r2	prompt_n=39019	prompt_s=143.4	lm=1
+20261128-091444	scale_fit	label=cropqF1-r2	a=8.8s	linear=82.4s	quadratic=52.2s	quad_share=36%
+20261128-092041	scale	label=cropqF1-r3	prompt_n=10020	prompt_s=34.4	lm=1
+20261128-092041	scale	label=cropqF1-r3	prompt_n=20020	prompt_s=63.2	lm=1
+20261128-092041	scale	label=cropqF1-r3	prompt_n=39019	prompt_s=143.5	lm=1
+20261128-092041	scale_fit	label=cropqF1-r3	a=14.9s	linear=57.8s	quadratic=70.9s	quad_share=49%
+20261128-092612	scale	label=cropqF0-r3	prompt_n=10020	prompt_s=33.5	lm=1
+20261128-092612	scale	label=cropqF0-r3	prompt_n=20020	prompt_s=61.2	lm=1
+20261128-092612	scale	label=cropqF0-r3	prompt_n=39019	prompt_s=131.9	lm=1
+20261128-092612	scale_fit	label=cropqF0-r3	a=12.4s	linear=69.4s	quadratic=50.0s	quad_share=38%
+20261128-093128	scale	label=cropqF1-r4	prompt_n=10020	prompt_s=33.2	lm=1
+20261128-093128	scale	label=cropqF1-r4	prompt_n=20020	prompt_s=59.8	lm=1
+20261128-093128	scale	label=cropqF1-r4	prompt_n=39019	prompt_s=136.2	lm=1
+20261128-093128	scale_fit	label=cropqF1-r4	a=15.9s	linear=49.2s	quadratic=71.0s	quad_share=52%
+20261128-093641	scale	label=cropqF0-r4	prompt_n=10020	prompt_s=34.8	lm=1
+20261128-093641	scale	label=cropqF0-r4	prompt_n=20020	prompt_s=65.8	lm=1
+20261128-093641	scale	label=cropqF0-r4	prompt_n=39019	prompt_s=152.2	lm=1
+20261128-093641	scale_fit	label=cropqF0-r4	a=13.7s	linear=62.7s	quadratic=75.8s	quad_share=50%
