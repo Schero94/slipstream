@@ -528,3 +528,5 @@ e4 gate052b peak_rss_mb=10473 swap_delta_mb=0
 20261128-110105	e6	label=gate052b	C1_prompt_n=37407	C1_ttft_s=130.0	C2_prompt_n=26	C2_cache_n=4406	C2_ttft_s=1.4	C3_prompt_n=4432	C3_cache_n=0	C3_ttft_s=21.5	C1_out=fc14398b032c	C2_out=86b8ff31ee95	C3_out=86b8ff31ee95
 e6 gate052b swap_delta_mb=0
 20261128-110507	e5	label=gate052b	S1_prompt_n=39517	S1_ttft_s=131.2	S1_out=a9f8c4863784	save_wall_s=0.21	save_ms=206	saved_tokens=39564	file_mb=1026	restore_wall_s=0.19	restored_tokens=39564	S2_prompt_n=33	S2_cache_n=39476	S2_ttft_s=2.2	S2_out=c4062b92a557	swap_delta_mb=0
+20261128-111441	srv	label=bundle052-default-layermajor	cache=4	decode_tps=10.88	prompt_n=57	ttft_s=2.3	prefill_tps=25.0	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8959	lm_decodes=0	out=38b5b06864f1	spec=none	env=PGRN_LAYER_MAJOR=1 PGRN_EVICT=decay
+20261128-111627	srv	label=bundle052-layermajor-off	cache=4	decode_tps=11.04	prompt_n=57	ttft_s=2.2	prefill_tps=26.2	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8957	lm_decodes=0	out=38b5b06864f1	spec=none	env=PGRN_EVICT=decay

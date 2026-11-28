@@ -41,4 +41,43 @@ Answers are bit-for-bit the same as before.
 
 ## Validation
 
-VALIDATION_PLACEHOLDER
+- Engine: 14/14 peregrine tests on the shipped build. The shipped llama-server was built at
+  10:57:24, after the last source change (10:00:44). pgrn-convert (04:21:17, unchanged since 0.5.1)
+  is newer than all of its own sources (04:01:35), so it was not rebuilt. Both only use macOS system
+  libraries. A fresh `apply.sh` reproduces the engine source exactly (upstream `8e23278c7c36` +
+  Slipstream files + patch). The release gate in `bench/RESULTS.md` ran on this same llama-server
+  file: the first 39k-token agent prompt took 131.5 s (0.5.1: 135.9 s), a new agent conversation
+  after a side request started in 1.4 s, a restart restored the saved context in 0.19 s, and the
+  answers match the earlier runs (hashes `a9f8c4863784` / `86b8ff31ee95` / `c4062b92a557`). Forced
+  tool calls still pick the requested tool.
+- 183/183 Rust workspace tests, 108/108 Tauri tests, 44/44 Python tests, 7/7 UI contracts,
+  headless asset check PASS.
+- DMG checksum valid. The mounted app passes `codesign --verify --deep --strict` (ad-hoc
+  signature, not notarized) and reports 0.5.2. It contains 476 resource files, all 16 runtime
+  components, no Python bytecode cache and no Ollama payload. All five programs inside are
+  arm64 (Apple Silicon), and llama-server only uses macOS system libraries.
+- We started the bundled llama-server straight from the mounted DMG with the app's flags
+  (4 GiB cache, so the app also switches on the smarter cache, `PGRN_EVICT=decay`) and gave it
+  the short reference prompt. With Fast prompt reading (the default) it writes 10.9 tokens/s, and
+  11.0 tokens/s with it switched off. Both give the reference output (hash `38b5b06864f1`, the
+  same as 0.5.1, 0.5.0 and 0.4.1), with 0 MB swap. This is a quick check that the shipped program
+  works, one run each, not a speed benchmark (the speed table above comes from the benchmark runs).
+  The app opens from the DMG and quits cleanly: ports 8080/8081 stay free and no server process
+  is left running.
+- The zip unpacks to an app that is byte-identical to the one in the DMG, and its signature
+  checks out.
+
+## Release artifacts
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `Slipstream_0.5.2_aarch64.dmg` | 70,106,602 | `b57d869832186a8268f2f8511a5eafa5c9b82a249e381a9f7b95e6a4c87a710d` |
+| `Slipstream_0.5.2_aarch64.zip` | 68,567,547 | `6446025a3ae5260b2d7bc1b62546506ed445f8876dcbf0e87a3eb59a4ab000ef` |
+| `slipstream-node_0.5.2_macos_aarch64.tar.gz` | 5,448,988 | `e253b6ca8d9db2027ef398e3c82e1d107a818b4fe3b24924f736606254a5e50b` |
+
+The node archive reports 0.5.2. It contains the arm64 binary, launchd/systemd/Docker templates,
+the deploy README and the community mesh guide, laid out exactly like 0.5.1. The Docker image
+has not been rebuilt.
+
+The app is ad-hoc signed and **not notarized**. The first time you open it, right-click the app
+and choose Open, or run `xattr -dr com.apple.quarantine Slipstream.app`.

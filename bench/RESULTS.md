@@ -4281,3 +4281,27 @@ and not negative.
   0.19 s, S2 2.2 s, c4062b92a557. tool_choice smoke unchanged. Swap 0 MB everywhere.
 - An earlier gate (gate052, binary 08:47 with the unpadded crop) also passed on text hashes; the
   unpadded version was not bitwise at real shapes (see crop-Q entry) and is not shipped.
+
+## 0.5.2 release artifacts — bundle verification — 2026-11-28
+
+- Engine: build-static llama-server 10:57:24 > newest source 10:00:44 (src/tools/common/include/ggml/src,
+  src/models/qwen35moe.cpp); llama-pgrn-convert 04:21:17 > all its sources (tools/pgrn-convert 04:01:35; links only
+  ggml, newest ggml source 04:01:35, libs 04:02) → not rebuilt, sha unchanged from 0.5.1. `make -n` on build-static
+  shows nothing to rebuild for llama-server, pgrn-convert or the 14 test-peregrine binaries. engine_sync --verify PASS.
+  llama-server sha256 88f31072229a…, pgrn-convert ed0223ee7aeb…; otool -L system frameworks/usr/lib only (CoreML/
+  Metal/MetalKit/Accelerate/Foundation/CoreFoundation, same set as 0.5.1). ctest -R peregrine 14/14 on this build.
+  The 0.5.2 gate (gate052b, 10:57–11:05) ran on this same llama-server file.
+- Bundled-engine smoke from the mounted DMG (run_arm_server.sh, BIN=/Volumes/Slipstream/…/llama-server,
+  SPEC_ARGS=" ", CTX=40960, --cache-ram 2048 -fa on --jinja --no-warmup --metrics, 4 GiB, PGRN_EVICT=decay in both
+  arms (the app sets it at 4 GiB: 4 < 0.45 × 18.75 GiB), prompt_code.txt, 160 tokens greedy, Qwen3.6-35B-A3B Q4 from
+  ~/Modelle): default (PGRN_LAYER_MAJOR=1, -b 40960 -ub 2048) 10.88 tok/s · layer-major off (-ub 4096) 11.04 tok/s ·
+  both out=38b5b06864f1 (= bundle051/050/041) · swap Δ 0 MB · peak RSS 8.96 GB. lm_decodes 0 (57-token prompt).
+  Single rep per arm (smoke, not an A/B).
+- DMG: hdiutil verify VALID; mounted codesign --deep --strict OK (adhoc,runtime); 0.5.2; 476 resource files;
+  16/16 runtime components; 0 __pycache__/.pyc; 0 Ollama; 5 Mach-O all arm64. MLX parts (omlx/, uv 0.11.10,
+  libpgrn_host.dylib) staged from the v0.5.1 release zip (sha cf9bc9bf… verified), overlays applied, pycache removed,
+  test_staged_resources_complete.py 4/4.
+- App launch from DMG + osascript quit: quit in < 1 s, ports 8080/8081 free, no llama-server left.
+- Zip (ditto -c -k --sequesterRsrc --keepParent from the mounted app): unpacks byte-identical to the DMG app (diff -r),
+  codesign OK. Node tarball: slipstream-node 0.5.2 arm64, same layout as 0.5.1.
+- Tests: workspace 183/183, Tauri 108/108, Python 44/44 (+2 subtests), UI contracts 7/7, headless assets PASS.
