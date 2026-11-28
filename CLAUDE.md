@@ -55,6 +55,10 @@ Never edit files while a build is compiling them (it produces mixed binaries).
   layer L+1's router on layer L's MoE input,
   top-(k+m) prefetched during layer L compute. Lossless. Read at the existing top-k
   sync, so it adds no GPU sync point.
+- `PGRN_EVICT=lp|decay[:H]` — cache eviction experiment (opt-in): `lp` pins experts a lookahead
+  kick requested until the layer's next batch; `decay` = lowest decayed use count (half-life H
+  ubatches, default 16) + lp. Lossless. `PGRN_TRACE=<path>` writes a cache trace for
+  `bench/fetchwall/sim_eviction.py`.
 - `PGRN_STEER=<bonus>` — cache-steered routing (Cache-Prior arXiv 2412.00099 / CECAR
   2611.20119 / PSR 2610.34721): bonus on resident experts' *selection* probability,
   mask snapshotted at ubatch start (deterministic); mixing weights stay unbiased. Lossy.
@@ -101,6 +105,9 @@ the current state, understandable for a non-expert. A change is not done until t
 - Never commit models (`*.gguf`, `*.pgrn`), binaries, or `llama.cpp-slipstream/`.
 
 ## Lessons
+- The app runs streamed models with lookahead and WITHOUT MTP. `bench/fetchwall/run_arm_server.sh`
+  enabled MTP (draft 4) by default until 2026-11-28 — check the speculative flags of any harness
+  against `app/src-tauri/src/main.rs` before calling a run "app regime".
 
 - After a release merge, switch back to `feat/fetch-wall` immediately; check
   `git branch --show-current` before every commit (2026-11-26: 12 commits landed on local `main`).
