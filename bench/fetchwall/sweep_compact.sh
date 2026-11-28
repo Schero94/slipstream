@@ -11,7 +11,7 @@ done
 for rep in 1 2; do
   SPEC_ARGS=" " ./run_arm_server.sh none-la0 4 PGRN_LOOKAHEAD=0;                                        sleep 25
   SPEC_ARGS=" " ./run_arm_server.sh none-la0par 4 PGRN_LOOKAHEAD=0 PGRN_COMPACT_PAR=1;                  sleep 25
-  ./run_arm_server.sh mtp-la0 4 PGRN_LOOKAHEAD=0;                                                       sleep 25
-  ./run_arm_server.sh mtp-la0batch 4 PGRN_LOOKAHEAD=0 PGRN_COMPACT_BATCH=1 PGRN_COMPACT_PAR=1;          sleep 25
+  SPEC_ARGS="--spec-type draft-mtp --spec-draft-n-max 4" ./run_arm_server.sh mtp-la0 4 PGRN_LOOKAHEAD=0;                                                       sleep 25
+  SPEC_ARGS="--spec-type draft-mtp --spec-draft-n-max 4" ./run_arm_server.sh mtp-la0batch 4 PGRN_LOOKAHEAD=0 PGRN_COMPACT_BATCH=1 PGRN_COMPACT_PAR=1;          sleep 25
 done
 echo COMPACT_DONE

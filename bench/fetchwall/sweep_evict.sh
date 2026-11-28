@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # A/B of the PGRN_EVICT eviction experiment in the app regime (run_arm_server.sh:
-# llama-server, MTP draft 4, compact slots, io 8, lookahead on), interleaved arms,
+# llama-server, no MTP (as the app), compact slots, io 8, lookahead on), interleaved arms,
 # REPS reps per cache size, 25 s cooldown. Same binary for every arm.
 # usage: scripts/heavy.sh bench/fetchwall/sweep_evict.sh   (env: REPS, CACHES, ARMS, NTOK)
 set -uo pipefail

@@ -16,5 +16,5 @@ BIN=$OLD/llama-completion ./run_arm.sh oldpin-la0 10 PGRN_LOOKAHEAD=0; sleep 25
 ./run_arm.sh newpin-la0 10 PGRN_LOOKAHEAD=0; sleep 25
 BIN=$OLD/llama-server SPEC_ARGS=" " ./run_arm_server.sh oldpin-turbo2 4 PGRN_LOOKAHEAD=0 PGRN_STEER=0.02; sleep 25
 SPEC_ARGS=" " ./run_arm_server.sh newpin-turbo2 4 PGRN_LOOKAHEAD=0 PGRN_STEER=0.02; sleep 25
-./run_arm_server.sh newpin-mtpbase 4
+SPEC_ARGS="--spec-type draft-mtp --spec-draft-n-max 4" ./run_arm_server.sh newpin-mtpbase 4
 echo NEWPIN_DONE

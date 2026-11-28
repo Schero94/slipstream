@@ -32,9 +32,10 @@ Never edit files while a build is compiling them (it produces mixed binaries).
 - A/B = same binary, same model, same cache, one variable; interleave arms
   (A,B,A,B…), ≥2 reps, ≥25 s cooldown. Use `bench/fetchwall/run_arm.sh` (skill
   `bench-ab`).
-- Measure in the regime the app actually runs: llama-server with the app's flags incl.
-  MTP speculation (`bench/fetchwall/run_arm_server.sh`), not only llama-completion
-  (single-token decode hid a lookahead bug that only appears with multi-token verify).
+- Measure in the regime the app actually runs: llama-server with the app's flags
+  (`bench/fetchwall/run_arm_server.sh`; default = streamed app regime, lookahead on, NO MTP;
+  `SPEC_ARGS="--spec-type draft-mtp --spec-draft-n-max 4"` for the MTP regime), not only
+  llama-completion (single-token decode hid a lookahead bug that only appears with multi-token verify).
 - Measure in the regime a feature targets: cache band {4,6,8,10,14} GiB, PGRN on
   **internal NVMe** (`~/Modelle/...`). **Both GGUF and PGRN must be loaded from the internal SSD** (user rule) — copy from `/Volumes/Crucial X10/Modelle` first, never load from the external drive.
 - Shippable only if: consistent win · **0 MB swap growth** · parity:
@@ -106,7 +107,7 @@ the current state, understandable for a non-expert. A change is not done until t
 
 ## Lessons
 - The app runs streamed models with lookahead and WITHOUT MTP. `bench/fetchwall/run_arm_server.sh`
-  enabled MTP (draft 4) by default until 2026-11-28 — check the speculative flags of any harness
+  enabled MTP (draft 4) by default until 2026-11-28 (now no MTP by default) — check the speculative flags of any harness
   against `app/src-tauri/src/main.rs` before calling a run "app regime".
 
 - After a release merge, switch back to `feat/fetch-wall` immediately; check

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Record PGRN cache-event traces (PGRN_TRACE) for the offline eviction replay
-# (bench/fetchwall/sim_eviction.py). App regime via run_arm_server.sh (MTP draft 4,
+# (bench/fetchwall/sim_eviction.py). App regime via run_arm_server.sh (no MTP as the app,
 # compact slots, io 8, lookahead default on), greedy, 1000 decode tokens.
 # usage: scripts/heavy.sh bench/fetchwall/trace_eviction.sh OUTDIR
 set -uo pipefail
