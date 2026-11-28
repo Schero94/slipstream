@@ -187,3 +187,13 @@ Total ~32–43 dev-days; critical path M0 → M1 → M2 → M4 → M6 (M3 parall
 Out of scope for v0.6: always-on proxy with automatic local/remote fallback, NAT traversal
 (an overlay like Tailscale works via the manual address), headless model spawning, `--parallel 2`
 by default.
+
+## Decision 2026-11-28 (user): release without the real two-Mac test
+
+The user has no second Mac. M6 is replaced by: (1) single-Mac qualification with two app/node
+instances (real model, pairing, streaming, cancel, simulated sleep, chaos), (2) a fresh security
+review of all v0.6 code against §8, (3) "Your Macs" ships marked **experimental — not yet tested
+between two real Macs** in the app (EN/DE badge + note), release notes, README and website, listing
+what is untested (macOS Local Network prompt with the bundle, real Wi-Fi incl. AP isolation,
+real sleep/wake/WoL, Wi-Fi↔Ethernet roaming), with a request for feedback from users who have two
+Macs. Then the complete v0.6.0 release (dmg + zip + node, verified).
