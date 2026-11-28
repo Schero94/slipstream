@@ -254,6 +254,18 @@
   </div>
 </section>
 
+<section id="your-macs" style="padding-top:12px;padding-bottom:28px">
+  <div class="wrap rv" style="padding:24px;border:1px dashed rgba(255,157,47,.55);border-radius:16px;background:linear-gradient(135deg,rgba(255,157,47,.07),transparent)">
+    <div class="eyebrow">Coming in v0.6 · <span class="amber">experimental</span></div>
+    <h2 style="font-size:clamp(22px,2.6vw,30px);margin-top:10px">Use the model on your other Mac.</h2>
+    <p class="muted" style="margin:12px 0 0;max-width:72ch">Your MacBook's editor can use the model running on a bigger Mac in the same network (a Mac Studio or Mac mini). The editor keeps <span style="font-family:var(--mono);color:var(--cyan)">127.0.0.1:8080</span>; the answers come from the other Mac. On the big Mac you click "Share this Mac" and get a 6-digit code; on the MacBook you click "Find my Macs" and type it. Only Macs paired with the code can connect, traffic between them is encrypted, and nothing goes to the internet. The big Mac processes your prompts, so whoever administers it could see them.</p>
+    <p class="muted" style="margin:10px 0 0;max-width:72ch">Tested with the real model and two instances on one Mac: identical answers and tool calls, live progress for a 39k-token agent prompt, the stop button reaches the big Mac within 0.1 s, a frozen big Mac is reported to the editor after ~9 s, and no measurable speed cost (first word +10 ms on average, 13.7 tok/s both ways).</p>
+    <p class="muted" style="margin:10px 0 0;max-width:72ch"><b class="amber">Experimental:</b> tested on one Mac with two instances. Not yet tested between two real Macs (the macOS network permission prompt, real Wi-Fi, sleep/wake). If you have two Macs, please <a href="https://github.com/Schero94/slipstream/issues" target="_blank" rel="noopener" style="color:var(--cyan)">tell us how it works for you</a>. <a href="https://github.com/Schero94/slipstream/blob/main/docs/USE_YOUR_OTHER_MAC.md" target="_blank" rel="noopener" style="color:var(--cyan)">How to use it →</a></p>
+    <img src="screenshots/your-macs-experimental.png" alt="Slipstream app: the Your Macs tab with the Experimental badge, using the model of a Mac Studio (demo data)" style="max-width:100%;border-radius:14px;border:1px solid var(--line2);margin-top:16px" loading="lazy" />
+    <p class="muted" style="font-size:13px;margin-top:6px">The "Your Macs" tab on a MacBook using a Mac Studio's model. (UI with demo data.)</p>
+  </div>
+</section>
+
 <section style="padding-top:12px;padding-bottom:28px">
   <div class="wrap rv" style="text-align:center">
     <img src="screenshots/connect-editor.png" alt="Slipstream app: the model is running and Kilo Code or OpenCode connect with one click" style="max-width:100%;border-radius:14px;border:1px solid var(--line2)" loading="lazy" />
@@ -426,6 +438,22 @@
   </div>
 </section>
 
+<section id="more-ram" style="padding-top:40px;padding-bottom:40px">
+  <div class="wrap rv">
+    <div class="eyebrow">A short story about RAM</div>
+    <blockquote style="margin:16px 0 0;max-width:72ch;font-size:clamp(17px,2vw,21px);line-height:1.5">“From a global allocation perspective, actually, it's quite terrible to have everybody have a bunch of the world's limited supply of DRAM sitting in their own computer…”
+      <footer class="muted" style="font-size:14px;margin-top:6px">— Sam Altman on the Cheeky Pint podcast, <a href="https://www.xda-developers.com/sam-altman-says-its-quite-terrible-that-people-have-ram-in-their-pcs-during-a-shortage/" target="_blank" rel="noopener" style="color:var(--cyan)">via XDA Developers</a></footer>
+    </blockquote>
+    <blockquote style="margin:18px 0 0;max-width:72ch;font-size:clamp(17px,2vw,21px);line-height:1.5">Weeks later: “I want to be clear, I want people to have a lot of RAM.”
+      <footer class="muted" style="font-size:14px;margin-top:6px">— Sam Altman, <a href="https://www.pcgamer.com/hardware/memory/i-want-to-be-clear-i-want-people-to-have-a-lot-of-ram-says-sam-altman-weeks-after-seeming-to-say-the-opposite/" target="_blank" rel="noopener" style="color:var(--cyan)">via PC Gamer</a></footer>
+    </blockquote>
+    <p style="margin:22px 0 0;max-width:72ch;font-size:clamp(18px,2.2vw,24px)"><b>We picked the second one.</b> Slipstream runs models that are bigger than your RAM — so the RAM you already have is enough.</p>
+    <p class="muted" style="margin:8px 0 0">Price: free. RAM is the expensive part.</p>
+    <img src="screenshots/share-card.png" alt="Slipstream share card: Groot-19B-A3B at 17.6 tok/s on a 36 GB Mac, swap 0 MB, 78 % expert cache hits, #DownloadMoreRAM (demo data)" style="max-width:min(100%,600px);border-radius:14px;border:1px solid var(--line2);margin-top:18px" loading="lazy" />
+    <p class="muted" style="font-size:13px;margin-top:6px">New in v0.6: the app's Live tab makes this card from your own current numbers, on your Mac — nothing is uploaded. (Shown with demo data: Groot-19B-A3B at a 4 GiB cache on a 36 GB M3 Pro, the speed measured in our benchmarks.)</p>
+  </div>
+</section>
+
 <section id="download">
   <div class="wrap">
     <div class="dl rv">
@@ -433,9 +461,10 @@
       <h2 style="font-size:clamp(28px,4.3vw,44px);margin-top:14px">A 480B coding model.<br/>On your MacBook.</h2>
       <p class="muted" style="max-width:46ch;margin:18px auto 0">The engine is bundled inside the app. Download, drag to Applications, open. Point your coding assistant at localhost and go.</p>
       <div class="cta-row" style="margin-top:30px">
-        <a class="btn btn-primary" href="https://github.com/Schero94/slipstream/releases/latest" target="_blank" rel="noopener">↓ Download the .dmg</a>
+        <a class="btn btn-primary" href="https://github.com/Schero94/slipstream/releases/latest" target="_blank" rel="noopener">⬇ Download more RAM</a>
         <a class="btn btn-ghost" href="https://github.com/Schero94/slipstream" target="_blank" rel="noopener">Read the docs</a>
       </div>
+      <p class="muted" style="font-size:13px;margin-top:10px">Not really. But a 35B model on a 16 GB Mac comes close.</p>
       <div class="steps">
         <div class="step"><b>01</b><p>Drag <b>Slipstream.app</b> to Applications. First launch: right-click → Open (not yet notarized).</p></div>
         <div class="step"><b>02</b><p>Open it. It detects your Mac and proposes settings for it. Pick a model, click Start.</p></div>

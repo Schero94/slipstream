@@ -8,6 +8,7 @@ Real, reproducible numbers on a **36 GB Apple-Silicon Mac**. This is an evidence
 - A **118B MoE** (Laguna S 2.1) that does **not fit in 36 GB RAM** runs at **~2.8 tok/s** — from 0.72 before optimization (**3.9×**).
 - The single biggest lever was **storage placement**, not a clever kernel.
 - **Coding agents (v0.5.0):** a 40k-token agent prompt is read once. Cold first prompt 137 s; a new conversation with the same agent setup 2.1 s; the first request after an app restart 2.2 s; next turn 0.8 s — all with answers identical to a fresh read (see "Agent prompts" below).
+- **Use your other Mac (v0.6, experimental):** a MacBook's editor can use a bigger Mac's model. Tested with the real model and two instances on **one** Mac: identical answers and tool calls, first word +10 ms on average (inside the model's ±50 ms jitter), 13.7 tok/s both ways, stop reaches the big Mac within 0.1 s. Not yet tested between two real Macs (Wi-Fi, permission prompt, sleep/wake) — see [`docs/USE_YOUR_OTHER_MAC.md`](docs/USE_YOUR_OTHER_MAC.md).
 - The engine now also **streams correctly on Linux/CPU** — same tokens as resident, 487 vs 853 MiB. Correctness only; no tuned Linux numbers, CUDA untested.
 
 ---

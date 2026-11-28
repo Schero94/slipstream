@@ -22,13 +22,17 @@ from urllib.request import Request, urlopen
 
 HARNESS_SCHEMA = 1
 
+# Optional `Authorization: Bearer <key>` for every request (--api-key / --api-key-file): a
+# Slipstream "Your Macs" forwarder requires this install's local token (llama-server ignores it).
+_AUTH_HEADERS: dict[str, str] = {}
+
 
 def _url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}{path}"
 
 
 def _request_json(base_url: str, path: str, timeout: float) -> dict[str, Any]:
-    request = Request(_url(base_url, path), headers={"Accept": "application/json"})
+    request = Request(_url(base_url, path), headers={"Accept": "application/json", **_AUTH_HEADERS})
     with urlopen(request, timeout=timeout) as response:
         return json.loads(response.read())
 
@@ -230,7 +234,7 @@ def run_case(
         _url(base_url, "/v1/chat/completions"),
         data=raw_body,
         method="POST",
-        headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+        headers={"Content-Type": "application/json", "Accept": "text/event-stream", **_AUTH_HEADERS},
     )
     started = time.perf_counter()
     first_signal: float | None = None
@@ -422,9 +426,14 @@ def main() -> int:
     parser.add_argument("--max-chunk-gap", type=float, default=5.0)
     parser.add_argument("--pid", type=int)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--api-key", help="sent as Authorization: Bearer (never written to the output)")
+    parser.add_argument("--api-key-file", type=Path, help="read the API key from this file")
     args = parser.parse_args()
     if args.repetitions < 1:
         parser.error("--repetitions must be >= 1")
+    key = args.api_key or (args.api_key_file.read_text().strip() if args.api_key_file else "")
+    if key:
+        _AUTH_HEADERS["Authorization"] = f"Bearer {key}"
 
     started = datetime.now(timezone.utc).isoformat()
     probe = probe_endpoints(args.base_url, min(args.timeout, 10.0))

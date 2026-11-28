@@ -4824,3 +4824,59 @@ Decisions:
 - Open for **M6** (needs a second real Mac): WoL actually waking a sleeping Mac (Ethernet vs Wi-Fi / Sleep Proxy, "Wake for network
   access"), real sleep mid-request on Wi-Fi, roaming/VPN, battery + caffeinate on a real MacBook/big Mac, two real MacBooks, Local Network
   prompts with the bundle, a real Kilo/OpenCode re-patch session, the version message against a real older build.
+
+## v0.6 single-Mac qualification — real engine, two instances on one Mac, pairing + forwarder end to end — all checks (a)–(g) PASS; NOT a two-Mac test — 2026-11-28
+
+Why: the user has no second Mac, so M6 (real two-Mac qualification) is replaced by this run plus an "experimental" label (plan,
+decision 2026-11-28). Harness `bench/forward/run_v06_qual.sh` + `bench/forward/v06_qual.py` (new; `m1_real.py` got an optional
+auth header, `app/scripts/qualify_openai_stream.py` got `--api-key/--api-key-file`). Raw log
+`bench/forward/results/20261128-173108-v06qual.txt`, artifacts in `…-v06qual/` (fidelity `.sse`, long-prompt progress JSON, perf TSV,
+qualify JSON, share/use logs with PeerIds blanked, llama abort lines). Host M3 Pro 36 GB (Mac15,6), macOS 27.0.1, base cacc696 + this
+change; `slipstream-node` release build 17:27:25 (newer than every p2p source); llama-server build-static 10:57:24 (the 48 engine files
+with a newer mtime are byte-identical to the built tree, checked with `cmp`; no engine/patch commit since).
+
+Setup (all on this Mac, separate processes, separate data dirs, no mDNS, no shaper → loopback QUIC):
+- **big-Mac role:** llama-server on 127.0.0.1:18080, Groot-19B-A3B Q4_K_M from ~/Modelle, the app's streamed regime for a 36 GB Mac:
+  cache 4 GiB, ctx 40960, `-b 40960 -ub 2048`, `PGRN_LAYER_MAJOR=1`, `PGRN_EVICT=decay`, lookahead default, **no MTP**,
+  `--pgrn-io-threads 8 --pgrn-compact-slots --gpu-layers 99 --parallel 1 -fa on --jinja --cache-ram 2048 --metrics --slot-save-path
+  --reasoning off --temp 0`, inside scripts/heavy.sh (one model process) + `slipstream-node share` (data dir `big/`, QUIC 127.0.0.1:19103,
+  `--no-announce`).
+- **MacBook role:** `slipstream-node use --http 127.0.0.1:28080 --token-file book/local.token --no-discovery` (data dir `book/`).
+- Paired first with the 6-digit code (`pair --show-code` / `pair --peer <addr> --code`): client process 306 ms incl. process start.
+- The token file was created by the **app's real Connect-editor patch** (`patch_kilo_config`, new ignored helper test
+  `editor_patch_qualification::qual_patch_writes_the_local_token`, run with `SLIPSTREAM_P2P_DIR=book/`, HOME redirected) before `use`
+  started; every request below carries `Authorization: Bearer <that token>` (llama-server ignores it on the direct arm).
+- Forwarder guard check: no token → 401, token → 200, `POST /slots/0?action=save` → 403.
+
+| Check | Result | Verdict |
+|---|---|---|
+| (a) OpenAI chat stream identical to direct (per-event `choices`; ids/timestamps ignored), greedy seed 1, 160 tok, 2 reps × 2 arms | plain `fe79d90a249f`, strict JSON `5690849efb44` — 4/4 identical each, and the **same hashes as the M1 run** (14 h earlier, older p2p code) | PASS |
+| (b) tool call + forced tool_choice | named `add` → `add {"a":19,"b":23}` `d75a05f199e8`; `auto` and `required` → `list_dir {"path":"src"}` `c8ab802c9d9a`; finish `tool_calls`; 4/4 identical each | PASS |
+| (c) long agent prompt `bench/fetchwall/prompt_30k.txt` (39,515 tokens, `/v1/completions`, `return_progress`, cache_prompt off), direct then forwarded | direct: 324 SSE `prompt_progress` events, prompt 130.0 s; **forwarded: 322 progress events (first at 0.04 s, 102 tokens at 0.36 s, … 39,515 at 122.6 s), prompt 122.5 s**; `/slots` polled every 2 s *through the forwarder*: 62 samples while processing (921 → 1,873 → … tokens, phase `prompt` then `generating`, no prompt text); generated text identical | PASS. The 7.5 s difference is run order (the forwarded run came second with a warmer expert cache/SSD), single rep each — not a forwarder speed-up |
+| (d) cancel mid-prefill (15.5k-token prompt, editor closes after 6 s), 3 reps | every rep: `layer-major prefill aborted at layer 7/40, ubatch 3–4` + `slot prompt_abort … n_prompt = 15524–15526, t = 6.03–6.13 s`; engine abort **0.002 / 0.057 / 0.103 s** after the server saw the cancel; share side dropped llama-server 0.01 ms after the Cancel frame; `/slots` through the forwarder during prefill showed `processed 2460–2511 / total` | PASS |
+| (e) SIGSTOP of the `share` process after 20 events of a 400-token stream (= big Mac asleep) | editor stream ended **9.28 s** after the stop with the documented SSE event `{"error":{"code":502,"message":"The other Mac stopped answering.","slipstream_code":"peer_lost",…}}` + terminating chunk; a new request while stopped → **503 `peer_waking`** after 2.00 s ("Qual Studio is not answering right now; Slipstream is trying to wake it…"); after SIGCONT `/health` 200 at the first poll (< 0.1 s; use log `Reconnecting → Connected`); the share side then dropped the frozen upstream (`cancelled after_ms=14537`, llama `cancel of id_task … flagged`); next request 200, text identical to direct | PASS |
+| (f) first-token overhead (cached prompt, 4 tokens, N=20 pairs, alternating order, 1 s pause) | direct median 195.3 ms / mean 175.4 ms, forwarded median 190.6 / mean 185.9 ms; paired delta **+10.5 ms (95 % CI −14.1…+35.2 ms)**, sd 52.7 ms per pair | PASS vs < 50 ms; engine TTFT jitter (sd 53 ms) hides the transport cost, as in M1 (mock: +0.25 ms loopback, +13 ms at 13 ms RTT) |
+| (f) decode throughput (256 tok ignore_eos, N=6 pairs interleaved, 25 s cooldown) | direct 13.95/13.55/13.62/14.00/12.97/13.85, forwarded 13.74/13.94/13.60/13.73/14.27/13.39 tok/s; medians 13.74 = 13.74; paired **+1.0 % (95 % CI −4.1…+6.1 %)**, sd 4.9 % per pair | no difference seen, but N=6 does not resolve ±2 % here (one −7 % direct run); the resolved number stays M1's +0.78 % (CI −0.22…+1.78, N=20) |
+| (g) app Connect-editor patch writes the token; `qualify_openai_stream.py` through the forwarder with the key read from the patched `kilo.jsonc` | kilo.jsonc and opencode.json: `baseURL http://127.0.0.1:28080/v1`, `apiKey == book/local.token` (64 hex, file 0600); qualify **passed**: plain TTFT 1.43 s 14.1 tok/s, JSON 0.79 s 13.2 tok/s, tool 4.48 s 13.9 tok/s, max chunk gap 0.96 s | PASS |
+
+- RSS of llama-server at the end 8.2 GB, **swap Δ 0 MB** over the whole run.
+- Tests after this change: `cargo test --workspace` 304 tests, all green individually; in 2 of 3 full runs the known live-multicast
+  flake `p2p-net/tests/mdns_live.rs::announce_found_pair_flag_and_lost` failed a pair-flag round (same symptom as recorded in M5; 3/3
+  green when run alone; no p2p code changed here), and once `edge_cases::removed_while_offline…` under full-suite load (3/3 green alone).
+  `app/src-tauri` 115 passed + 1 ignored (the qualification helper); `node app/scripts/test_*.mjs` 9/9 (new `test_share_card.mjs`,
+  `test_remote_macs_ui.mjs` extended for the experimental badge); `browser_click_walk.js` 0 failures on a clean profile.
+- Decode here (13.7 tok/s) is lower than M1's 15.0 tok/s on the same model/cache because this run uses the app's ctx 40960 / batch 40960
+  (M1: 16384) and ran right after the 39k-token prompts; same in both arms.
+
+**What this does NOT prove** (why "Your Macs" ships as experimental):
+- Two processes on one Mac talk over **loopback**: no Wi-Fi, no router, no real RTT/jitter/loss (the M1/M5 shaper runs were synthetic too).
+  The overhead numbers above are the forwarder's own cost, not what a user on Wi-Fi will see.
+- **No macOS Local Network permission prompt or firewall** was involved (CLI binaries, loopback, mDNS off); the app bundle's prompt
+  and the inbound-UDP firewall dialog are untested.
+- **No real sleep:** SIGSTOP freezes one process; a sleeping Mac also drops Wi-Fi, may hand its address to the Sleep Proxy, and needs
+  Wake-on-LAN to actually wake it. None of that is exercised.
+- No Wi-Fi ↔ Ethernet roaming, VPN, access-point isolation, mesh routers, or two different machines' clocks/OS versions.
+- One MacBook role only; no big Mac under simultaneous local load; no memory pressure on a second machine.
+- The MacBook role was the CLI `use` (same `session.rs` as the app), not the app window; the app's own runtime was covered by the M4/M5
+  in-process tests against a mock llama-server, not against the real engine.
+- No real Kilo/OpenCode session; the editor side was these scripts plus `qualify_openai_stream.py`.

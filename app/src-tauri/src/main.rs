@@ -1775,6 +1775,48 @@ fn patch_kilo_config(cfg: KiloConfig) -> Result<String, String> {
     Ok(path)
 }
 
+#[cfg(test)]
+mod editor_patch_qualification {
+    /// v0.6 single-Mac qualification helper (bench/forward/run_v06_qual.sh), ignored by default:
+    /// runs the real Connect-editor patch into `$SLIPSTREAM_QUAL_HOME` with the data dir from
+    /// `SLIPSTREAM_P2P_DIR` (the MacBook role) and the base URL from `SLIPSTREAM_QUAL_BASE_URL`.
+    /// The harness then checks that the written apiKey equals `<p2p dir>/local.token` and runs
+    /// qualify_openai_stream.py through the forwarder with that key.
+    #[test]
+    #[ignore]
+    fn qual_patch_writes_the_local_token() {
+        let home = std::env::var("SLIPSTREAM_QUAL_HOME").expect("SLIPSTREAM_QUAL_HOME");
+        let base_url = std::env::var("SLIPSTREAM_QUAL_BASE_URL").expect("SLIPSTREAM_QUAL_BASE_URL");
+        assert!(std::env::var_os("SLIPSTREAM_P2P_DIR").is_some(), "SLIPSTREAM_P2P_DIR must point at the MacBook data dir");
+        for target in ["kilo", "opencode"] {
+            let path = super::patch_kilo_config(super::KiloConfig {
+                home: home.clone(),
+                base_url: base_url.clone(),
+                model: "slipstream".into(),
+                api_key: "not-the-token".into(),
+                ctx: 40960,
+                max_out: 8192,
+                target: target.into(),
+            })
+            .unwrap();
+            let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let key = v["provider"]["peregrine"]["options"]["apiKey"].as_str().unwrap().to_string();
+            assert_eq!(key, crate::remote::api_key().unwrap(), "{target}: the patch must write this install's local token");
+            println!("patched {path}");
+        }
+    }
+}
+
+/// "Your Macs" is experimental (v0.6): the tab's "Report on GitHub" button opens the issues
+/// page in the default browser. Fixed URL, no argument from the window.
+const FEEDBACK_URL: &str = "https://github.com/Schero94/slipstream/issues";
+
+#[tauri::command]
+fn open_feedback_page() -> Result<(), String> {
+    // `open` hands the URL to the browser and returns at once; waiting reaps the child.
+    Command::new("/usr/bin/open").arg(FEEDBACK_URL).status().map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Show + focus the main window (used by the tray "open" item and left-click).
 fn show_main(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
@@ -1825,7 +1867,8 @@ fn main() {
             remote::remote_pair_code, remote::remote_pair_cancel, remote::remote_discover, remote::remote_pair,
             remote::remote_use, remote::remote_stop_using, remote::remote_trusted, remote::remote_revoke,
             remote::remote_start_model, remote::remote_stop_model, remote::remote_set_model_control,
-            remote::remote_dismiss_removed, remote::remote_api_key
+            remote::remote_dismiss_removed, remote::remote_api_key,
+            open_feedback_page
         ])
         .setup(|app| {
             app.manage(Live {

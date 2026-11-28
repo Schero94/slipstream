@@ -347,6 +347,16 @@
           <div class="cockpit-head">
             <h2 id="cockpitTitle" data-i18n="cockpit.title">Engine</h2>
             <span class="cockpit-model" id="cockpitModel">–</span>
+            <button type="button" id="shareCardBtn" class="btn btn-ghost" data-i18n="share.btn" data-i18n-aria="share.aria" aria-label="Create a share card with your current numbers. It is made on this Mac; nothing is uploaded.">Share</button>
+          </div>
+          <div id="shareCard" class="share-card" role="region" data-i18n-aria="share.title" aria-label="Share card" hidden>
+            <img id="shareCardImg" alt="" />
+            <p class="hint" data-i18n="share.hint">Made on this Mac from your current numbers. Nothing is uploaded.</p>
+            <div class="p2p-actions">
+              <button type="button" id="shareCardCopy" class="btn btn-primary" data-i18n="share.copy">Copy image</button>
+              <a id="shareCardSave" class="btn" download="slipstream-share.png" data-i18n="share.save">Save PNG</a>
+              <button type="button" id="shareCardClose" class="btn btn-ghost" data-i18n="share.close">Close</button>
+            </div>
           </div>
           <p class="cockpit-why" id="cockpitWhy" data-kind="stopped">
             <span class="why-mark" aria-hidden="true"></span>
@@ -537,10 +547,18 @@
       <section class="panel" data-panel="cluster" hidden>
         <div class="card macs-head">
           <div class="card-head">
-            <h2 data-i18n="macs.title">Your Macs</h2>
+            <div class="macs-title-row">
+              <h2 data-i18n="macs.title">Your Macs</h2>
+              <span id="macsExpBadge" class="badge exp" data-i18n="macs.experimental">Experimental</span>
+            </div>
             <span id="macsBadge" class="badge" hidden></span>
           </div>
           <p class="hint section-lead" data-i18n="macs.lead">Use the model of a bigger Mac in your network from this Mac's editor, or share this Mac's model with your other Macs.</p>
+          <p id="macsExpNote" class="hint macs-exp-note">
+            <span data-i18n="macs.expNote">Tested on one Mac with two instances. Not yet tested between two real Macs (network permission prompt, real Wi-Fi, sleep/wake). Please tell us how it works for you.</span>
+            <button type="button" id="macsFeedback" class="btn btn-ghost btn-link" data-i18n="macs.expLink">Report on GitHub</button>
+            <span class="macs-exp-url">github.com/Schero94/slipstream/issues</span>
+          </p>
           <div id="macsRemoved" class="macs-alert" role="alert" hidden>
             <span id="macsRemovedText"></span>
             <button type="button" id="macsRemovedOk" class="btn btn-ghost" data-i18n="macs.ok">OK</button>

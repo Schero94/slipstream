@@ -12,6 +12,8 @@ Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that 
 
 It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
+> “…it's quite terrible to have everybody have a bunch of the world's limited supply of DRAM sitting in their own computer…” ([source](https://www.xda-developers.com/sam-altman-says-its-quite-terrible-that-people-have-ram-in-their-pcs-during-a-shortage/)) — and weeks later: “I want people to have a lot of RAM.” ([source](https://www.pcgamer.com/hardware/memory/i-want-to-be-clear-i-want-people-to-have-a-lot-of-ram-says-sam-altman-weeks-after-seeming-to-say-the-opposite/)) — Sam Altman. We picked the second one, without buying any: **[⬇ Download more RAM](https://github.com/Schero94/slipstream/releases/latest)**.
+
 **New in v0.5.3:** the app offers **Groot-19B-A3B**, a newer slimmed-down Qwen3.6 for coding
 agents — about 60 % faster on small caches (~17.6 tok/s at 4 GiB) and half the disk space.
 Details in [`docs/RELEASE_0.5.3.md`](docs/RELEASE_0.5.3.md).
@@ -98,6 +100,31 @@ Everything runs on-device. While you work, the app shows live SSD throughput, ca
 ### Codebase indexing (optional)
 
 Streamed models are slow at prefill, so the less your assistant sends per request, the better it feels. The app can run the retrieval half of that for you, on-device: it starts a local embedding server, and it can download and start Qdrant as the vector store. Neither ships inside the `.dmg`. The app fetches the Qdrant release binary when you ask it to, and you pick an embedding model the same way you pick a chat model. Once both are up, point your assistant's codebase indexing at them and it will send small, relevant prompts instead of half the repository.
+
+### Use your other Mac (v0.6, experimental)
+
+Your MacBook's editor can use the model running on a bigger Mac in the same network (a Mac Studio
+or Mac mini). The editor keeps `http://127.0.0.1:8080/v1`; the answers come from the other Mac.
+Big Mac: **Your Macs → Share this Mac** shows a 6-digit code. MacBook: **Your Macs → Find my Macs**,
+type the code. After that it reconnects by itself every day.
+
+Only Macs you paired with the code can connect, and the traffic between them is encrypted. The big
+Mac processes your prompts, so whoever administers it could see them; nothing goes to the internet.
+
+> **Experimental.** Tested on one Mac with two instances. Not yet tested between two real Macs
+> (network permission prompt, real Wi-Fi, sleep/wake). Please tell us how it works for you in
+> [GitHub issues](https://github.com/Schero94/slipstream/issues).
+
+Tested with the real model and two instances on one Mac: identical answers and tool calls, live
+progress for a 39k-token agent prompt, the stop button reaches the big Mac within 0.1 s, a frozen big
+Mac is reported to the editor after ~9 s, and no measurable speed cost (first word +10 ms on average,
+13.7 tok/s both ways; raw data in [`bench/RESULTS.md`](bench/RESULTS.md)). How to use it, the privacy boundary and the full list of what is untested:
+[`docs/USE_YOUR_OTHER_MAC.md`](docs/USE_YOUR_OTHER_MAC.md).
+
+<p align="center">
+  <img src="docs/screenshots/your-macs-experimental.png" alt="Slipstream app: the Your Macs tab with the Experimental badge, using the model of a Mac Studio" width="820" /><br/>
+  <sub>The "Your Macs" tab on a MacBook that uses a Mac Studio's model. (UI with demo data.)</sub>
+</p>
 
 ---
 
@@ -246,6 +273,8 @@ Big agentic prompts are prefill-heavy. A 30k-token first request against a strea
 118B on 36 GB runs at about 2.8 tok/s. That's batch work. It is not chat, and I'd rather say so here than have you find out after the download. The 35B at ~13-19 tok/s, depending on cache size, is the interactive one.
 
 Converting an XL model is minutes of work, and the app has to be open for it. It survives interruption without losing that work (see below), but it does not run in the background after you quit.
+
+"Use your other Mac" (v0.6) is experimental: it was tested with two instances on one Mac, not yet between two real Macs (macOS network permission prompt, real Wi-Fi, sleep/wake, Wi-Fi ↔ Ethernet). See [`docs/USE_YOUR_OTHER_MAC.md`](docs/USE_YOUR_OTHER_MAC.md).
 
 The app isn't notarized, so the first launch needs right-click → Open, or `xattr -dr com.apple.quarantine Slipstream.app`.
 

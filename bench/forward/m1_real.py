@@ -18,6 +18,10 @@ import sys
 import time
 from pathlib import Path
 
+# Extra request header lines (e.g. "Authorization: Bearer <token>\r\n" for a `use --token-file`
+# forwarder); bench/forward/v06_qual.py sets it. Empty = no extra headers (M1 behaviour).
+EXTRA_HEADERS = ""
+
 CASES = {
     "plain": {"messages": [{"role": "user", "content": "Write a Python function that checks whether a string is a palindrome, with a docstring and two doctests."}]},
     "json": {
@@ -40,7 +44,7 @@ def post_stream(addr: str, path: str, body: dict, timeout: float = 600.0) -> byt
     host, port = addr.rsplit(":", 1)
     data = json.dumps(body).encode()
     req = (f"POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n"
-           f"Accept: text/event-stream\r\nContent-Length: {len(data)}\r\nConnection: close\r\n\r\n").encode() + data
+           f"Accept: text/event-stream\r\n{EXTRA_HEADERS}Content-Length: {len(data)}\r\nConnection: close\r\n\r\n").encode() + data
     with socket.create_connection((host, int(port)), timeout=timeout) as s:
         s.sendall(req)
         out = bytearray()
@@ -160,7 +164,7 @@ def cmd_cancel(a) -> int:
         data = json.dumps(body).encode()
         s = socket.create_connection((host, int(port)))
         s.sendall((f"POST /v1/chat/completions HTTP/1.1\r\nHost: {a.fwd}\r\nContent-Type: application/json\r\n"
-                   f"Content-Length: {len(data)}\r\nConnection: close\r\n\r\n").encode() + data)
+                   f"{EXTRA_HEADERS}Content-Length: {len(data)}\r\nConnection: close\r\n\r\n").encode() + data)
         time.sleep(a.wait)
         slots = post_get(a.fwd, "/slots")
         t0 = time.time()
@@ -188,7 +192,7 @@ def cmd_cancel(a) -> int:
 def post_get(addr: str, path: str) -> str:
     host, port = addr.rsplit(":", 1)
     with socket.create_connection((host, int(port)), timeout=5) as s:
-        s.sendall(f"GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n".encode())
+        s.sendall(f"GET {path} HTTP/1.1\r\nHost: {addr}\r\n{EXTRA_HEADERS}Connection: close\r\n\r\n".encode())
         out = bytearray()
         while (c := s.recv(65536)):
             out += c

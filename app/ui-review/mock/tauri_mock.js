@@ -9,6 +9,7 @@
 //        (Kilo/OpenCode): /slots phase + prompt_progress (live_stats.slot_activity) and the
 //        engine log lines prompt_start / prompt_progress / print_timing tail / prompt_done /
 //        n_gen / release. slots:false = log-only fallback. Ticks at 1 s / __M.speed.
+//   __M.lastTps / __M.hitRate: the live decode rate and expert-cache hit rate (share card, cockpit)
 //   Your Macs (v0.6, remote_* commands): window.__M.remote knobs
 //     .found = [{fp, pairing_open, addrs, paired_peer, paired_name}]  (what "Find my Macs" sees)
 //     .code = "482913"  the code the big Mac shows (remote_pair checks it)
@@ -96,8 +97,8 @@
       requests: run() ? 2 : 0, avg_prefill_tps: run() ? 212.5 : 0, avg_decode_tps: run() ? 11.8 : 0 };
     return {
       serving_available: run(), session: sess, alltime: sess,
-      last_tps: run() ? 12.4 : null,
-      experts: run() ? { hit_rate: 78, misses } : null,
+      last_tps: run() ? (M.lastTps ?? 12.4) : null,
+      experts: run() ? { hit_rate: M.hitRate ?? 78, misses } : null,
       slot_activity: run() ? M.slotAct : null,
       rss_bytes: run() ? 17.2 * GiB : null, pgrn_high_water_bytes: run() ? 10.1 * GiB : null,
       system: { memory: mem(), e_core_usage: 0.18, p_core_usage: run() ? 0.42 : 0.08, gpu_usage: run() ? 0.61 : 0.02,
@@ -110,6 +111,7 @@
     server_state: () => (R.mode === "using" ? "remote" : M.srv),
     remote_status: () => remoteStatus(),
     remote_api_key: () => "mock0local0token0000000000000000",
+    open_feedback_page: () => null,
     remote_discover: () => { R.lanStarted = true; return R.found; },
     remote_pair: ({ target, code }) => {
       if (String(code).replace(/\D/g, "") !== R.code) throw "[pair_wrong_code] Wrong code. Check the code on the other Mac.";

@@ -1,0 +1,711 @@
+use event=state state=Connecting
+[2m2026-11-28T16:31:46.190390Z[0m [32m INFO[0m [2mlibp2p_swarm[0m[2m:[0m [3mlocal_peer_id[0m[2m=[0m<peer>
+use event=dial peer=<peer> addrs=[/ip4/127.0.0.1/udp/19103/quic-v1/p2p/<peer>] always=false
+use event=waiting_for_peer peer=<peer> unix_ms=1795883506200
+use event=serving bind=http://127.0.0.1:28080/v1 also=http://[::1]:28080/v1 peer=<peer> token=required
+use event=dial peer=<peer> addrs=[/ip4/127.0.0.1/udp/19103/quic-v1/p2p/<peer>] always=false
+use event=connected peer=<peer> addr=/ip4/127.0.0.1/udp/19103/quic-v1 replaced=0 unix_ms=1795883506259
+use stream_open_us=787
+use ping peer=<peer> rtt_us=291
+use stream_open_us=1127
+use stream_open_us=635
+use stream_open_us=531
+use event=state state=Connected
+using "Qual Studio" (Slipstream 0.5.3) model=slipstream running=true n_ctx=40960 busy=false on_battery=false
+editors: http://127.0.0.1:28080/v1 (also http://[::1]:28080/v1)
+editors must send the API key from /var/folders/d_/bphh7qk934xfz7cmx7n1l5700000gn/T//slipstream-v06q.ZQ9d1A/book/local.token (Authorization: Bearer)
+use ping peer=<peer> rtt_us=256
+use ping peer=<peer> rtt_us=151
+use ping peer=<peer> rtt_us=213
+use ping peer=<peer> rtt_us=241
+use ping peer=<peer> rtt_us=3926
+use ping peer=<peer> rtt_us=483
+use stream_open_us=386
+use ping peer=<peer> rtt_us=108
+use ping peer=<peer> rtt_us=149
+use ping peer=<peer> rtt_us=164
+use ping peer=<peer> rtt_us=127
+use ping peer=<peer> rtt_us=205
+use ping peer=<peer> rtt_us=127
+use ping peer=<peer> rtt_us=224
+use ping peer=<peer> rtt_us=334
+use ping peer=<peer> rtt_us=227
+use ping peer=<peer> rtt_us=233
+use ping peer=<peer> rtt_us=427
+use ping peer=<peer> rtt_us=184
+use stream_open_us=437
+use ping peer=<peer> rtt_us=218
+use ping peer=<peer> rtt_us=169
+use ping peer=<peer> rtt_us=208
+use ping peer=<peer> rtt_us=154
+use ping peer=<peer> rtt_us=208
+use ping peer=<peer> rtt_us=233
+use ping peer=<peer> rtt_us=233
+use ping peer=<peer> rtt_us=328
+use ping peer=<peer> rtt_us=258
+use ping peer=<peer> rtt_us=245
+use stream_open_us=955
+use ping peer=<peer> rtt_us=242
+use ping peer=<peer> rtt_us=185
+use ping peer=<peer> rtt_us=208
+use ping peer=<peer> rtt_us=260
+use ping peer=<peer> rtt_us=212
+use ping peer=<peer> rtt_us=246
+use ping peer=<peer> rtt_us=158
+use ping peer=<peer> rtt_us=200
+use stream_open_us=990
+use ping peer=<peer> rtt_us=225
+use ping peer=<peer> rtt_us=325
+use ping peer=<peer> rtt_us=146
+use ping peer=<peer> rtt_us=175
+use ping peer=<peer> rtt_us=346
+use ping peer=<peer> rtt_us=187
+use ping peer=<peer> rtt_us=272
+use ping peer=<peer> rtt_us=183
+use stream_open_us=416
+use ping peer=<peer> rtt_us=174
+use ping peer=<peer> rtt_us=208
+use ping peer=<peer> rtt_us=205
+use ping peer=<peer> rtt_us=173
+use ping peer=<peer> rtt_us=145
+use ping peer=<peer> rtt_us=147
+use ping peer=<peer> rtt_us=205
+use ping peer=<peer> rtt_us=204
+use ping peer=<peer> rtt_us=187
+use stream_open_us=858
+use ping peer=<peer> rtt_us=294
+use ping peer=<peer> rtt_us=218
+use ping peer=<peer> rtt_us=366
+use ping peer=<peer> rtt_us=126
+use ping peer=<peer> rtt_us=661
+use ping peer=<peer> rtt_us=266
+use ping peer=<peer> rtt_us=342
+use ping peer=<peer> rtt_us=208
+use stream_open_us=482
+use ping peer=<peer> rtt_us=261
+use ping peer=<peer> rtt_us=201
+use ping peer=<peer> rtt_us=260
+use ping peer=<peer> rtt_us=235
+use ping peer=<peer> rtt_us=243
+use ping peer=<peer> rtt_us=213
+use ping peer=<peer> rtt_us=185
+use ping peer=<peer> rtt_us=195
+use stream_open_us=439
+use ping peer=<peer> rtt_us=200
+use ping peer=<peer> rtt_us=140
+use ping peer=<peer> rtt_us=413
+use ping peer=<peer> rtt_us=254
+use ping peer=<peer> rtt_us=577
+use ping peer=<peer> rtt_us=241
+use ping peer=<peer> rtt_us=301
+use stream_open_us=802
+use ping peer=<peer> rtt_us=189
+use ping peer=<peer> rtt_us=213
+use ping peer=<peer> rtt_us=208
+use ping peer=<peer> rtt_us=223
+use ping peer=<peer> rtt_us=366
+use ping peer=<peer> rtt_us=290
+use ping peer=<peer> rtt_us=199
+use stream_open_us=2046
+use ping peer=<peer> rtt_us=276
+use ping peer=<peer> rtt_us=265
+use ping peer=<peer> rtt_us=177
+use ping peer=<peer> rtt_us=208
+use ping peer=<peer> rtt_us=241
+use ping peer=<peer> rtt_us=184
+use ping peer=<peer> rtt_us=198
+use ping peer=<peer> rtt_us=274
+use ping peer=<peer> rtt_us=280
+use ping peer=<peer> rtt_us=237
+use ping peer=<peer> rtt_us=179
+use ping peer=<peer> rtt_us=262
+use ping peer=<peer> rtt_us=164
+use ping peer=<peer> rtt_us=177
+use ping peer=<peer> rtt_us=245
+use ping peer=<peer> rtt_us=263
+use ping peer=<peer> rtt_us=218
+use ping peer=<peer> rtt_us=181
+use ping peer=<peer> rtt_us=153
+use ping peer=<peer> rtt_us=175
+use ping peer=<peer> rtt_us=215
+use ping peer=<peer> rtt_us=206
+use ping peer=<peer> rtt_us=312
+use ping peer=<peer> rtt_us=204
+use ping peer=<peer> rtt_us=270
+use ping peer=<peer> rtt_us=172
+use ping peer=<peer> rtt_us=219
+use ping peer=<peer> rtt_us=217
+use ping peer=<peer> rtt_us=196
+use ping peer=<peer> rtt_us=262
+use ping peer=<peer> rtt_us=271
+use ping peer=<peer> rtt_us=213
+use ping peer=<peer> rtt_us=203
+use ping peer=<peer> rtt_us=161
+use ping peer=<peer> rtt_us=169
+use ping peer=<peer> rtt_us=210
+use ping peer=<peer> rtt_us=381
+use ping peer=<peer> rtt_us=395
+use ping peer=<peer> rtt_us=170
+use ping peer=<peer> rtt_us=203
+use ping peer=<peer> rtt_us=318
+use ping peer=<peer> rtt_us=394
+use ping peer=<peer> rtt_us=258
+use ping peer=<peer> rtt_us=222
+use ping peer=<peer> rtt_us=385
+use ping peer=<peer> rtt_us=181
+use ping peer=<peer> rtt_us=158
+use ping peer=<peer> rtt_us=344
+use ping peer=<peer> rtt_us=296
+use ping peer=<peer> rtt_us=233
+use ping peer=<peer> rtt_us=245
+use ping peer=<peer> rtt_us=232
+use ping peer=<peer> rtt_us=205
+use ping peer=<peer> rtt_us=251
+use ping peer=<peer> rtt_us=187
+use ping peer=<peer> rtt_us=208
+use ping peer=<peer> rtt_us=200
+use ping peer=<peer> rtt_us=170
+use ping peer=<peer> rtt_us=227
+use ping peer=<peer> rtt_us=217
+use ping peer=<peer> rtt_us=236
+use ping peer=<peer> rtt_us=206
+use ping peer=<peer> rtt_us=262
+use ping peer=<peer> rtt_us=191
+use ping peer=<peer> rtt_us=269
+use ping peer=<peer> rtt_us=273
+use ping peer=<peer> rtt_us=256
+use ping peer=<peer> rtt_us=234
+use ping peer=<peer> rtt_us=248
+use ping peer=<peer> rtt_us=237
+use ping peer=<peer> rtt_us=204
+use ping peer=<peer> rtt_us=190
+use ping peer=<peer> rtt_us=612
+use ping peer=<peer> rtt_us=802
+use ping peer=<peer> rtt_us=490
+use ping peer=<peer> rtt_us=610
+use ping peer=<peer> rtt_us=824
+use ping peer=<peer> rtt_us=480
+use ping peer=<peer> rtt_us=503
+use ping peer=<peer> rtt_us=912
+use ping peer=<peer> rtt_us=337
+use ping peer=<peer> rtt_us=536
+use ping peer=<peer> rtt_us=261
+use stream_open_us=3717
+use stream_open_us=3749
+use ping peer=<peer> rtt_us=197
+use stream_open_us=460
+use ping peer=<peer> rtt_us=231
+use stream_open_us=419
+use ping peer=<peer> rtt_us=333
+use stream_open_us=521
+use ping peer=<peer> rtt_us=245
+use stream_open_us=464
+use ping peer=<peer> rtt_us=215
+use stream_open_us=493
+use ping peer=<peer> rtt_us=185
+use stream_open_us=446
+use ping peer=<peer> rtt_us=170
+use stream_open_us=448
+use ping peer=<peer> rtt_us=181
+use stream_open_us=445
+use ping peer=<peer> rtt_us=205
+use stream_open_us=682
+use ping peer=<peer> rtt_us=199
+use stream_open_us=429
+use ping peer=<peer> rtt_us=232
+use stream_open_us=414
+use ping peer=<peer> rtt_us=216
+use stream_open_us=421
+use ping peer=<peer> rtt_us=209
+use stream_open_us=418
+use ping peer=<peer> rtt_us=296
+use stream_open_us=382
+use ping peer=<peer> rtt_us=338
+use stream_open_us=411
+use ping peer=<peer> rtt_us=286
+use stream_open_us=448
+use ping peer=<peer> rtt_us=221
+use stream_open_us=404
+use ping peer=<peer> rtt_us=247
+use stream_open_us=429
+use ping peer=<peer> rtt_us=211
+use stream_open_us=360
+use ping peer=<peer> rtt_us=186
+use stream_open_us=416
+use ping peer=<peer> rtt_us=276
+use stream_open_us=373
+use ping peer=<peer> rtt_us=263
+use stream_open_us=436
+use ping peer=<peer> rtt_us=288
+use stream_open_us=533
+use ping peer=<peer> rtt_us=221
+use stream_open_us=507
+use ping peer=<peer> rtt_us=343
+use stream_open_us=501
+use ping peer=<peer> rtt_us=180
+use stream_open_us=476
+use ping peer=<peer> rtt_us=185
+use stream_open_us=446
+use ping peer=<peer> rtt_us=221
+use stream_open_us=563
+use ping peer=<peer> rtt_us=206
+use stream_open_us=495
+use ping peer=<peer> rtt_us=214
+use stream_open_us=441
+use ping peer=<peer> rtt_us=189
+use stream_open_us=408
+use ping peer=<peer> rtt_us=226
+use stream_open_us=462
+use ping peer=<peer> rtt_us=262
+use stream_open_us=400
+use ping peer=<peer> rtt_us=203
+use stream_open_us=487
+use ping peer=<peer> rtt_us=180
+use stream_open_us=477
+use ping peer=<peer> rtt_us=213
+use stream_open_us=477
+use ping peer=<peer> rtt_us=218
+use stream_open_us=483
+use ping peer=<peer> rtt_us=205
+use stream_open_us=507
+use ping peer=<peer> rtt_us=193
+use stream_open_us=509
+use ping peer=<peer> rtt_us=161
+use stream_open_us=471
+use ping peer=<peer> rtt_us=168
+use stream_open_us=471
+use ping peer=<peer> rtt_us=179
+use stream_open_us=363
+use ping peer=<peer> rtt_us=226
+use stream_open_us=527
+use ping peer=<peer> rtt_us=171
+use stream_open_us=487
+use ping peer=<peer> rtt_us=119
+use stream_open_us=692
+use ping peer=<peer> rtt_us=246
+use stream_open_us=497
+use ping peer=<peer> rtt_us=217
+use stream_open_us=494
+use ping peer=<peer> rtt_us=221
+use stream_open_us=926
+use ping peer=<peer> rtt_us=179
+use stream_open_us=471
+use ping peer=<peer> rtt_us=213
+use stream_open_us=442
+use ping peer=<peer> rtt_us=139
+use stream_open_us=472
+use ping peer=<peer> rtt_us=149
+use stream_open_us=469
+use ping peer=<peer> rtt_us=257
+use stream_open_us=592
+use ping peer=<peer> rtt_us=210
+use stream_open_us=442
+use ping peer=<peer> rtt_us=175
+use stream_open_us=452
+use ping peer=<peer> rtt_us=159
+use stream_open_us=410
+use ping peer=<peer> rtt_us=190
+use stream_open_us=537
+use ping peer=<peer> rtt_us=225
+use stream_open_us=500
+use ping peer=<peer> rtt_us=194
+use stream_open_us=504
+use ping peer=<peer> rtt_us=228
+use stream_open_us=716
+use ping peer=<peer> rtt_us=236
+use stream_open_us=515
+use ping peer=<peer> rtt_us=199
+use stream_open_us=442
+use ping peer=<peer> rtt_us=157
+use ping peer=<peer> rtt_us=178
+use ping peer=<peer> rtt_us=202
+use ping peer=<peer> rtt_us=803
+use ping peer=<peer> rtt_us=774
+use ping peer=<peer> rtt_us=984
+use ping peer=<peer> rtt_us=1077
+use ping peer=<peer> rtt_us=508
+use ping peer=<peer> rtt_us=825
+use ping peer=<peer> rtt_us=850
+use ping peer=<peer> rtt_us=226
+use ping peer=<peer> rtt_us=962
+use ping peer=<peer> rtt_us=253
+use stream_open_us=890
+use ping peer=<peer> rtt_us=242
+use ping peer=<peer> rtt_us=150
+use ping peer=<peer> rtt_us=202
+use stream_open_us=492
+use event=cancel_sent unix_ms=1795883997209
+use ping peer=<peer> rtt_us=195
+use ping peer=<peer> rtt_us=1010
+use ping peer=<peer> rtt_us=516
+use ping peer=<peer> rtt_us=290
+use ping peer=<peer> rtt_us=729
+use ping peer=<peer> rtt_us=767
+use stream_open_us=2772
+use ping peer=<peer> rtt_us=185
+use ping peer=<peer> rtt_us=209
+use ping peer=<peer> rtt_us=159
+use stream_open_us=393
+use event=cancel_sent unix_ms=1795884013542
+use ping peer=<peer> rtt_us=1069
+use ping peer=<peer> rtt_us=838
+use ping peer=<peer> rtt_us=280
+use ping peer=<peer> rtt_us=420
+use ping peer=<peer> rtt_us=876
+use stream_open_us=3356
+use ping peer=<peer> rtt_us=206
+use ping peer=<peer> rtt_us=196
+use ping peer=<peer> rtt_us=284
+use stream_open_us=484
+use event=cancel_sent unix_ms=1795884029739
+use ping peer=<peer> rtt_us=254
+use ping peer=<peer> rtt_us=303
+use ping peer=<peer> rtt_us=672
+use ping peer=<peer> rtt_us=477
+use ping peer=<peer> rtt_us=547
+use ping peer=<peer> rtt_us=217
+use stream_open_us=489
+use stream_open_us=432
+use ping peer=<peer> rtt_us=245
+use stream_open_us=808
+use stream_open_us=2045
+use ping peer=<peer> rtt_us=361
+use ping peer=<peer> rtt_us=251
+use stream_open_us=798
+use ping peer=<peer> rtt_us=200
+use stream_open_us=1350
+use ping peer=<peer> rtt_us=275
+use ping peer=<peer> rtt_us=252
+use stream_open_us=774
+use ping peer=<peer> rtt_us=233
+use stream_open_us=1843
+use ping peer=<peer> rtt_us=177
+use ping peer=<peer> rtt_us=594
+use stream_open_us=491
+use stream_open_us=1643
+use ping peer=<peer> rtt_us=280
+use ping peer=<peer> rtt_us=972
+use stream_open_us=781
+use ping peer=<peer> rtt_us=764
+use stream_open_us=2785
+use ping peer=<peer> rtt_us=951
+use ping peer=<peer> rtt_us=967
+use stream_open_us=1929
+use stream_open_us=2534
+use ping peer=<peer> rtt_us=369
+use ping peer=<peer> rtt_us=907
+use stream_open_us=1669
+use ping peer=<peer> rtt_us=295
+use stream_open_us=485
+use ping peer=<peer> rtt_us=823
+use ping peer=<peer> rtt_us=188
+use stream_open_us=2057
+use ping peer=<peer> rtt_us=933
+use stream_open_us=733
+use ping peer=<peer> rtt_us=243
+use ping peer=<peer> rtt_us=431
+use stream_open_us=3011
+use stream_open_us=2591
+use ping peer=<peer> rtt_us=185
+use ping peer=<peer> rtt_us=207
+use stream_open_us=2083
+use ping peer=<peer> rtt_us=281
+use stream_open_us=1257
+use ping peer=<peer> rtt_us=660
+use ping peer=<peer> rtt_us=179
+use ping peer=<peer> rtt_us=151
+use ping peer=<peer> rtt_us=227
+use ping peer=<peer> rtt_us=195
+use ping peer=<peer> rtt_us=224
+use ping peer=<peer> rtt_us=191
+use ping peer=<peer> rtt_us=147
+use ping peer=<peer> rtt_us=3291
+use ping peer=<peer> rtt_us=219
+use ping peer=<peer> rtt_us=301
+use ping peer=<peer> rtt_us=998
+use ping peer=<peer> rtt_us=1374
+use ping peer=<peer> rtt_us=1225
+use ping peer=<peer> rtt_us=213
+use ping peer=<peer> rtt_us=1076
+use ping peer=<peer> rtt_us=1016
+use ping peer=<peer> rtt_us=719
+use ping peer=<peer> rtt_us=635
+use ping peer=<peer> rtt_us=588
+use ping peer=<peer> rtt_us=777
+use ping peer=<peer> rtt_us=693
+use ping peer=<peer> rtt_us=263
+use stream_open_us=2269
+use ping peer=<peer> rtt_us=195
+use ping peer=<peer> rtt_us=167
+use ping peer=<peer> rtt_us=259
+use ping peer=<peer> rtt_us=186
+use ping peer=<peer> rtt_us=175
+use ping peer=<peer> rtt_us=220
+use ping peer=<peer> rtt_us=182
+use ping peer=<peer> rtt_us=175
+use ping peer=<peer> rtt_us=170
+use ping peer=<peer> rtt_us=271
+use ping peer=<peer> rtt_us=205
+use ping peer=<peer> rtt_us=237
+use ping peer=<peer> rtt_us=284
+use ping peer=<peer> rtt_us=520
+use ping peer=<peer> rtt_us=447
+use ping peer=<peer> rtt_us=745
+use ping peer=<peer> rtt_us=945
+use ping peer=<peer> rtt_us=204
+use ping peer=<peer> rtt_us=242
+use ping peer=<peer> rtt_us=1002
+use ping peer=<peer> rtt_us=716
+use ping peer=<peer> rtt_us=1050
+use stream_open_us=1883
+use ping peer=<peer> rtt_us=196
+use ping peer=<peer> rtt_us=230
+use ping peer=<peer> rtt_us=161
+use ping peer=<peer> rtt_us=227
+use ping peer=<peer> rtt_us=215
+use ping peer=<peer> rtt_us=164
+use ping peer=<peer> rtt_us=289
+use ping peer=<peer> rtt_us=191
+use ping peer=<peer> rtt_us=203
+use ping peer=<peer> rtt_us=221
+use ping peer=<peer> rtt_us=939
+use ping peer=<peer> rtt_us=695
+use ping peer=<peer> rtt_us=191
+use ping peer=<peer> rtt_us=813
+use ping peer=<peer> rtt_us=902
+use ping peer=<peer> rtt_us=614
+use ping peer=<peer> rtt_us=266
+use ping peer=<peer> rtt_us=796
+use ping peer=<peer> rtt_us=875
+use ping peer=<peer> rtt_us=654
+use ping peer=<peer> rtt_us=201
+use ping peer=<peer> rtt_us=293
+use ping peer=<peer> rtt_us=145
+use ping peer=<peer> rtt_us=145
+use ping peer=<peer> rtt_us=216
+use ping peer=<peer> rtt_us=184
+use ping peer=<peer> rtt_us=185
+use ping peer=<peer> rtt_us=201
+use ping peer=<peer> rtt_us=193
+use ping peer=<peer> rtt_us=278
+use ping peer=<peer> rtt_us=198
+use ping peer=<peer> rtt_us=2035
+use ping peer=<peer> rtt_us=411
+use ping peer=<peer> rtt_us=285
+use ping peer=<peer> rtt_us=311
+use ping peer=<peer> rtt_us=792
+use ping peer=<peer> rtt_us=1146
+use ping peer=<peer> rtt_us=1076
+use ping peer=<peer> rtt_us=485
+use ping peer=<peer> rtt_us=873
+use ping peer=<peer> rtt_us=985
+use ping peer=<peer> rtt_us=251
+use ping peer=<peer> rtt_us=870
+use ping peer=<peer> rtt_us=325
+use ping peer=<peer> rtt_us=262
+use ping peer=<peer> rtt_us=218
+use ping peer=<peer> rtt_us=258
+use ping peer=<peer> rtt_us=274
+use ping peer=<peer> rtt_us=324
+use ping peer=<peer> rtt_us=302
+use ping peer=<peer> rtt_us=288
+use ping peer=<peer> rtt_us=269
+use ping peer=<peer> rtt_us=332
+use ping peer=<peer> rtt_us=316
+use ping peer=<peer> rtt_us=371
+use ping peer=<peer> rtt_us=299
+use ping peer=<peer> rtt_us=449
+use ping peer=<peer> rtt_us=1007
+use ping peer=<peer> rtt_us=786
+use ping peer=<peer> rtt_us=1150
+use ping peer=<peer> rtt_us=1104
+use ping peer=<peer> rtt_us=283
+use ping peer=<peer> rtt_us=376
+use ping peer=<peer> rtt_us=920
+use ping peer=<peer> rtt_us=634
+use stream_open_us=482
+use ping peer=<peer> rtt_us=213
+use ping peer=<peer> rtt_us=211
+use ping peer=<peer> rtt_us=295
+use ping peer=<peer> rtt_us=128
+use ping peer=<peer> rtt_us=233
+use ping peer=<peer> rtt_us=224
+use ping peer=<peer> rtt_us=133
+use ping peer=<peer> rtt_us=232
+use ping peer=<peer> rtt_us=188
+use ping peer=<peer> rtt_us=173
+use ping peer=<peer> rtt_us=250
+use ping peer=<peer> rtt_us=384
+use ping peer=<peer> rtt_us=606
+use ping peer=<peer> rtt_us=355
+use ping peer=<peer> rtt_us=265
+use ping peer=<peer> rtt_us=253
+use ping peer=<peer> rtt_us=646
+use ping peer=<peer> rtt_us=961
+use ping peer=<peer> rtt_us=212
+use ping peer=<peer> rtt_us=682
+use ping peer=<peer> rtt_us=259
+use ping peer=<peer> rtt_us=207
+use stream_open_us=1901
+use ping peer=<peer> rtt_us=230
+use ping peer=<peer> rtt_us=204
+use ping peer=<peer> rtt_us=174
+use ping peer=<peer> rtt_us=184
+use ping peer=<peer> rtt_us=106
+use ping peer=<peer> rtt_us=180
+use ping peer=<peer> rtt_us=177
+use ping peer=<peer> rtt_us=203
+use ping peer=<peer> rtt_us=170
+use ping peer=<peer> rtt_us=169
+use ping peer=<peer> rtt_us=1034
+use ping peer=<peer> rtt_us=279
+use ping peer=<peer> rtt_us=659
+use ping peer=<peer> rtt_us=2298
+use ping peer=<peer> rtt_us=214
+use ping peer=<peer> rtt_us=1012
+use ping peer=<peer> rtt_us=1009
+use ping peer=<peer> rtt_us=5566
+use ping peer=<peer> rtt_us=361
+use ping peer=<peer> rtt_us=966
+use ping peer=<peer> rtt_us=446
+use ping peer=<peer> rtt_us=768
+use ping peer=<peer> rtt_us=129
+use ping peer=<peer> rtt_us=185
+use ping peer=<peer> rtt_us=152
+use ping peer=<peer> rtt_us=138
+use ping peer=<peer> rtt_us=205
+use ping peer=<peer> rtt_us=184
+use ping peer=<peer> rtt_us=215
+use ping peer=<peer> rtt_us=247
+use ping peer=<peer> rtt_us=159
+use ping peer=<peer> rtt_us=968
+use ping peer=<peer> rtt_us=279
+use ping peer=<peer> rtt_us=224
+use ping peer=<peer> rtt_us=724
+use ping peer=<peer> rtt_us=880
+use ping peer=<peer> rtt_us=865
+use ping peer=<peer> rtt_us=861
+use ping peer=<peer> rtt_us=702
+use ping peer=<peer> rtt_us=230
+use ping peer=<peer> rtt_us=838
+use ping peer=<peer> rtt_us=523
+use ping peer=<peer> rtt_us=833
+use ping peer=<peer> rtt_us=726
+use ping peer=<peer> rtt_us=217
+use ping peer=<peer> rtt_us=212
+use ping peer=<peer> rtt_us=224
+use ping peer=<peer> rtt_us=171
+use ping peer=<peer> rtt_us=174
+use ping peer=<peer> rtt_us=224
+use ping peer=<peer> rtt_us=191
+use ping peer=<peer> rtt_us=221
+use ping peer=<peer> rtt_us=213
+use ping peer=<peer> rtt_us=190
+use ping peer=<peer> rtt_us=550
+use ping peer=<peer> rtt_us=348
+use ping peer=<peer> rtt_us=250
+use ping peer=<peer> rtt_us=277
+use ping peer=<peer> rtt_us=175
+use ping peer=<peer> rtt_us=615
+use ping peer=<peer> rtt_us=894
+use ping peer=<peer> rtt_us=395
+use ping peer=<peer> rtt_us=652
+use ping peer=<peer> rtt_us=247
+use ping peer=<peer> rtt_us=229
+use ping peer=<peer> rtt_us=645
+use stream_open_us=2037
+use ping peer=<peer> rtt_us=186
+use ping peer=<peer> rtt_us=247
+use ping peer=<peer> rtt_us=279
+use ping peer=<peer> rtt_us=163
+use ping peer=<peer> rtt_us=226
+use ping peer=<peer> rtt_us=219
+use ping peer=<peer> rtt_us=148
+use ping peer=<peer> rtt_us=195
+use ping peer=<peer> rtt_us=224
+use ping peer=<peer> rtt_us=401
+use ping peer=<peer> rtt_us=530
+use ping peer=<peer> rtt_us=1211
+use ping peer=<peer> rtt_us=547
+use ping peer=<peer> rtt_us=196
+use ping peer=<peer> rtt_us=336
+use ping peer=<peer> rtt_us=278
+use ping peer=<peer> rtt_us=344
+use ping peer=<peer> rtt_us=533
+use ping peer=<peer> rtt_us=781
+use ping peer=<peer> rtt_us=217
+use ping peer=<peer> rtt_us=294
+use ping peer=<peer> rtt_us=431
+use stream_open_us=2574
+use ping peer=<peer> rtt_us=237
+use ping peer=<peer> rtt_us=360
+use ping peer=<peer> rtt_us=289
+use ping peer=<peer> rtt_us=272
+use ping peer=<peer> rtt_us=310
+use ping peer=<peer> rtt_us=223
+use ping peer=<peer> rtt_us=291
+use ping peer=<peer> rtt_us=232
+use ping peer=<peer> rtt_us=246
+use ping peer=<peer> rtt_us=536
+use ping peer=<peer> rtt_us=648
+use ping peer=<peer> rtt_us=315
+use ping peer=<peer> rtt_us=218
+use ping peer=<peer> rtt_us=207
+use ping peer=<peer> rtt_us=217
+use ping peer=<peer> rtt_us=377
+use ping peer=<peer> rtt_us=194
+use ping peer=<peer> rtt_us=176
+use ping peer=<peer> rtt_us=228
+use ping peer=<peer> rtt_us=483
+use ping peer=<peer> rtt_us=523
+use ping peer=<peer> rtt_us=666
+use ping peer=<peer> rtt_us=205
+use ping peer=<peer> rtt_us=186
+use ping peer=<peer> rtt_us=275
+use ping peer=<peer> rtt_us=248
+use ping peer=<peer> rtt_us=267
+use ping peer=<peer> rtt_us=130
+use ping peer=<peer> rtt_us=188
+use ping peer=<peer> rtt_us=191
+use ping peer=<peer> rtt_us=191
+use ping peer=<peer> rtt_us=779
+use ping peer=<peer> rtt_us=258
+use ping peer=<peer> rtt_us=721
+use ping peer=<peer> rtt_us=922
+use ping peer=<peer> rtt_us=864
+use ping peer=<peer> rtt_us=439
+use ping peer=<peer> rtt_us=457
+use ping peer=<peer> rtt_us=860
+use ping peer=<peer> rtt_us=743
+use ping peer=<peer> rtt_us=385
+use ping peer=<peer> rtt_us=578
+use ping peer=<peer> rtt_us=519
+use ping peer=<peer> rtt_us=254
+use stream_open_us=449
+use stream_open_us=281
+use stream_open_us=448
+use stream_open_us=341
+use ping peer=<peer> rtt_us=232
+use ping peer=<peer> rtt_us=333
+use stream_open_us=377
+use ping peer=<peer> rtt_us=227
+use ping peer=<peer> rtt_us=308
+use ping peer=<peer> rtt_us=225
+use stream_open_us=454
+use ping peer=<peer> rtt_us=358
+use ping peer=<peer> rtt_us=395
+use event=ping_failed peer=<peer> unix_ms=1795884645206
+use event=closed peer=<peer> cause=Some(IO(Custom { kind: Other, error: Connection(ConnectionError(TimedOut)) })) unix_ms=1795884645206
+use event=state state=Reconnecting
+use event=dial peer=<peer> addrs=[/ip4/127.0.0.1/udp/19103/quic-v1/p2p/<peer>] always=false
+use event=connected peer=<peer> addr=/ip4/127.0.0.1/udp/19103/quic-v1 replaced=0 unix_ms=1795884647209
+use stream_open_us=418
+use ping peer=<peer> rtt_us=244
+use stream_open_us=603
+use stream_open_us=335
+use stream_open_us=450
+use event=state state=Connected
+use ping peer=<peer> rtt_us=207
+use ping peer=<peer> rtt_us=177
+use ping peer=<peer> rtt_us=177
+use ping peer=<peer> rtt_us=184

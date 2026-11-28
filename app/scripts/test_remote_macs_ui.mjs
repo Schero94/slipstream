@@ -62,6 +62,19 @@ for (const m of js.matchAll(/:\s*"((?:err|macs)\.[A-Za-z_]+)"/g)) {
   assert.ok(REMOTE.en[m[1]], `REMOTE_BE_KEYS → ${m[1]} missing`);
 }
 
+// v0.6 ships "Your Macs" as experimental (not tested between two real Macs): visible badge + note + feedback link
+assert.equal(REMOTE.en["macs.experimental"], "Experimental");
+assert.equal(REMOTE.de["macs.experimental"], "Experimentell");
+assert.match(REMOTE.en["macs.expNote"], /Tested on one Mac with two instances\. Not yet tested between two real Macs/);
+assert.match(REMOTE.de["macs.expNote"], /Noch nicht zwischen zwei echten Macs getestet/);
+assert.match(panel, /id="macsExpBadge"[^>]*data-i18n="macs.experimental"/, "experimental badge in the Your Macs header");
+assert.ok(!/id="macsExpBadge"[^>]*hidden/.test(panel), "experimental badge must be visible");
+assert.match(panel, /data-i18n="macs.expNote"/);
+assert.match(js, /invoke\("open_feedback_page"\)/);
+assert.match(rust, /FEEDBACK_URL: &str = "https:\/\/github\.com\/Schero94\/slipstream\/issues"/);
+assert.match(rust, /open_feedback_page\s*\]\)/, "open_feedback_page registered");
+assert.match(mock, /open_feedback_page:/);
+
 // ---- pill states ----
 const grab = (name) => {
   const i = js.indexOf(`function ${name}(`);

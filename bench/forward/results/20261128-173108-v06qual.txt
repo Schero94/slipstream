@@ -1,0 +1,72 @@
+# v0.6 single-Mac qualification 20261128-173108 host=Mac15,6 macOS 27.0.1 commit=cacc696+dirty
+slipstream-node Nov 28 17:27:25 2026, newest p2p source: 
+## pairing via 6-digit code: client process 306 ms; big trusts: Qual MacBook	12D3KooWRE691xUv4esamW9WVTWKc8PxKux9Xn96jtG4Ddjev7Cu	uses this Mac	Slipstream 0.5.3	may_start_model=true	paired_at=1795883468	- 
+patched <work>/home/.config/kilo/kilo.jsonc
+patched <work>/home/.config/opencode/opencode.json
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 115 filtered out; finished in 0.01s
+patch .config/kilo/kilo.jsonc: baseURL=http://127.0.0.1:28080/v1 apiKey==local.token: True (len 64)
+patch .config/opencode/opencode.json: baseURL=http://127.0.0.1:28080/v1 apiKey==local.token: True (len 64)
+local.token mode 0o600
+## llama-server Nov 28 10:57:24 2026: Groot-19B-A3B-261023-Q4_K_M.gguf cache 4 GiB ctx 40960 -b 40960 -ub 2048 PGRN_EVICT=decay PGRN_LAYER_MAJOR=1 lookahead default, no MTP, io 8, compact slots, --cache-ram 2048 --metrics --slot-save-path
+## forwarder up: no token -> 401, with token -> 200, POST /slots/0?action=save -> 403
+## (a)+(b) fidelity: plain / strict JSON / forced tool (named) / tool auto / tool required; greedy seed 1, 160 tok, 2 reps x 2 arms
+fidelity case=plain identical=True events=97 choices_sha=fe79d90a249f1851 finish=['stop'] text="```python\ndef is_palindrome(s: str) -> bool:\n    \"\"\"Check whether a string is a " tool_calls=[]
+  direct: fe79d90a249f fe79d90a249f
+  fwd: fe79d90a249f fe79d90a249f
+fidelity case=json identical=True events=63 choices_sha=5690849efb442987 finish=['stop'] text="{\n  \"title\": \"The Great Escape\",\n  \"author\": \"Sarah M. Reed\",\n  \"year\": 2018,\n  " tool_calls=[]
+  direct: 5690849efb44 5690849efb44
+  fwd: 5690849efb44 5690849efb44
+fidelity case=tool identical=True events=10 choices_sha=d75a05f199e8b04e finish=['tool_calls'] text="" tool_calls=[{"name": "add", "arguments": "{\"a\":19,\"b\":23}"}]
+  direct: d75a05f199e8 d75a05f199e8
+  fwd: d75a05f199e8 d75a05f199e8
+fidelity case=tool_auto identical=True events=7 choices_sha=c8ab802c9d9a1b7c finish=['tool_calls'] text="" tool_calls=[{"name": "list_dir", "arguments": "{\"path\":\"src\"}"}]
+  direct: c8ab802c9d9a c8ab802c9d9a
+  fwd: c8ab802c9d9a c8ab802c9d9a
+fidelity case=tool_required identical=True events=7 choices_sha=c8ab802c9d9a1b7c finish=['tool_calls'] text="" tool_calls=[{"name": "list_dir", "arguments": "{\"path\":\"src\"}"}]
+  direct: c8ab802c9d9a c8ab802c9d9a
+  fwd: c8ab802c9d9a c8ab802c9d9a
+## (c) long agent prompt bench/fetchwall/prompt_30k.txt via /v1/completions, return_progress, /slots polled through the forwarder
+longprompt arm=direct status=200 prompt_n=39515 prompt_ms=130042.832 first_token_s=130.08 sse_progress_events=324 first=[(0.03, 0, 39515), (0.34, 102, 39515)] last=[(130.08, 39515, 39515)] slots_polls_processing=0 slots_first=[] slots_last=[] text="The PGRN cache hit-rate is computed in the `live_stats` comm"
+longprompt arm=fwd status=200 prompt_n=39515 prompt_ms=122538.557 first_token_s=122.58 sse_progress_events=322 first=[(0.04, 0, 39515), (0.36, 102, 39515)] last=[(122.58, 39515, 39515)] slots_polls_processing=62 slots_first=[(2.01, 921, 39515, 'prompt'), (4.02, 1873, 39515, 'prompt')] slots_last=[(124.32, None, None, 'generating')] text="The PGRN cache hit-rate is computed in the `live_stats` comm"
+longprompt identical_text=True ok=True
+## (d) cancel mid-prefill through the forwarder
+cancel rep=0 engine_abort_after_cancel_s=0.057 close_to_log_s=0.32 where=layer-major prefill aborted at layer 7/40, ubatch 4 (7 layer passes done) | slot prompt_abort: id  0 | task 1166 | n_prompt = 15526, t = 6085 ms | slots_via_forwarder=[{"id":0,"is_processing":true,"n_ctx":40960,"phase":"prompt","prompt_progress":{"cache":0,"processed":2460,"time_ms":5830,"total":15526}}]
+cancel rep=1 engine_abort_after_cancel_s=0.103 close_to_log_s=0.18 where=layer-major prefill aborted at layer 7/40, ubatch 4 (7 layer passes done) | slot prompt_abort: id  0 | task 1170 | n_prompt = 15525, t = 6128 ms | slots_via_forwarder=[{"id":0,"is_processing":true,"n_ctx":40960,"phase":"prompt","prompt_progress":{"cache":0,"processed":2511,"time_ms":5984,"total":15525}}]
+cancel rep=2 engine_abort_after_cancel_s=0.002 close_to_log_s=0.09 where=layer-major prefill aborted at layer 7/40, ubatch 3 (7 layer passes done) | slot prompt_abort: id  0 | task 1174 | n_prompt = 15524, t = 6028 ms | slots_via_forwarder=[{"id":0,"is_processing":true,"n_ctx":40960,"phase":"prompt","prompt_progress":{"cache":0,"processed":2460,"time_ms":5981,"total":15524}}]
+share event=cancelled path=/v1/chat/completions after_ms=6002.3 upstream_dropped_after_cancel_ms=0.01 unix_ms=1795883997209
+share event=cancelled path=/v1/chat/completions after_ms=6004.9 upstream_dropped_after_cancel_ms=0.01 unix_ms=1795884013542
+share event=cancelled path=/v1/chat/completions after_ms=6001.9 upstream_dropped_after_cancel_ms=0.01 unix_ms=1795884029739
+## (f) first-token overhead + decode throughput, interleaved
+perf decode iter=0 arm=direct tokens=256 rate=13.95 tok/s
+perf decode iter=0 arm=fwd tokens=256 rate=13.74 tok/s
+perf decode iter=1 arm=fwd tokens=256 rate=13.94 tok/s
+perf decode iter=1 arm=direct tokens=256 rate=13.55 tok/s
+perf decode iter=2 arm=direct tokens=256 rate=13.62 tok/s
+perf decode iter=2 arm=fwd tokens=256 rate=13.60 tok/s
+perf decode iter=3 arm=fwd tokens=256 rate=13.73 tok/s
+perf decode iter=3 arm=direct tokens=256 rate=14.00 tok/s
+perf decode iter=4 arm=direct tokens=256 rate=12.97 tok/s
+perf decode iter=4 arm=fwd tokens=256 rate=14.27 tok/s
+perf decode iter=5 arm=fwd tokens=256 rate=13.39 tok/s
+perf decode iter=5 arm=direct tokens=256 rate=13.85 tok/s
+perf ttft n_pairs=20 direct_median=195.26 fwd_median=190.60 direct_mean=175.42 fwd_mean=185.92 paired_delta_mean=+10.50ms 95%CI=[-14.14,+35.15] sd=52.74 p95_delta=+96.41 per_pair=[96.41, 51.32, -66.05, 101.05, -22.65, -42.61, 80.47, -14.58, -50.29, 24.26, 9.77, -13.66, -62.49, -18.29, 5.12, -5.94, -21.94, 10.26, 73.42, 76.49]
+perf decode n_pairs=6 direct_median=13.74 fwd_median=13.74 direct_mean=13.66 fwd_mean=13.78 paired_delta_mean=+1.00% 95%CI=[-4.11,+6.11] sd=4.87 p95_delta=+9.99 per_pair=[-1.54, 2.83, -0.13, -1.86, 9.99, -3.29]
+## (g, part 2) app/scripts/qualify_openai_stream.py through the forwarder with the key from the patched kilo.jsonc
+qualify_openai_stream: passed=true
+  json: passed=True ttft_median=0.791142 decode_tps=13.181239 max_gap=0.109447
+  plain: passed=True ttft_median=1.43459 decode_tps=14.092024 max_gap=0.098009
+  tool: passed=True ttft_median=4.480984 decode_tps=13.9422 max_gap=0.956175
+## (e) SIGSTOP of the share process mid-stream (= big Mac asleep), then SIGCONT
+sigstop stopped_after_events=20 t_stop=3.26s stream_end_after_stop=9.28s events=21 last_events=['chunk', {'code': 502, 'message': 'The other Mac stopped answering.', 'slipstream_code': 'peer_lost', 'type': 'server_error'}] error_event={"error": {"code": 502, "message": "The other Mac stopped answering.", "slipstream_code": "peer_lost", "type": "server_error"}} reader_error=None
+sigstop request_while_stopped status=503 after=2.00s body={"error":{"code":503,"message":"Qual Studio is not answering right now; Slipstream is trying to wake it. Try again in a few seconds.","slipstream_code":"peer_waking","type":"unavailable_error"}}
+sigstop health_200_after_sigcont=0.0s
+sigstop next_request status=200 identical_to_direct=True chars=281
+sigstop llama_log_hits: 19.30.325.174 I srv  process_sing: cancel of id_task = 4551 during its decode: flagged (a layer-major prefill stops at its next layer step) | 19.30.375.874 I slot      release: id  0 | task 4551 | stop processing: n_tokens = 210, truncated = 0 | 19.35.005.268 I slot      release: id  0 | task 4741 | stop processing: n_tokens = 85, truncated = 0 | 19.39.577.394 I slot      release: id  0 | task 4809 | stop processing: n_tokens = 85, truncated = 0
+use event=state state=Connecting
+use event=connected peer=<peer> addr=/ip4/127.0.0.1/udp/19103/quic-v1 replaced=0 unix_ms=1795883506259
+use event=state state=Connected
+use event=state state=Reconnecting
+use event=connected peer=<peer> addr=/ip4/127.0.0.1/udp/19103/quic-v1 replaced=0 unix_ms=1795884647209
+use event=state state=Connected
+llama rss_end_mb=8172 swap_delta_mb=0
+log: /Volumes/Crucial X10/SLipstream clone/slipstream/bench/forward/results/20261128-173108-v06qual.txt

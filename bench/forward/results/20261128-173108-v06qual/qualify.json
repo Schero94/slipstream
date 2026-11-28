@@ -1,0 +1,158 @@
+{
+  "base_url": "http://127.0.0.1:28080",
+  "engine": "llama.cpp-pgrn",
+  "finished": "2026-11-28T16:50:32.576708+00:00",
+  "model": "slipstream",
+  "passed": true,
+  "probe": {
+    "error": null,
+    "health": {
+      "status": "ok"
+    },
+    "model_ids": [
+      "slipstream"
+    ],
+    "passed": true,
+    "wall_seconds": 0.045501
+  },
+  "repetitions": 1,
+  "resources_after": {
+    "free_inactive_bytes": 8202960896,
+    "platform": "darwin",
+    "server_rss_bytes": 8601780224,
+    "swap_used_mib": 327.56
+  },
+  "resources_before": {
+    "free_inactive_bytes": 8384774144,
+    "platform": "darwin",
+    "server_rss_bytes": 8081883136,
+    "swap_used_mib": 327.56
+  },
+  "runs": [
+    {
+      "case": "plain",
+      "chunk_gap_max_seconds": 0.098009,
+      "chunk_gap_p50_seconds": 0.098009,
+      "chunk_gap_p95_seconds": 0.098009,
+      "content": "42",
+      "content_chunks": 2,
+      "decode_seconds": 0.212886,
+      "decode_tokens_per_second": 14.092024,
+      "done": true,
+      "errors": [],
+      "events": 5,
+      "finish_reason": "stop",
+      "output_sha256": "8334c554c7276f59674810b92fff5197cd46bf6ccbe872742f9b04ca31dfe3d1",
+      "passed": true,
+      "tool_calls": [],
+      "ttft_seconds": 1.43459,
+      "usage": {
+        "completion_tokens": 3,
+        "prompt_tokens": 22,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 25
+      },
+      "wall_seconds": 1.647476
+    },
+    {
+      "case": "json",
+      "chunk_gap_max_seconds": 0.109447,
+      "chunk_gap_p50_seconds": 0.077478,
+      "chunk_gap_p95_seconds": 0.100146,
+      "content": "{\n  \"answer\": 42,\n  \"label\": \"ok\"\n}",
+      "content_chunks": 20,
+      "decode_seconds": 1.593173,
+      "decode_tokens_per_second": 13.181239,
+      "done": true,
+      "errors": [],
+      "events": 23,
+      "finish_reason": "stop",
+      "output_sha256": "528f0265ddfe2afb8e9e3f0c336eb6ef0527fc9ff28b73e3d83620cc1be9053c",
+      "passed": true,
+      "tool_calls": [],
+      "ttft_seconds": 0.791142,
+      "usage": {
+        "completion_tokens": 21,
+        "prompt_tokens": 18,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 39
+      },
+      "wall_seconds": 2.384315
+    },
+    {
+      "case": "tool",
+      "chunk_gap_max_seconds": 0.956175,
+      "chunk_gap_p50_seconds": 0.120418,
+      "chunk_gap_p95_seconds": 0.956175,
+      "content": "",
+      "content_chunks": 8,
+      "decode_seconds": 2.653814,
+      "decode_tokens_per_second": 13.9422,
+      "done": true,
+      "errors": [],
+      "events": 11,
+      "finish_reason": "tool_calls",
+      "output_sha256": "a58ee95fcbdf0ad05b00cfaea24efb1a15f4c1c223d23a9e364d701d01545ff0",
+      "passed": true,
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{\"a\":19,\"b\":23}",
+            "name": "add"
+          },
+          "id": "okBlnYGux5XQMj6Do3914cgPN85FAjuZ",
+          "type": "function"
+        }
+      ],
+      "ttft_seconds": 4.480984,
+      "usage": {
+        "completion_tokens": 37,
+        "prompt_tokens": 297,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 334
+      },
+      "wall_seconds": 7.134797
+    }
+  ],
+  "schema": 1,
+  "started": "2026-11-28T16:50:21.335319+00:00",
+  "summary": {
+    "cases": {
+      "json": {
+        "chunk_gap_max_seconds": 0.109447,
+        "decode_tps_mean": 13.181239,
+        "deterministic": true,
+        "output_sha256": "528f0265ddfe2afb8e9e3f0c336eb6ef0527fc9ff28b73e3d83620cc1be9053c",
+        "passed": true,
+        "ttft_median_seconds": 0.791142
+      },
+      "plain": {
+        "chunk_gap_max_seconds": 0.098009,
+        "decode_tps_mean": 14.092024,
+        "deterministic": true,
+        "output_sha256": "8334c554c7276f59674810b92fff5197cd46bf6ccbe872742f9b04ca31dfe3d1",
+        "passed": true,
+        "ttft_median_seconds": 1.43459
+      },
+      "tool": {
+        "chunk_gap_max_seconds": 0.956175,
+        "decode_tps_mean": 13.9422,
+        "deterministic": true,
+        "output_sha256": "a58ee95fcbdf0ad05b00cfaea24efb1a15f4c1c223d23a9e364d701d01545ff0",
+        "passed": true,
+        "ttft_median_seconds": 4.480984
+      }
+    },
+    "passed": true
+  },
+  "thresholds": {
+    "max_chunk_gap_seconds": 5.0,
+    "max_ttft_seconds": 180.0
+  }
+}

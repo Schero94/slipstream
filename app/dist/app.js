@@ -1361,6 +1361,9 @@ const REMOTE_I18N = {
     "nav.cluster": "Your Macs",
     "tip.macs": "Use the model of a bigger Mac in your network, or share this Mac's model with your other Macs.",
     "macs.title": "Your Macs",
+    "macs.experimental": "Experimental",
+    "macs.expNote": "Tested on one Mac with two instances. Not yet tested between two real Macs (network permission prompt, real Wi-Fi, sleep/wake). Please tell us how it works for you.",
+    "macs.expLink": "Report on GitHub",
     "macs.lead": "Use the model of a bigger Mac in your network from this Mac's editor, or share this Mac's model with your other Macs.",
     "macs.useTitle": "Use another Mac",
     "macs.useLead": "Your editor keeps its address (http://127.0.0.1:8080/v1); the answers come from the other Mac.",
@@ -1482,6 +1485,9 @@ const REMOTE_I18N = {
     "nav.cluster": "Deine Macs",
     "tip.macs": "Nutze das Modell eines größeren Macs in deinem Netzwerk oder teile das Modell dieses Macs mit deinen anderen Macs.",
     "macs.title": "Deine Macs",
+    "macs.experimental": "Experimentell",
+    "macs.expNote": "Auf einem Mac mit zwei Instanzen getestet. Noch nicht zwischen zwei echten Macs getestet (Netzwerk-Erlaubnisabfrage, echtes WLAN, Ruhezustand/Aufwachen). Bitte sag uns, wie es bei dir funktioniert.",
+    "macs.expLink": "Auf GitHub melden",
     "macs.lead": "Nutze im Editor dieses Macs das Modell eines größeren Macs in deinem Netzwerk – oder teile das Modell dieses Macs mit deinen anderen Macs.",
     "macs.useTitle": "Anderen Mac nutzen",
     "macs.useLead": "Dein Editor behält seine Adresse (http://127.0.0.1:8080/v1); die Antworten kommen vom anderen Mac.",
@@ -1601,6 +1607,44 @@ const REMOTE_I18N = {
   },
 };
 Object.keys(REMOTE_I18N).forEach((l) => Object.assign(I18N[l], REMOTE_I18N[l]));
+// Share card (#DownloadMoreRAM): drawn locally on a canvas from the live numbers; no network.
+const SHARE_I18N = {
+  en: {
+    "share.btn": "Share",
+    "share.aria": "Create a share card with your current numbers. It is made on this Mac; nothing is uploaded.",
+    "share.title": "Share card",
+    "share.hint": "Made on this Mac from your current numbers. Nothing is uploaded.",
+    "share.copy": "Copy image",
+    "share.save": "Save PNG",
+    "share.close": "Close",
+    "share.copied": "Share card copied",
+    "share.copyFailed": "Could not copy the image; use Save PNG instead.",
+    "share.tagline": "Bigger models than your RAM, on your Mac",
+    "share.ram": "{n} GB RAM",
+    "share.swap0": "Swap 0 MB",
+    "share.hit": "{pct} % expert cache hits",
+    "share.noModel": "No model running",
+    "pill.vibes": "Running on vibes and NVMe",
+  },
+  de: {
+    "share.btn": "Teilen",
+    "share.aria": "Eine Teilen-Karte mit deinen aktuellen Werten erstellen. Sie entsteht auf diesem Mac; nichts wird hochgeladen.",
+    "share.title": "Teilen-Karte",
+    "share.hint": "Auf diesem Mac aus deinen aktuellen Werten erstellt. Nichts wird hochgeladen.",
+    "share.copy": "Bild kopieren",
+    "share.save": "PNG speichern",
+    "share.close": "Schließen",
+    "share.copied": "Teilen-Karte kopiert",
+    "share.copyFailed": "Das Bild ließ sich nicht kopieren; nutze „PNG speichern“.",
+    "share.tagline": "Größere Modelle als dein RAM, auf deinem Mac",
+    "share.ram": "{n} GB RAM",
+    "share.swap0": "Swap 0 MB",
+    "share.hit": "{pct} % Experten-Cache-Treffer",
+    "share.noModel": "Kein Modell läuft",
+    "pill.vibes": "Läuft auf Vibes und NVMe",
+  },
+};
+Object.keys(SHARE_I18N).forEach((l) => Object.assign(I18N[l], SHARE_I18N[l]));
 I18N.zh["nav.cluster"] = "我的 Mac";
 I18N.es["nav.cluster"] = "Tus Macs";
 
@@ -2797,7 +2841,9 @@ function setPill(mode) {
     try { if (state.remote && state.remote.use) p.title = remoteUseLine(state.remote); } catch {}
     b.textContent = t("btn.stopRemote"); b.className = "btn btn-power"; b.disabled = false;
   }
-  else if (mode === "on") { p.className = "pill pill-on"; p.textContent = t("pill.running"); b.textContent = t("btn.stop"); b.className = "btn btn-danger btn-power"; b.disabled = false; }
+  else if (mode === "on") { p.className = "pill pill-on"; p.textContent = t("pill.running");
+    // Easter egg: a streamed run with an expert cache under ~3 GiB.
+    if (vibesMode(state.runningCfg)) p.title = t("pill.vibes"); b.textContent = t("btn.stop"); b.className = "btn btn-danger btn-power"; b.disabled = false; }
   else if (mode === "loading") { p.className = "pill pill-loading"; p.textContent = t("pill.starting"); b.textContent = t("btn.stop"); b.className = "btn btn-danger btn-power"; b.disabled = false; }
   else {
     p.className = "pill pill-off"; p.textContent = t("pill.stopped");
@@ -3978,6 +4024,7 @@ async function refreshStatus() {
 // source (a `vm_stat` subprocess on its own timer) and could therefore contradict
 // the bar it sits next to; it takes this tick now.
 function absorbLive(live) {
+  state.lastLive = live;
   // Engine phase + prompt progress from /slots; poll() merges it with the log.
   state.slotAct = live.slot_activity || null;
   state.slotActAt = Date.now();
@@ -6210,6 +6257,8 @@ function initMacs() {
     try { state.remote = await invoke("remote_set_model_control", { allowed: !!e.target.checked }); } catch (err) { toast(remoteErr(err), true); }
     renderMacs();
   };
+  // Experimental feedback link: opens the GitHub issues page in the browser (fixed URL in main.rs).
+  $("macsFeedback").onclick = async () => { try { await invoke("open_feedback_page"); } catch {} };
   $("macsRemovedOk").onclick = async () => { try { state.remote = await invoke("remote_dismiss_removed"); } catch {} renderMacs(); };
   refreshRemote();
   // Keep the code countdown and the request badge fresh while the tab is open (poll() covers
@@ -6375,3 +6424,90 @@ async function boot() {
   refreshStatus();
 }
 boot();
+
+
+// ---------------------------------------------------------------- share card ----
+// "#DownloadMoreRAM": a PNG drawn on a <canvas> from the values the app already shows.
+// Only real current values; an unknown value is left out. No fetch, no telemetry.
+function vibesMode(cfg) {
+  return !!(cfg && cfg.cache > 0 && cfg.cache < 3);
+}
+function shareCardFacts(live, st) {
+  const running = !!st.running;
+  const pick = pickObsStrip(live, running);
+  const facts = { model: running && st.model && st.model.name ? st.model.name : null, ramGb: null, tps: null, swapZero: false, hit: null };
+  const m = live && live.system && live.system.memory;
+  if (m && m.total_bytes > 0) {
+    facts.ramGb = Math.round(m.total_bytes / 1073741824); // Apple sells "36 GB" = 36 GiB
+    facts.swapZero = m.swap_used_bytes === 0;
+  }
+  if (pick.tps && pick.tps > 0) facts.tps = pick.tps;
+  if (running && live && live.experts && live.experts.hit_rate != null) facts.hit = live.experts.hit_rate;
+  return facts;
+}
+function drawShareCard(canvas, f) {
+  const W = 1200, H = 630;
+  canvas.width = W; canvas.height = H;
+  const g = canvas.getContext("2d");
+  const bg = g.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, "#0b1220"); bg.addColorStop(1, "#14233a");
+  g.fillStyle = bg; g.fillRect(0, 0, W, H);
+  g.fillStyle = "rgba(57,192,255,.10)"; g.fillRect(0, H - 120, W, 120);
+  const logo = document.querySelector("img.logo");
+  if (logo && logo.complete && logo.naturalWidth) { try { g.drawImage(logo, 64, 56, 72, 72); } catch {} }
+  g.fillStyle = "#ffffff"; g.font = "700 46px -apple-system, system-ui, sans-serif";
+  g.fillText("Slipstream", 156, 108);
+  g.fillStyle = "#9fb3c8"; g.font = "400 26px -apple-system, system-ui, sans-serif";
+  g.fillText(t("share.tagline"), 64, 172);
+  g.fillStyle = "#ffffff"; g.font = "600 40px -apple-system, system-ui, sans-serif";
+  g.fillText(f.model || t("share.noModel"), 64, 250);
+  let y = 330;
+  if (f.tps) {
+    g.fillStyle = "#39c0ff"; g.font = "800 96px -apple-system, system-ui, sans-serif";
+    const v = dec(f.tps, 1);
+    g.fillText(v, 64, y + 60);
+    const w = g.measureText(v).width;
+    g.fillStyle = "#9fb3c8"; g.font = "500 34px -apple-system, system-ui, sans-serif";
+    g.fillText("tok/s", 64 + w + 16, y + 60);
+    y += 110;
+  }
+  const chips = [];
+  if (f.ramGb) chips.push(fillVars(t("share.ram"), { n: String(f.ramGb) }));
+  if (f.swapZero) chips.push(t("share.swap0"));
+  if (f.hit != null) chips.push(fillVars(t("share.hit"), { pct: dec(f.hit, 0) }));
+  g.font = "500 28px -apple-system, system-ui, sans-serif";
+  let x = 64;
+  for (const c of chips) {
+    const w = g.measureText(c).width + 36;
+    g.fillStyle = "rgba(255,255,255,.08)"; g.fillRect(x, y, w, 48);
+    g.fillStyle = "#e6eef7"; g.fillText(c, x + 18, y + 34);
+    x += w + 14;
+  }
+  g.fillStyle = "#ff9d2f"; g.font = "700 30px -apple-system, system-ui, sans-serif";
+  g.fillText("#DownloadMoreRAM · github.com/Schero94/slipstream", 64, H - 48);
+  return canvas;
+}
+function openShareCard() {
+  const facts = shareCardFacts(state.lastLive, state);
+  const canvas = drawShareCard(document.createElement("canvas"), facts);
+  const url = canvas.toDataURL("image/png");
+  const img = $("shareCardImg");
+  img.src = url;
+  img.alt = [facts.model, facts.tps ? dec(facts.tps, 1) + " tok/s" : null,
+    facts.ramGb ? fillVars(t("share.ram"), { n: String(facts.ramGb) }) : null].filter(Boolean).join(" · ");
+  $("shareCardSave").href = url;
+  state.shareCanvas = canvas;
+  $("shareCard").hidden = false;
+}
+if ($("shareCardBtn")) {
+  $("shareCardBtn").onclick = openShareCard;
+  $("shareCardClose").onclick = () => { $("shareCard").hidden = true; };
+  $("shareCardCopy").onclick = () => {
+    const c = state.shareCanvas;
+    if (!c) return;
+    c.toBlob(async (blob) => {
+      try { await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); toast(t("share.copied")); }
+      catch { toast(t("share.copyFailed"), true); }
+    }, "image/png");
+  };
+}

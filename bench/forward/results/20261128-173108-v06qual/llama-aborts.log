@@ -1,0 +1,9 @@
+8.40.509.860 W decode_layer_major_prepasses: layer-major prefill aborted at layer 7/40, ubatch 4 (7 layer passes done)
+8.40.510.121 W srv        decode: layer-major prefill aborted 0.057 s after the cancel of its task
+8.40.510.122 I slot prompt_abort: id  0 | task 1166 | n_prompt = 15526, t = 6085 ms
+8.56.732.028 W decode_layer_major_prepasses: layer-major prefill aborted at layer 7/40, ubatch 4 (7 layer passes done)
+8.56.732.285 W srv        decode: layer-major prefill aborted 0.103 s after the cancel of its task
+8.56.732.286 I slot prompt_abort: id  0 | task 1170 | n_prompt = 15525, t = 6128 ms
+9.12.833.035 W decode_layer_major_prepasses: layer-major prefill aborted at layer 7/40, ubatch 3 (7 layer passes done)
+9.12.833.256 W srv        decode: layer-major prefill aborted 0.002 s after the cancel of its task
+9.12.833.257 I slot prompt_abort: id  0 | task 1174 | n_prompt = 15524, t = 6028 ms
