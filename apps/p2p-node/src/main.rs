@@ -215,6 +215,12 @@ enum Commands {
         /// Macs then need its address (they still try the last one that worked).
         #[arg(long, default_value_t = false)]
         no_announce: bool,
+        /// PID of the llama-server process behind --forward. Requests are forwarded only
+        /// while that process (or a child of it) owns the listening port; anything else
+        /// listening there gets nothing (503). Without it, the listener must at least run
+        /// under your user account.
+        #[arg(long, value_name = "PID")]
+        forward_pid: Option<u32>,
         #[arg(long, default_value_t = false)]
         verbose: bool,
     },
@@ -243,11 +249,16 @@ enum Commands {
         /// QUIC idle timeout in ms (peer-loss detection; default 8000).
         #[arg(long)]
         idle_timeout_ms: Option<u64>,
-        /// Require `Authorization: Bearer <token>` from editors. The token is read from
-        /// this file, or created there (32 random bytes as hex, mode 0600) if missing.
-        /// Put it into the editor's "API key" field (the app does this for you).
+        /// Editors must send `Authorization: Bearer <token>`. The token is read from this
+        /// file, or created there (32 random bytes as hex, mode 0600) if missing. Default:
+        /// `<data dir>/local.token` (the same key the app writes into editor configs).
+        /// Put it into the editor's "API key" field.
         #[arg(long, value_name = "PATH")]
         token_file: Option<PathBuf>,
+        /// Do not require a token (any program on this Mac can then use the other Mac's
+        /// model through --http). Not recommended.
+        #[arg(long, default_value_t = false, conflicts_with = "token_file")]
+        no_token: bool,
         /// Measurement only: do not keep a pre-opened spare stream.
         #[arg(long, default_value_t = false, hide = true)]
         no_spare_stream: bool,
@@ -460,6 +471,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             addr_file,
             idle_timeout_ms,
             no_announce,
+            forward_pid,
             verbose,
         } => {
             cmd_share(
@@ -470,6 +482,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 addr_file,
                 idle_timeout_ms,
                 !no_announce,
+                forward_pid,
                 verbose,
             )
             .await?
@@ -481,6 +494,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             data_dir,
             idle_timeout_ms,
             token_file,
+            no_token,
             no_spare_stream,
             no_discovery,
             keep_trying,
@@ -492,6 +506,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 data_dir,
                 idle_timeout_ms,
                 token_file,
+                no_token,
                 !no_spare_stream,
                 !no_discovery,
                 keep_trying,
@@ -888,6 +903,7 @@ async fn cmd_share(
     addr_file: Option<PathBuf>,
     idle_timeout_ms: Option<u64>,
     announce: bool,
+    forward_pid: Option<u32>,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let policy = NodePolicy::for_mode(NodeMode::Paired);
@@ -905,6 +921,16 @@ async fn cmd_share(
     opts.may_start_model = true;
     opts.announce = announce;
     opts.paired = paired_config(idle_timeout_ms);
+    // Review M3: who may receive forwarded requests on --forward.
+    opts.upstream_owner = match forward_pid {
+        Some(pid) => p2p_forward::upstream::UpstreamOwner::fixed_pid(pid),
+        None => {
+            eprintln!(
+                "share: forwarding only while the listener on {upstream} runs under your user account; pass --forward-pid <llama-server PID> to pin the exact process"
+            );
+            p2p_forward::upstream::UpstreamOwner::SameUid
+        }
+    };
     opts.verbose = verbose;
     let session = p2p_node::session::ShareSession::start(node.clone(), opts).await?;
     let dial = session.handle.dial_addr();
@@ -931,6 +957,7 @@ async fn cmd_use(
     data_dir: Option<PathBuf>,
     idle_timeout_ms: Option<u64>,
     token_file: Option<PathBuf>,
+    no_token: bool,
     spare_stream: bool,
     discovery: bool,
     keep_trying: bool,
@@ -950,6 +977,15 @@ async fn cmd_use(
     } else {
         let (id, a) = p2p_node::trust::resolve_use_target(&node.store, peer.as_deref())?;
         (id, Some(a))
+    };
+    // Review M2: a token by default (the same file the app uses), opt-out with --no-token.
+    let token_file = match (token_file, no_token) {
+        (Some(p), _) => Some(p),
+        (None, false) => Some(dir.join("local.token")),
+        (None, true) => {
+            eprintln!("use: --no-token: any program on this Mac can use the other Mac's model through {http}");
+            None
+        }
     };
     let token = match &token_file {
         Some(path) => Some(p2p_forward::load_or_create_token(path)?),

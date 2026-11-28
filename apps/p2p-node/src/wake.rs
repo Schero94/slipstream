@@ -6,6 +6,12 @@
 //! (6 × `0xFF` + 16 × the MAC address, 102 bytes) as a UDP broadcast to port 9 and keeps
 //! re-dialing for [`WAKE_WINDOW`].
 //!
+//! Security review L2: magic packets go out **only during** the 20 s waking window (not
+//! every minute afterwards) and **only when this Mac is on the network where the other Mac
+//! was last seen** ([`on_last_seen_network`]: one of its stored `last_addrs` lies in a
+//! subnet of one of our interfaces). In a café or on another network nothing is broadcast,
+//! so the big Mac's hardware addresses never leave home.
+//!
 //! Nothing here changes system settings or needs privileges: reading interface addresses
 //! is `ifconfig` (read-only), sending a UDP broadcast only needs `SO_BROADCAST` on our own
 //! socket. Whether the big Mac actually wakes depends on its "Wake for network access"
@@ -109,6 +115,55 @@ pub fn parse_broadcast_targets(text: &str) -> Vec<SocketAddr> {
     v
 }
 
+/// IPv4 networks of this Mac's interfaces (`inet A netmask 0xffffff00` in `ifconfig`).
+pub fn local_ipv4_nets() -> Vec<(Ipv4Addr, Ipv4Addr)> {
+    let out = std::process::Command::new("/sbin/ifconfig").output();
+    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    parse_ipv4_nets(&text)
+}
+
+/// `(address, netmask)` pairs of an `ifconfig` output.
+pub fn parse_ipv4_nets(text: &str) -> Vec<(Ipv4Addr, Ipv4Addr)> {
+    let mut v = Vec::new();
+    for line in text.lines() {
+        let toks: Vec<&str> = line.split_whitespace().collect();
+        if toks.first() != Some(&"inet") {
+            continue;
+        }
+        let Some(ip) = toks.get(1).and_then(|s| s.parse::<Ipv4Addr>().ok()) else { continue };
+        let mask = toks
+            .iter()
+            .position(|t| *t == "netmask")
+            .and_then(|i| toks.get(i + 1))
+            .and_then(|m| u32::from_str_radix(m.trim_start_matches("0x"), 16).ok())
+            .map(Ipv4Addr::from);
+        if let Some(mask) = mask {
+            v.push((ip, mask));
+        }
+    }
+    v
+}
+
+/// Whether any stored address of the other Mac (`/ip4/x.x.x.x/...` multiaddrs) lies in one of
+/// `nets` — i.e. this Mac is on the network where the other Mac was last seen (L2). No stored
+/// IPv4 address → `false` (never broadcast blindly).
+pub fn on_last_seen_network(last_addrs: &[String], nets: &[(Ipv4Addr, Ipv4Addr)]) -> bool {
+    last_addrs.iter().any(|a| {
+        let ip = a
+            .split('/')
+            .collect::<Vec<_>>()
+            .windows(2)
+            .find(|w| w[0] == "ip4")
+            .and_then(|w| w[1].parse::<Ipv4Addr>().ok());
+        ip.is_some_and(|ip| {
+            nets.iter().any(|(net, mask)| {
+                let (m, n, i) = (u32::from(*mask), u32::from(*net), u32::from(ip));
+                m != 0 && (n & m) == (i & m)
+            })
+        })
+    })
+}
+
 /// Send one magic packet per MAC to every target. Returns the number of datagrams sent.
 /// Errors per target are ignored (an interface may be down); no MACs → `Ok(0)`.
 pub fn send_wake(macs: &[String], targets: &[SocketAddr]) -> io::Result<usize> {
@@ -190,6 +245,22 @@ en7: flags=8863<UP> mtu 1500\n\tinet 10.0.0.5 netmask 0xffff0000 broadcast 10.0.
                 "10.0.255.255:9".parse().unwrap()
             ]
         );
+    }
+
+    /// L2: WoL only on the network where the other Mac was last seen.
+    #[test]
+    fn last_seen_network_check() {
+        let text = "lo0: flags=8049<UP>\n\tinet 127.0.0.1 netmask 0xff000000\n\
+en0: flags=8863<UP>\n\tinet 192.168.1.20 netmask 0xffffff00 broadcast 192.168.1.255\n\tinet6 fe80::1%en0 prefixlen 64\n";
+        let nets = parse_ipv4_nets(text);
+        assert_eq!(nets.len(), 2);
+        let home = vec!["/ip4/192.168.1.7/udp/9003/quic-v1/p2p/12D3KooWx".to_string()];
+        let cafe = vec!["/ip4/10.0.0.7/udp/9003/quic-v1".to_string()];
+        assert!(on_last_seen_network(&home, &nets));
+        assert!(!on_last_seen_network(&cafe, &nets));
+        assert!(!on_last_seen_network(&[], &nets), "nothing stored: never broadcast");
+        assert!(!on_last_seen_network(&["/ip6/::1/udp/1/quic-v1".into()], &nets));
+        assert!(on_last_seen_network(&["/ip4/127.0.0.1/udp/1/quic-v1".into()], &nets));
     }
 
     /// The packet really leaves through a UDP socket (to a loopback listener, never the LAN).

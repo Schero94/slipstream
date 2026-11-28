@@ -339,3 +339,78 @@ async fn props_sanitized_on_share_side() {
     assert!(!resp.contains("model_path") && !resp.contains("/Users") && !resp.contains("chat_template"), "{resp}");
     assert!(resp.contains(r#""n_ctx":8192"#));
 }
+
+/// Security review L4: one paired Mac may hold at most two status streams at once; status is
+/// collected at most once per second however often it asks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn status_streams_capped_per_peer() {
+    use p2p_forward::proto::STATUS_PROTOCOL_V1;
+    let r = rig(RigOptions {
+        spare_stream: false,
+        ..RigOptions::default()
+    })
+    .await;
+    let raw = raw_peer(&r).await;
+    let open_status = || async {
+        let mut control = raw.control.clone();
+        let stream = control.open_stream(raw.peer, STATUS_PROTOCOL_V1).await.unwrap();
+        let ctx = p2p_forward::proto::channel_context(&raw.local, &raw.peer, &STATUS_PROTOCOL_V1);
+        p2p_forward::proto::open_channel(stream, p2p_crypto::StreamRole::Initiator, &ctx, &raw.node, &raw.peer_key).await
+    };
+    // two idle status streams (no request yet) hold both places
+    let a = open_status().await.unwrap();
+    let b = open_status().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let third = tokio::time::timeout(Duration::from_secs(2), open_status()).await;
+    assert!(!matches!(third, Ok(Ok(_))), "a third concurrent status stream was served");
+    assert!(r.share.stats.lock().unwrap().status_refused >= 1);
+    drop((a, b));
+    // places are released: polls work again, and many polls collect once
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    for _ in 0..5 {
+        let (mut rd, mut wr) = open_status().await.unwrap();
+        wr.send(FrameType::StatusReq, &p2p_forward::status::encode_request(
+            p2p_forward::StatusRequest::Status,
+            Default::default(),
+        ))
+        .await
+        .unwrap();
+        let f = tokio::time::timeout(Duration::from_secs(3), rd.next()).await.unwrap().unwrap().unwrap();
+        assert_eq!(f.kind, FrameType::StatusResp);
+    }
+    let health_hits = r.mock.requests().iter().filter(|q| q.target == "/health").count();
+    assert!(health_hits <= 2, "status not cached: {health_hits} /health requests for 5 polls");
+}
+
+/// Security review M3: when the expected process does not own the upstream listener (here:
+/// the mock llama-server runs in this test process, but the share side expects PID 1), a
+/// paired Mac's request never reaches it — 503 `model_not_running` — and status says the
+/// model is not running without asking the foreign listener.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn foreign_upstream_listener_gets_nothing() {
+    let r = rig(RigOptions {
+        upstream_owner: p2p_forward::upstream::UpstreamOwner::fixed_pid(1),
+        ..RigOptions::default()
+    })
+    .await;
+    let fwd = r.use_side.bind;
+    let resp = send(fwd, &request("POST", "/v1/chat/completions", &fwd.to_string(), &[], &chat_body("plain"))).await;
+    assert_eq!(resp.status(), 503, "{}", resp.head());
+    assert!(resp.body_text().contains("model_not_running"), "{}", resp.body_text());
+    let st = r.use_side.rpc(p2p_forward::StatusRequest::Status).await.unwrap();
+    match st {
+        p2p_forward::StatusReply::Status(s) => assert!(!s.model_running && s.model_id.is_none(), "{s:?}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(r.mock.requests().is_empty(), "the foreign listener saw {:?}", r.mock.requests());
+    assert!(r.share.stats.lock().unwrap().upstream_unverified >= 1);
+    // the right owner (this process) is served
+    let ok = rig(RigOptions {
+        upstream_owner: p2p_forward::upstream::UpstreamOwner::fixed_pid(std::process::id()),
+        ..RigOptions::default()
+    })
+    .await;
+    let fwd = ok.use_side.bind;
+    let resp = send(fwd, &request("POST", "/v1/chat/completions", &fwd.to_string(), &[], &chat_body("plain"))).await;
+    assert_eq!(resp.status(), 200, "{}", resp.head());
+}

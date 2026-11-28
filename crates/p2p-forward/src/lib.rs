@@ -30,10 +30,11 @@ pub mod pipe;
 pub mod proto;
 pub mod status;
 pub mod trust;
+pub mod upstream;
 pub mod worker;
 
 pub use client::{start_use, AddrBook, LocalLimits, UseConfig, UseDiscovery, UseEvent, UseHandle};
-pub use trust::{PeerTrust, StaticTrust, TrustEpoch};
+pub use trust::{PeerTrust, Role, StaticTrust, TrustEpoch};
 pub use worker::{parse_upstream, start_share, ShareConfig, ShareHandle, ShareLimits};
 pub use status::{ModelControl, ReplyFuture, Status, StatusReply, StatusRequest};
 /// Re-exported so embedders (the app) need no direct libp2p dependency.
@@ -90,7 +91,7 @@ pub fn transport_identity(node: &NodeKeypair) -> libp2p::identity::Keypair {
 /// this file and writes the token into the editor configs as their "API key", so other
 /// local processes / users cannot use the paired Mac through the forwarder.
 pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
-    use std::io::{Read, Write};
+    use std::io::Read;
     match std::fs::File::open(path) {
         Ok(mut f) => {
             let mut s = String::new();
@@ -117,26 +118,63 @@ pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
             Ok(token)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let mut bytes = [0u8; 32];
-            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
-            let token = hex::encode(bytes);
-            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-                std::fs::create_dir_all(parent)?;
+            let token = new_token();
+            // Publish atomically (temp file 0600 → hard link): a concurrent reader never sees
+            // an empty file; if another process won the race, use its token (review "info").
+            match publish_token(path, &token, false) {
+                Ok(()) => Ok(token),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => load_or_create_token(path),
+                Err(e) => Err(e),
             }
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            let mut f = opts.open(path)?;
-            f.write_all(format!("{token}\n").as_bytes())?;
-            f.sync_all()?;
-            Ok(token)
         }
         Err(e) => Err(e),
     }
+}
+
+fn new_token() -> String {
+    let mut bytes = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+    hex::encode(bytes)
+}
+
+/// Write `token` to a fresh temp file (0600, `create_new`, fsync) next to `path`, then
+/// publish it: `replace = false` → hard link (fails with `AlreadyExists` if `path` exists),
+/// `replace = true` → rename over `path`.
+fn publish_token(path: &Path, token: &str, replace: bool) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let mut rnd = [0u8; 8];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut rnd);
+    let tmp = parent.join(format!(".local.token.tmp-{}-{}", std::process::id(), hex::encode(rnd)));
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let result = (|| {
+        let mut f = opts.open(&tmp)?;
+        f.write_all(format!("{token}\n").as_bytes())?;
+        f.sync_all()?;
+        if replace {
+            std::fs::rename(&tmp, path)
+        } else {
+            std::fs::hard_link(&tmp, path)
+        }
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
+/// A new random token replaces the one in `path` (atomically, 0600). Every editor config
+/// that carries the old one must be patched again (the app does this; review M2
+/// "regenerate token").
+pub fn regenerate_token(path: &Path) -> std::io::Result<String> {
+    let token = new_token();
+    publish_token(path, &token, true)?;
+    Ok(token)
 }
 
 #[cfg(test)]
@@ -160,5 +198,31 @@ mod tests {
         assert_ne!(other, t);
         std::fs::write(dir.path().join("short"), "abc\n").unwrap();
         assert!(load_or_create_token(&dir.path().join("short")).is_err());
+        // regenerate: a new value, still 0600, no temp files left
+        let r = regenerate_token(&path).unwrap();
+        assert_ne!(r, t);
+        assert_eq!(load_or_create_token(&path).unwrap(), r);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("local.token")]);
+    }
+
+    /// Review "info": many threads creating the token at once all get the same, complete
+    /// value (no empty-file read, no error on AlreadyExists).
+    #[test]
+    fn concurrent_token_creation_agrees() {
+        for _ in 0..20 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("local.token");
+            let got: Vec<String> = std::thread::scope(|s| {
+                let hs: Vec<_> = (0..8).map(|_| s.spawn(|| load_or_create_token(&path).unwrap())).collect();
+                hs.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            assert!(got.iter().all(|t| t == &got[0] && t.len() == 64), "{got:?}");
+        }
     }
 }

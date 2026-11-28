@@ -174,7 +174,7 @@ fn discover_use_redial_pair_flag_and_pair_by_fingerprint() {
     // 2. use finds it by fingerprint (its stored address is the old loopback pairing port)
     let http: SocketAddr = format!("127.0.0.1:{}", free_port()).parse().unwrap();
     let t_use = Instant::now();
-    let use_ = Proc::spawn(&["use", "--http", &http.to_string()], &book);
+    let use_ = Proc::spawn(&["use", "--no-token", "--http", &http.to_string()], &book);
     use_.wait_line(Duration::from_secs(10), |l| l.starts_with("editors:"))
         .unwrap_or_else(|| panic!("use never connected:\n{}", use_.dump()));
     println!("use_connect_ms={:.0}", t_use.elapsed().as_secs_f64() * 1e3);
@@ -283,7 +283,7 @@ fn spoofed_fingerprint_is_never_dialed_as_the_paired_mac() {
     .unwrap();
     let before = text(&run(&["trust", "list"], &book));
     let http: SocketAddr = format!("127.0.0.1:{}", free_port()).parse().unwrap();
-    let use_ = Proc::spawn(&["use", "--http", &http.to_string()], &book);
+    let use_ = Proc::spawn(&["use", "--no-token", "--http", &http.to_string()], &book);
     // it must see the spoofed announcement, dial it as the pinned PeerId and fail
     use_.wait_line(Duration::from_secs(5), |l| l.starts_with("lan event=found") && l.contains(&fp))
         .unwrap_or_else(|| panic!("spoofed announcement not seen:\n{}", use_.dump()));

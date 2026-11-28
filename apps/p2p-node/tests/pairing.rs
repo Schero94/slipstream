@@ -120,6 +120,7 @@ async fn mitm_relay_with_a_different_peer_id_fails_key_confirmation() {
         open_trust,
         Default::default(),
         "mitm",
+        p2p_forward::Role::Use,
         false,
     )
     .await
@@ -163,7 +164,7 @@ async fn mitm_relay_with_a_different_peer_id_fails_key_confirmation() {
 }
 
 /// Scripted client: Start, read Reply, compute our Finish (correct code). Returns the
-/// Finish we would send, the stream (still open) and B's confirmation tag.
+/// Finish we would send, the stream (still open) and the connection.
 async fn scripted_session(
     book: &common::Mac,
     listener: &p2p_node::pairing::PairListener,
@@ -186,7 +187,7 @@ async fn scripted_session(
     )
     .await
     .unwrap();
-    let PairMsg::Reply { spake, x25519, info, confirm } = read_msg(&mut io).await.unwrap() else {
+    let PairMsg::Reply { spake, x25519 } = read_msg(&mut io).await.unwrap() else {
         panic!("expected Reply");
     };
     let key = start.finish(&hex::decode(spake).unwrap()).unwrap();
@@ -196,9 +197,6 @@ async fn scripted_session(
         x25519_a: book.node.public_bytes(),
         x25519_b: hex::decode(x25519).unwrap().try_into().unwrap(),
     };
-    let info_b = key.open_info(&hex::decode(info).unwrap()).unwrap();
-    let confirm_b = hex::decode(confirm).unwrap();
-    key.verify_peer(&t, &info_b, &[], &confirm_b).unwrap();
     let mine = PairInfo {
         name: "MacBook".into(),
         app_version: "0.6.0".into(),
@@ -207,7 +205,7 @@ async fn scripted_session(
     };
     let finish = PairMsg::Finish {
         info: hex::encode(key.seal_info(&mine)),
-        confirm: hex::encode(key.confirm(&t, &mine, &confirm_b)),
+        confirm: hex::encode(key.confirm(&t, &mine, &[])),
     };
     (finish, io, conn)
 }
@@ -221,10 +219,12 @@ async fn replayed_confirmation_is_rejected() {
     let code = listener.window.code().as_str().to_string();
 
     // Session 1: a valid Finish is recorded (by an eavesdropper / the client) but not sent.
+    // No guess was tested, so it does not count (M5).
     let (recorded, io1, conn1) = scripted_session(&book, &listener, &code).await;
     drop(io1);
     drop(conn1);
-    wait_until("session 1 counted", Duration::from_secs(5), || listener.window.failed_attempts() == 1).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(listener.window.failed_attempts(), 0);
 
     // Session 2: same peer, same code, replay session 1's Finish → refused.
     let (_fresh, mut io2, conn2) = scripted_session(&book, &listener, &code).await;
@@ -236,7 +236,7 @@ async fn replayed_confirmation_is_rejected() {
     drop(io2);
     drop(conn2);
     assert!(big.store.list().is_empty(), "replayed confirmation stored a peer");
-    wait_until("session 2 counted", Duration::from_secs(5), || listener.window.failed_attempts() == 2).await;
+    wait_until("session 2 counted", Duration::from_secs(5), || listener.window.failed_attempts() == 1).await;
 
     // Session 3: a fresh, honest Finish with the same code works → the replay, not the
     // code, was the problem.
@@ -270,4 +270,133 @@ async fn code_expires_after_five_minutes() {
     assert!(t0.elapsed() < Duration::from_secs(6));
     assert!(big.store.list().is_empty());
     assert!(book.store.list().is_empty());
+}
+
+/// Review M5: sessions that stop after B's `Reply` (no `Finish`) learn nothing about the
+/// code and do not count — a LAN attacker cannot burn the 3 attempts that way.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unfinished_sessions_do_not_count() {
+    let root = tempfile::tempdir().unwrap();
+    let big = mac(root.path(), "Mac Studio");
+    let book = mac(root.path(), "MacBook");
+    let attacker = mac(root.path(), "Attacker");
+    let listener = show_code(&big, Arc::new(SystemClock)).await;
+    let code = listener.window.code().as_str().to_string();
+    for _ in 0..6 {
+        let (_finish, io, conn) = scripted_session(&attacker, &listener, &wrong(&code)).await;
+        drop(io);
+        drop(conn);
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(listener.window.failed_attempts(), 0);
+    assert_eq!(listener.window.state(), WindowState::Open);
+    type_code(&book, &listener, &code).await.unwrap();
+    assert!(big.store.is_trusted(&book.peer));
+    assert!(!big.store.is_trusted(&attacker.peer));
+}
+
+/// Review M5: guests get their own small cap (4, at most 2 per IP address) and never use
+/// the trusted Macs' connection slots.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn guests_capped_and_do_not_take_trusted_slots() {
+    use p2p_forward::mock_llama;
+    let root = tempfile::tempdir().unwrap();
+    let big = mac(root.path(), "Mac Studio");
+    let book = mac(root.path(), "MacBook");
+    common::pair(&big, &book).await;
+    let mock = mock_llama::start("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    // trusted Macs get exactly one slot; guests come on top
+    let paired = PairedConfig {
+        max_established_total: 1,
+        ..PairedConfig::default()
+    };
+    let share = p2p_forward::start_share(
+        p2p_forward::transport_identity(&big.node),
+        p2p_forward::ShareConfig {
+            listen: LOOPBACK.parse().unwrap(),
+            upstream: mock.addr,
+            trust: big.trust.clone(),
+            node: big.node.clone(),
+            paired,
+            admission: Default::default(),
+            limits: Default::default(),
+            name: big.name.clone(),
+            model: None,
+            versions: Default::default(),
+            upstream_owner: Default::default(),
+            verbose: false,
+        },
+    )
+    .await
+    .unwrap();
+    let window = p2p_node::pairing::PairingWindow::open(Arc::new(SystemClock), big.store.epoch());
+    big.trust.set_window(Some(window.clone()));
+    // six strangers from 127.0.0.1 → only MAX_GUESTS_PER_IP stay
+    let mut held = Vec::new();
+    for i in 0..6 {
+        let s = mac(root.path(), &format!("stranger{i}"));
+        if let Ok(c) = connect(&s.node, &share.dial_addr(), &PairedConfig::default()).await {
+            held.push(c);
+        }
+    }
+    wait_until("guest cap enforced", Duration::from_secs(5), || {
+        let st = share.stats.lock().unwrap();
+        st.pairing_guests == p2p_forward::gate::MAX_GUESTS_PER_IP as u64 && st.guests_refused >= 4
+    })
+    .await;
+    // the paired MacBook still gets in (its slot was not taken by guests)
+    let conn = connect(&book.node, &share.dial_addr(), &PairedConfig::default()).await.unwrap();
+    wait_until("trusted Mac admitted", Duration::from_secs(5), || {
+        share.stats.lock().unwrap().connections_established >= 1
+    })
+    .await;
+    drop(conn);
+    drop(held);
+}
+
+/// Review M5: with several discovered addresses, the fingerprint is checked inside each
+/// connection attempt — a different Mac answering at one address is skipped (and its
+/// pairing window is not touched), the right Mac at another address is paired.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fingerprint_checked_per_address() {
+    let root = tempfile::tempdir().unwrap();
+    let big = mac(root.path(), "Mac Studio");
+    let other = mac(root.path(), "Other Mac");
+    let book = mac(root.path(), "MacBook");
+    let real = show_code(&big, Arc::new(SystemClock)).await;
+    let decoy = show_code(&other, Arc::new(SystemClock)).await;
+    let code = real.window.code().as_str().to_string();
+    let fp = p2p_node::lan::fingerprint(&big.peer);
+    let strip = |a: libp2p::Multiaddr| p2p_node::pairing::strip_p2p(&a);
+    // the decoy first: it would win a plain race on loopback about half the time
+    let addrs = vec![strip(decoy.dial_addr()), strip(real.dial_addr())];
+    let e = p2p_node::pairing::pair_with_checked(
+        &book.node,
+        &book.store,
+        &addrs,
+        &PairingCode::parse(&code).unwrap(),
+        p2p_node::pairing::local_info(Some("MacBook".into()), false),
+        &PairedConfig::default(),
+        Some(&fp),
+    )
+    .await
+    .unwrap();
+    assert_eq!(e.peer_id, big.peer.to_string());
+    assert_eq!(decoy.window.failed_attempts(), 0);
+    assert_eq!(decoy.ctx.stats.lock().unwrap().sessions, 0, "decoy saw a pairing session");
+    book.store.revoke(&big.peer.to_string()).unwrap();
+    // only the decoy: refused before any pairing message
+    let err = p2p_node::pairing::pair_with_checked(
+        &book.node,
+        &book.store,
+        &[strip(decoy.dial_addr())],
+        &PairingCode::parse(&code).unwrap(),
+        p2p_node::pairing::local_info(Some("MacBook".into()), false),
+        &PairedConfig::default(),
+        Some(&fp),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, PairError::Protocol(_) | PairError::Unreachable(_)), "{err:?}");
+    assert_eq!(decoy.ctx.stats.lock().unwrap().sessions, 0);
 }

@@ -261,6 +261,8 @@ pub async fn local_requests(upstream: SocketAddr, forwarded: usize) -> Option<u6
 pub struct ShareView<'a> {
     pub name: &'a str,
     pub upstream: SocketAddr,
+    /// The upstream listener is the expected process (M3); otherwise it is not asked at all.
+    pub upstream_ok: bool,
     /// Admission: (paired requests in flight, queued).
     pub load: (usize, usize),
     /// Forwarded requests that hold an upstream connection right now.
@@ -270,8 +272,8 @@ pub struct ShareView<'a> {
 
 /// Collect the share side's status from its llama-server + admission load.
 pub async fn collect(view: ShareView<'_>) -> Status {
-    let ShareView { name, upstream, load, forwarded, versions } = view;
-    let health = upstream_get(upstream, "/health").await.ok();
+    let ShareView { name, upstream, upstream_ok, load, forwarded, versions } = view;
+    let health = if upstream_ok { upstream_get(upstream, "/health").await.ok() } else { None };
     let model_running = matches!(health, Some((200, _)));
     let mut status = Status {
         name: name.to_string(),
@@ -303,6 +305,43 @@ pub async fn collect(view: ShareView<'_>) -> Status {
     status
 }
 
+/// How long a collected status is reused (security review L4: a paired Mac polling status
+/// cannot make this Mac run `pmset` and five llama-server requests per poll).
+pub const STATUS_CACHE_TTL: Duration = Duration::from_secs(1);
+/// Status streams one peer may have open at once (L4).
+pub const MAX_STATUS_STREAMS_PER_PEER: usize = 2;
+
+/// [`collect`] reused for [`STATUS_CACHE_TTL`]; concurrent callers wait for one collection.
+/// The admission load (`busy`, `queue_len`) is always live.
+#[derive(Default)]
+pub struct StatusCache {
+    inner: tokio::sync::Mutex<Option<(std::time::Instant, Status)>>,
+    collections: std::sync::atomic::AtomicU64,
+}
+
+impl StatusCache {
+    pub async fn get(&self, view: ShareView<'_>) -> Status {
+        let mut slot = self.inner.lock().await;
+        let mut s = match &*slot {
+            Some((t, s)) if t.elapsed() < STATUS_CACHE_TTL => s.clone(),
+            _ => {
+                self.collections.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let s = collect(view).await;
+                *slot = Some((std::time::Instant::now(), s.clone()));
+                s
+            }
+        };
+        s.busy = view.load.0 > 0;
+        s.queue_len = view.load.1;
+        s
+    }
+
+    /// How many times the upstream was actually asked (tests).
+    pub fn collections(&self) -> u64 {
+        self.collections.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 /// Answer one request from `peer` (which sent protocol `peer_proto`). A peer below
 /// `view.versions.min_peer` is refused with [`VERSION_MISMATCH`] (M5). Without `model`
 /// (headless share) start/stop are refused; with it they go to the app and
@@ -313,6 +352,7 @@ pub async fn answer(
     view: ShareView<'_>,
     peer: PeerId,
     model: Option<&Arc<dyn ModelControl>>,
+    cache: &StatusCache,
 ) -> StatusReply {
     if crate::proto::peer_proto(peer_proto) < view.versions.min_peer {
         return StatusReply::Refused {
@@ -323,7 +363,7 @@ pub async fn answer(
     let allowed = model.is_some_and(|m| m.allowed(&peer));
     match (req, model) {
         (StatusRequest::Status, _) => {
-            let mut s = collect(view).await;
+            let mut s = cache.get(view).await;
             s.can_start_model = allowed;
             StatusReply::Status(s)
         }
@@ -383,6 +423,29 @@ mod tests {
         .unwrap();
         assert_eq!((old.proto, old.min_proto, old.local_busy), (1, 1, false));
         assert_eq!(old.compat(Versions::default()), Compat::Ok);
+    }
+
+    /// L4: status is collected at most once per TTL, however often a peer asks.
+    #[tokio::test]
+    async fn status_cache_reuses_one_collection() {
+        let mock = crate::mock_llama::start("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let cache = StatusCache::default();
+        let view = |load| ShareView {
+            name: "S",
+            upstream: mock.addr,
+            upstream_ok: true,
+            load,
+            forwarded: 0,
+            versions: Versions::default(),
+        };
+        let first = cache.get(view((0, 0))).await;
+        let polls = futures::future::join_all((0..20).map(|_| cache.get(view((1, 3))))).await;
+        assert_eq!(cache.collections(), 1);
+        assert!(polls.iter().all(|s| s.busy && s.queue_len == 3), "load must stay live");
+        assert_eq!(polls[0].model_running, first.model_running);
+        tokio::time::sleep(STATUS_CACHE_TTL + Duration::from_millis(50)).await;
+        cache.get(view((0, 0))).await;
+        assert_eq!(cache.collections(), 2);
     }
 
     #[test]

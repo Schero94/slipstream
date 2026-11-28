@@ -237,6 +237,8 @@
           <div class="kv"><span>API Key</span><code>sk-local</code><button class="btn btn-ghost copy" data-i18n="btn.copy" data-copy-text="sk-local">Kopieren</button></div>
           <div id="agentList" class="agents"></div>
           <div id="agentNote" class="hint stack-gap" style="min-height:16px"></div>
+          <div class="p2p-actions"><button type="button" id="regenKey" class="btn btn-ghost" data-i18n="macs.regenKey">Regenerate key</button></div>
+          <p class="hint" data-i18n="macs.regenKeyHint">Makes a new local API key. Editors set up here get it automatically; others need the new key.</p>
         </div>
         <details class="card soft-secondary" id="indexingSoft">
           <summary class="soft-secondary-summary"><span data-i18n="sec.indexingOpt">Codebase indexing</span> <span class="soft-secondary-tag" data-i18n="journey.optional">optional</span></summary>
@@ -628,6 +630,7 @@
             <p id="macsShareBattery" class="hint macs-warn" data-i18n="macs.shareBattery" hidden>This Mac runs on battery. It still shares, but it may go to sleep when no request runs — plug it in for reliable sharing.</p>
             <div class="p2p-actions"><button type="button" id="macsAddMac" class="btn" data-i18n="macs.addMac" hidden>Pair another Mac</button></div>
             <label class="chk macs-may"><input type="checkbox" id="macsMayStart" /><span data-i18n="macs.mayStart">Paired Macs may start and stop the model</span></label>
+            <label class="chk macs-may"><input type="checkbox" id="macsBatteryStart" /><span data-i18n="macs.batteryStart">…also while this Mac runs on battery</span></label>
             <p class="hint" data-i18n="macs.mayStartHint">They can start it with your last settings (only when there is enough free memory) and stop only a model they started — never while this Mac is answering its own request.</p>
             <div class="macs-sub">
               <h4 data-i18n="macs.pairedShare">Macs that use this Mac</h4>

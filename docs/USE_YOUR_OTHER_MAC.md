@@ -40,13 +40,20 @@ Mac. This also works over your own VPN. There is no relay server and no NAT trav
 ```bash
 # big Mac: llama-server already runs on 127.0.0.1:8080
 slipstream-node pair --show-code          # prints a code (stop `share` first, or run it next to a running share)
-slipstream-node share                     # forwards to http://127.0.0.1:8080, announces on the LAN
+slipstream-node share --forward-pid "$(pgrep -n llama-server)"   # forwards to http://127.0.0.1:8080 only while that process owns the port
 # MacBook
 slipstream-node pair --peer <fingerprint from `slipstream-node discover`> --code <6 digits>
-slipstream-node use --token-file ~/.slipstream-token   # editors: http://127.0.0.1:8080/v1, API key = the file's content
+slipstream-node use        # editors: http://127.0.0.1:8080/v1, API key = the content of <data dir>/local.token
 ```
 
-`slipstream-node share` never starts a model by itself and never joins the community mesh.
+`slipstream-node share` never starts a model by itself and never joins the community mesh. Without
+`--forward-pid` it forwards only while the process on port 8080 runs under your own user account.
+`slipstream-node use` requires the local API key by default (the same `local.token` the app uses;
+`--token-file <path>` for another file, `--no-token` to switch it off — not recommended).
+
+Pairing has a direction: the Mac that **shows** the code shares its model, the Mac that **types**
+it uses that model. To use it the other way round as well, pair again with the code shown on the
+other Mac.
 
 ## Privacy boundary
 
@@ -59,6 +66,13 @@ slipstream-node use --token-file ~/.slipstream-token   # editors: http://127.0.0
   internet or to us.
 - **Who can read it:** the big Mac decrypts and processes your prompt — whoever administers that Mac
   could see it. Use it only with Macs you trust as much as your own.
+- **What the big Mac's model can make your editor do:** your editor acts on the answers. With an
+  agent (Kilo Code, OpenCode) that means the big Mac's model can drive the agent's tools on the
+  MacBook — edit files, and run commands if you let the agent run them. Slipstream no longer sets
+  "run shell commands without asking" in the editor settings it writes (earlier builds did); a value
+  you set yourself is left as it is.
+- **The pairing is one-way:** a Mac paired to *use* this one can never use the model the other way
+  round, even if this Mac starts sharing later (both Macs check the direction).
 - **What the other Mac can do:** only an allowlist of OpenAI-style requests is forwarded (chat and
   text completions, models, health, tokenize/detokenize/apply-template, a read-only `/slots` without
   prompt text, `/metrics`, a reduced `/props`). Saving or restoring the model's prompt files
@@ -66,9 +80,27 @@ slipstream-node use --token-file ~/.slipstream-token   # editors: http://127.0.0
   both Macs.
 - **On the MacBook:** the forwarder listens only on `127.0.0.1` and `[::1]` and requires this
   install's local API key (the Connect-editor setting includes it). Other users and web pages on
-  the MacBook cannot use it.
+  the MacBook cannot use it. The editor settings that contain the key are readable only by you
+  (file mode 0600). **Connect editor → Regenerate key** makes a new key and updates the editor
+  settings Slipstream wrote. If port 8080 is taken by another program, the app never sends the key
+  there.
+- **On the big Mac:** a paired Mac's requests reach only the app's own model process. If something
+  else listens on port 8080 (for example after the model stopped), the request is refused with
+  "the model is not running" and nothing is passed on. A paired Mac may start the model only with
+  enough free memory (also for models that load fully into memory), on battery only if you allow
+  it, and only the Mac that started it may stop it. The engine log is in
+  `~/Library/Logs/Slipstream/engine.log`, readable only by you.
 - **On the network:** the big Mac announces only a version, a short fingerprint and whether a pairing
   code is open (mDNS `_slipstream._udp`) — no names, no model, no RAM size. The MacBook never announces.
+  The fingerprint stays the same while this Mac shares (until "Reset this Mac's identity"), so
+  someone on the same network can recognise "the same Mac again", also on another network.
+  Wake-on-LAN signals are sent only for the 20 seconds of "Waking…" and only when the MacBook is
+  on the network where it last reached the big Mac — elsewhere nothing is broadcast.
+- **What the answers reveal:** llama-server reports how much of a prompt it could reuse from its
+  cache (`timings.cache_n`, `cached_tokens`). Slipstream passes answers on byte for byte, so a
+  paired Mac sees these numbers, which hint whether a similar prompt was sent before (by anyone
+  using the big Mac, including its owner). That is fine between your own Macs; it is one more reason
+  not to pair Macs of other people.
 
 ## What was tested — and what was not
 
@@ -89,7 +121,7 @@ Tested on **one Mac** (M3 Pro, 36 GB) with two instances, each with its own iden
 - **Editor setup:** the Connect-editor button writes exactly the key the connection requires, and the
   standard streaming check passes through it.
 - 0 MB swap; pairing, wrong codes, removing a Mac, version mismatch, packet loss (2 %) and the
-  wake/asleep states are covered by automated tests (304 Rust, 115 app, 9 UI checks).
+  wake/asleep states are covered by automated tests (340 Rust, 119 app, 9 UI checks).
 
 **Not tested yet (needs two real Macs):**
 
@@ -103,6 +135,16 @@ Tested on **one Mac** (M3 Pro, 36 GB) with two instances, each with its own iden
 - two MacBooks on one big Mac, and a big Mac that also works locally at the same time
   (memory and swap on both);
 - a full Kilo Code / OpenCode session over the network (tool calls, the stop button).
+
+## Security review
+
+A fresh review of all v0.6 code before the release found 0 critical, 5 medium and 6 low issues. All
+were fixed, each with a regression test: pairing is now one-way (M1), the editor settings holding the
+key are private and the key can be regenerated (M2), the big Mac forwards only to its own model
+process and Slipstream no longer turns on shell auto-approval (M3), the list of paired Macs cannot
+lose a removal when two programs change it at once (M4), and a stranger on the network can no longer
+use up the three code attempts or the pairing slots (M5). Details: `bench/RESULTS.md`,
+"v0.6 security review fixes".
 
 ## Tell us how it works
 

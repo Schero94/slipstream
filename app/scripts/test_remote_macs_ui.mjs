@@ -111,8 +111,13 @@ for (const m of ["remote-on", "remote-waking", "remote-off", "remote-busy", "rem
 // key only while using another Mac
 env.setRemote({ mode: "off" });
 assert.equal(env.srvHeaders({ a: 1 }).Authorization, undefined);
-env.setRemote(use({}));
+env.setRemote(use({ bound: true }));
 assert.equal(env.srvHeaders({ a: 1 }).Authorization, "Bearer k");
+// security review M3: never to a foreign listener on 8080 (port_busy: our forwarder is not bound)
+env.setRemote(use({ state: "port_busy", bound: false }));
+assert.equal(env.srvHeaders({ a: 1 }).Authorization, undefined, "key sent to a foreign listener");
+env.setRemote(use({}));
+assert.equal(env.srvHeaders({ a: 1 }).Authorization, undefined, "unknown binding: no key");
 assert.doesNotMatch(js, /Authorization: "Bearer sk-local"/);
 assert.ok((js.match(/headers: srvHeaders\(/g) || []).length >= 3, "chat/prime/models fetches use srvHeaders");
 
@@ -156,7 +161,8 @@ assert.match(js, /remote_active: "err\.remote_active"/);
 // ---- commands registered, mocked, implemented ----
 const cmds = ["remote_status", "remote_share_start", "remote_share_stop", "remote_pair_code", "remote_discover",
   "remote_pair", "remote_use", "remote_stop_using", "remote_trusted", "remote_revoke", "remote_start_model",
-  "remote_stop_model", "remote_set_model_control", "remote_api_key", "remote_pair_cancel", "remote_dismiss_removed"];
+  "remote_stop_model", "remote_set_model_control", "remote_api_key", "remote_pair_cancel", "remote_dismiss_removed",
+  "remote_set_battery_start"];
 for (const c of cmds) {
   assert.match(rust, new RegExp(`remote::${c}\\b`), `${c} not in generate_handler!`);
   assert.match(remoteRs, new RegExp(`pub (async )?fn ${c}\\(`), `${c} not implemented`);
@@ -173,5 +179,16 @@ assert.doesNotMatch(html, /id="meshAdvanced" open/);
 assert.match(js, /p2p: localStorage\.getItem\("slipstream\.p2p"\) === "1"/);
 assert.match(html, /data-tab="cluster" id="navCluster"/);
 assert.doesNotMatch(html, /nav-soft" data-tab="cluster"/, "Your Macs is always visible");
+
+// ---- v0.6 security review: regenerate key (M2), battery opt-in (L3), privacy (M3) ----
+assert.match(html, /id="regenKey"[^>]*data-i18n="macs.regenKey"/);
+assert.match(html, /id="macsBatteryStart"/);
+assert.match(js, /invoke\("regenerate_api_key", \{ home:/);
+assert.match(js, /invoke\("remote_set_battery_start", \{ allowed:/);
+assert.match(rust, /regenerate_api_key,/, "regenerate_api_key registered");
+assert.match(mock, /regenerate_api_key: /);
+assert.match(REMOTE.en["macs.privacy"], /can drive your editor's agent tools/);
+assert.match(REMOTE.de["macs.privacy"], /Agent-Werkzeuge deines Editors steuern/);
+assert.doesNotMatch(rust, /or_insert_with\(\|\| json!\(\{ "bash": "allow" \}\)\)/, "the editor patch must not grant shell auto-approval");
 
 console.log("test_remote_macs_ui.mjs: OK");

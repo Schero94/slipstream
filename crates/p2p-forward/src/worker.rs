@@ -14,7 +14,7 @@
 //! side's pre-opened spare); `GET /props` and `GET /slots` are sanitized.
 //!
 //! Trust (M2): the swarm runs the trust gate ([`crate::gate`]); every accepted stream
-//! re-checks [`PeerTrust::trusted_key`] and uses the pinned static key for the
+//! re-checks [`PeerTrust::trusted_key_for`] (role Use only, review M1) and uses the pinned static key for the
 //! authenticated SealedStream handshake; a request whose peer loses trust mid-stream is
 //! cancelled at once ([`crate::trust::until_untrusted`]).
 
@@ -43,7 +43,7 @@ use crate::proto::{
     BODY_CHUNK, MAX_BODY, OPENAI_PROTOCOL_V1, STATUS_PROTOCOL_V1, Versions,
 };
 use crate::status::{self, StatusRequest};
-use crate::trust::{until_untrusted, PeerTrust};
+use crate::trust::{until_untrusted, PeerTrust, Role};
 use crate::unix_ms;
 
 pub const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -95,6 +95,8 @@ pub struct ShareConfig {
     pub model: Option<Arc<dyn crate::status::ModelControl>>,
     /// Protocol version spoken / oldest accepted (M5; default = this build's).
     pub versions: Versions,
+    /// Who must own the upstream listener (security review M3; default: this user).
+    pub upstream_owner: crate::upstream::UpstreamOwner,
     pub verbose: bool,
 }
 
@@ -137,6 +139,12 @@ pub struct ShareStats {
     pub pairing_guests: u64,
     /// Guests disconnected after the pairing window closed.
     pub guests_closed: u64,
+    /// Requests refused because the upstream listener was not the expected process (M3).
+    pub upstream_unverified: u64,
+    /// Status streams refused by the per-peer cap (L4).
+    pub status_refused: u64,
+    /// Guest connections refused because [`crate::gate::MAX_GUEST_CONNECTIONS`] were open (M5).
+    pub guests_refused: u64,
     /// Connections closed because the peer lost trust (revoke / unpair).
     pub revoked_disconnects: u64,
     /// Requests aborted because the peer lost trust mid-stream.
@@ -201,6 +209,11 @@ struct Ctx {
     versions: Versions,
     forwarded: Arc<std::sync::atomic::AtomicUsize>,
     idle: Arc<Mutex<HashMap<PeerId, usize>>>,
+    /// Open status streams per peer (L4 cap).
+    status_streams: Arc<Mutex<HashMap<PeerId, usize>>>,
+    status_cache: status::StatusCache,
+    /// M3: the upstream listener's owner check.
+    guard: crate::upstream::UpstreamGuard,
     stats: SharedShareStats,
     verbose: bool,
 }
@@ -330,6 +343,7 @@ pub async fn start_share(
         cfg.trust.clone(),
         stats.clone(),
         "share",
+        Role::Use,
         cfg.verbose,
     )
     .await?;
@@ -352,6 +366,9 @@ pub async fn start_share(
         versions: cfg.versions,
         forwarded: forwarded.clone(),
         idle: Arc::default(),
+        status_streams: Arc::default(),
+        status_cache: Default::default(),
+        guard: crate::upstream::UpstreamGuard::new(cfg.upstream_owner.clone()),
         stats: stats.clone(),
         verbose: cfg.verbose,
     });
@@ -362,7 +379,8 @@ pub async fn start_share(
         // the acceptor is not polling (M0 finding).
         while let Some((peer, stream)) = openai.next().await {
             // Per-stream trust check (a pairing guest or a just-revoked peer gets nothing).
-            let Some(key) = openai_ctx.trust.trusted_key(&peer) else {
+            // M1: only Macs paired as users of this one (role Use), never one this Mac uses.
+            let Some(key) = openai_ctx.trust.trusted_key_for(&peer, Role::Use) else {
                 openai_ctx.stats.lock().unwrap().streams_rejected += 1;
                 drop(stream);
                 continue;
@@ -382,14 +400,34 @@ pub async fn start_share(
     let status_ctx = ctx.clone();
     let status_task = tokio::spawn(async move {
         while let Some((peer, stream)) = status_in.next().await {
-            let Some(key) = status_ctx.trust.trusted_key(&peer) else {
+            let Some(key) = status_ctx.trust.trusted_key_for(&peer, Role::Use) else {
                 status_ctx.stats.lock().unwrap().streams_rejected += 1;
                 continue;
             };
+            // L4: at most MAX_STATUS_STREAMS_PER_PEER open status streams per peer.
+            {
+                let mut open = status_ctx.status_streams.lock().unwrap();
+                let n = open.entry(peer).or_default();
+                if *n >= status::MAX_STATUS_STREAMS_PER_PEER {
+                    drop(open);
+                    let mut st = status_ctx.stats.lock().unwrap();
+                    st.streams_rejected += 1;
+                    st.status_refused += 1;
+                    continue;
+                }
+                *n += 1;
+            }
             status_ctx.stats.lock().unwrap().streams_accepted += 1;
             let ctx = status_ctx.clone();
             tokio::spawn(async move {
                 let _ = handle_status(&ctx, peer, key, stream).await;
+                let mut open = ctx.status_streams.lock().unwrap();
+                if let Some(n) = open.get_mut(&peer) {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        open.remove(&peer);
+                    }
+                }
             });
         }
     });
@@ -426,14 +464,16 @@ async fn handle_status(ctx: &Ctx, peer: PeerId, peer_key: [u8; 32], stream: libp
     };
     let (req, peer_proto): (StatusRequest, Option<u32>) = status::decode_request(&frame.payload)?;
     ctx.stats.lock().unwrap().status_requests += 1;
+    let upstream_ok = ctx.guard.verify(ctx.upstream).await;
     let view = status::ShareView {
         name: &ctx.name,
         upstream: ctx.upstream,
+        upstream_ok,
         load: ctx.admission.load(),
         forwarded: ctx.forwarded.load(std::sync::atomic::Ordering::SeqCst),
         versions: ctx.versions,
     };
-    let reply = status::answer(req, peer_proto, view, peer, ctx.model.as_ref()).await;
+    let reply = status::answer(req, peer_proto, view, peer, ctx.model.as_ref(), &ctx.status_cache).await;
     if matches!(&reply, status::StatusReply::Refused { code, .. } if code == status::VERSION_MISMATCH) {
         ctx.stats.lock().unwrap().version_refused += 1;
         eprintln!("share event=version_refused peer={peer} peer_proto={:?}", peer_proto);
@@ -519,7 +559,7 @@ async fn handle_openai(ctx: &Ctx, peer: PeerId, peer_key: [u8; 32], stream: libp
         let cancel = cancel.clone();
         let revoked = revoked.clone();
         async move {
-            until_untrusted(&*trust, peer, peer_key).await;
+            until_untrusted(&*trust, peer, peer_key, Role::Use).await;
             revoked.store(true, std::sync::atomic::Ordering::SeqCst);
             cancel.cancel();
         }
@@ -773,6 +813,18 @@ async fn forward(
     body_rx: mpsc::Receiver<Vec<u8>>,
     writer: &mut ChannelWriter,
 ) -> io::Result<Outcome> {
+    // M3: only the expected process may receive a paired Mac's request. Anything else
+    // listening on the port (the model is not running) gets nothing: 503.
+    if !ctx.guard.verify(ctx.upstream).await {
+        ctx.stats.lock().unwrap().upstream_unverified += 1;
+        eprintln!("share event=upstream_not_verified upstream={} owner={:?}", ctx.upstream, ctx.guard.owner());
+        send_response(
+            writer,
+            &http::error_response(503, "model_not_running", "The model is not running on the shared Mac."),
+        )
+        .await?;
+        return Ok(Outcome::UpstreamError);
+    }
     let upstream = match tokio::time::timeout(
         UPSTREAM_CONNECT_TIMEOUT,
         TcpStream::connect(ctx.upstream),

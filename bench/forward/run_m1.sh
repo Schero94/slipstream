@@ -42,8 +42,8 @@ start_pair() {
   "$F" shaper --bind 127.0.0.1:19004 --target 127.0.0.1:19003 --rtt-ms "$RTT_MS" >"$WORK/shaper-$tag.log" 2>&1 & PIDS+=($!)
   sleep 0.2
   local dial; dial=$(sed 's#/udp/19003/#/udp/19004/#' "$WORK/addr-$tag")
-  "$N" use --peer "$dial" --http 127.0.0.1:18191 --data-dir "$WORK/book" --verbose >"$WORK/use-$tag.log" 2>&1 & PIDS+=($!)
-  "$N" use --peer "$dial" --http 127.0.0.1:18192 --data-dir "$WORK/book-nospare" --no-spare-stream --verbose >"$WORK/use-nospare-$tag.log" 2>&1 & PIDS+=($!)
+  "$N" use --no-token --peer "$dial" --http 127.0.0.1:18191 --data-dir "$WORK/book" --verbose >"$WORK/use-$tag.log" 2>&1 & PIDS+=($!)
+  "$N" use --no-token --peer "$dial" --http 127.0.0.1:18192 --data-dir "$WORK/book-nospare" --no-spare-stream --verbose >"$WORK/use-nospare-$tag.log" 2>&1 & PIDS+=($!)
   sleep 1.5
 }
 stop_pair() { for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null || true; done; PIDS=(); sleep 0.5; }

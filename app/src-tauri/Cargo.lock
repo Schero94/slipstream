@@ -3948,6 +3948,7 @@ dependencies = [
  "hex",
  "hkdf 0.12.4",
  "hmac 0.12.1",
+ "libc",
  "libp2p",
  "p2p-core",
  "p2p-crypto",
@@ -4070,6 +4071,7 @@ version = "0.5.3"
 dependencies = [
  "base64 0.23.1",
  "core-foundation 0.10.1",
+ "libc",
  "p2p-core",
  "p2p-crypto",
  "p2p-forward",

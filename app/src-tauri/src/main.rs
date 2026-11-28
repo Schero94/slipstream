@@ -20,7 +20,68 @@ mod tray;
 
 use tauri::{Manager, State};
 
-const LOG_PATH: &str = "/tmp/peregrine-control-server.log";
+/// Engine log (security review L1): `~/Library/Logs/Slipstream/engine.log`, the folder 0700,
+/// the file opened 0600 with `O_NOFOLLOW` (it can contain parts of prompts in error
+/// messages). Was `/tmp/peregrine-control-server.log` (world-readable, symlink-plantable).
+pub fn log_path() -> std::path::PathBuf {
+    let home = std::env::var_os("HOME").unwrap_or_else(|| "/var/empty".into());
+    std::path::PathBuf::from(home).join("Library/Logs/Slipstream/engine.log")
+}
+
+/// Open (truncate) the engine log for a new engine run: 0700 folder, 0600 file, never
+/// through a symlink; an existing file is tightened to 0600.
+fn open_engine_log() -> std::io::Result<std::fs::File> {
+    open_private_log(&log_path())
+}
+
+fn open_private_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+    if let Some(dir) = path.parent() {
+        if !dir.exists() {
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        }
+    }
+    let f = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    if !f.metadata()?.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "engine log is not a regular file"));
+    }
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    Ok(f)
+}
+
+#[cfg(test)]
+mod engine_log_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// L1: private folder + file, an existing loose file is tightened, symlinks are refused.
+    #[test]
+    fn engine_log_is_private_and_never_follows_a_symlink() {
+        assert!(log_path().ends_with("Library/Logs/Slipstream/engine.log"));
+        assert!(!log_path().starts_with("/tmp"));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("Logs/Slipstream/engine.log");
+        drop(open_private_log(&p).unwrap());
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(p.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(open_private_log(&p).unwrap());
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        // a planted symlink is not followed (the target stays untouched)
+        let target = tmp.path().join("victim");
+        std::fs::write(&target, "keep").unwrap();
+        let link = tmp.path().join("Logs/Slipstream/link.log");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(open_private_log(&link).is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+    }
+}
 const DL_LOG: &str = "/tmp/peregrine-download.log";
 const CONV_LOG: &str = "/tmp/peregrine-convert.log";
 const EMB_LOG: &str = "/tmp/peregrine-embedder.log";
@@ -425,6 +486,29 @@ fn metal_memory_check(free_gib: f64, gguf_bytes: u64, pgrn_bytes: u64, cache_gb:
          (model {resident:.1} + expert cache {cache:.1} + reserve {reserve:.1} GiB).{hint}")))
 }
 
+/// Dense (fully resident) start pre-check (security review L3: a paired Mac's StartModel
+/// goes through the same path, so a dense model must not push the big Mac into swap
+/// either): the whole GGUF + the reserve must fit in free + inactive memory.
+fn dense_memory_check(free_gib: f64, gguf_bytes: u64, headroom_gb: f64) -> Result<(), String> {
+    if !(free_gib > 0.0) || gguf_bytes == 0 {
+        return Ok(());
+    }
+    let model = gguf_bytes as f64 / GIB_F;
+    let reserve = headroom_gb.max(0.0);
+    let need = model + reserve;
+    if free_gib + ADMIT_TOLERANCE_GIB >= need {
+        return Ok(());
+    }
+    Err(ui_err(
+        "low_memory",
+        &[("free", format!("{free_gib:.1}")), ("need", format!("{need:.1}"))],
+        format!(
+            "Not enough free memory: {free_gib:.1} GiB free, {need:.1} GiB needed \
+             (model {model:.1} + reserve {reserve:.1} GiB). Close other apps and try again."
+        ),
+    ))
+}
+
 /// Expert-cache eviction policy for streamed runs (engine `PGRN_EVICT`, lossless: only which
 /// resident expert is dropped changes, output byte-identical). Decayed-count eviction +
 /// lookahead-protect wins where the cache is small next to the expert file and is neutral
@@ -466,6 +550,16 @@ mod ui_msg_tests {
         assert!(e.contains("5.0 GiB free, 9.0 GiB needed"), "{e}");
         let e = metal_memory_check(10.0, 21 * G, 19 * G, 10.0, 3.0).unwrap_err();
         assert!(e.contains("fit=5") && e.contains("5 GiB or less"), "{e}");
+    }
+
+    /// L3: dense models get the RAM pre-check too (8B Q4 ≈ 5 GiB + 3 reserve).
+    #[test]
+    fn dense_memory_check_refuses_only_clear_shortfalls() {
+        assert!(dense_memory_check(12.0, 5 * G, 3.0).is_ok());
+        assert!(dense_memory_check(7.6, 5 * G, 3.0).is_ok(), "within tolerance");
+        let e = dense_memory_check(4.0, 5 * G, 3.0).unwrap_err();
+        assert!(e.starts_with("[low_memory free=4.0 need=8.0]"), "{e}");
+        assert!(dense_memory_check(0.0, 5 * G, 3.0).is_ok(), "unknown reading");
     }
 
     #[test]
@@ -580,12 +674,12 @@ fn start_server_impl(app: &tauri::AppHandle, cfg: ServerConfig, state: &AppState
             metal_memory_check(free, gguf_total_bytes(&cfg.model), file_size(&cfg.pgrn),
                 cfg.cache_gb, cfg.headroom_gb)?;
         }
+    } else if cfg.dense {
+        if let Some(free) = vm_stat_free_inactive_gib() {
+            dense_memory_check(free, gguf_total_bytes(&cfg.model), cfg.headroom_gb)?;
+        }
     }
-    let log = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(LOG_PATH)
+    let log = open_engine_log()
         .map_err(|e| ui_err("log_error", &[], format!("Could not open the engine log: {e}")))?;
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
 
@@ -848,11 +942,7 @@ fn start_mlx_server(
         Some(&pgrn_env),
         cfg.memory_guard_off,
     )?;
-    let log = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(LOG_PATH)
+    let log = open_engine_log()
         .map_err(|e| ui_err("log_error", &[], format!("Could not open the engine log: {e}")))?;
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
     cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log_err));
@@ -973,7 +1063,7 @@ fn stop_server(state: State<'_, AppState>, remote: State<'_, remote::RemoteState
 /// Last decode tok/s parsed from the server log tail (llama.cpp "eval time").
 fn last_tps() -> Option<f64> {
     // Tail only — a multi-hour engine log must not be slurped on the menubar tick.
-    let s = tray::log_tail(LOG_PATH, 256 * 1024)?;
+    let s = tray::log_tail(&log_path().to_string_lossy(), 256 * 1024)?;
     servestats::parse_last_tps(&s)
 }
 
@@ -1015,7 +1105,7 @@ fn server_state() -> String {
 
 #[tauri::command]
 fn read_log(max_lines: usize) -> String {
-    let s = std::fs::read_to_string(LOG_PATH).unwrap_or_default();
+    let s = std::fs::read_to_string(log_path()).unwrap_or_default();
     let lines: Vec<&str> = s.lines().collect();
     let start = lines.len().saturating_sub(max_lines);
     lines[start..].join("\n")
@@ -1714,18 +1804,49 @@ struct KiloConfig {
     target: String, // "kilo" (default) or "opencode" - same app.kilo.ai schema, different path
 }
 
+/// The editor config file for `target` ("kilo" default, "opencode") under `home`.
+fn editor_config_path(home: &str, target: &str) -> (String, String) {
+    let (dir, fname) = match target {
+        "opencode" => (format!("{home}/.config/opencode"), "opencode.json"),
+        _ => (format!("{home}/.config/kilo"), "kilo.jsonc"),
+    };
+    let path = format!("{dir}/{fname}");
+    (dir, path)
+}
+
+/// Write an editor config that carries this install's local token (security review M2):
+/// a new temp file opened 0600 (`create_new`) in the same folder, fsync, rename over the old
+/// file — never `fs::write` with the umask's 0644. A folder we create is 0700; an existing
+/// folder keeps its mode (it is the editor's, not ours).
+fn write_private_config(dir: &str, path: &str, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    if !std::path::Path::new(dir).exists() {
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    }
+    let tmp = format!("{path}.slipstream-tmp-{}", std::process::id());
+    let _ = std::fs::remove_file(&tmp);
+    let result = (|| {
+        let mut f = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        f.write_all(contents.as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 /// Patch an agent's global config in place, using the app.kilo.ai / opencode
 /// schema (provider + model). Non-destructive: other top-level keys (mcp,
 /// permission, ...) are preserved. Kilo + OpenCode share this schema; the user
 /// just restarts the editor afterwards - no export/import copy-paste.
+/// Security review M3: no `"permission": {"bash": "allow"}` is added any more — Slipstream
+/// does not grant shell auto-approval; a value the user set is left untouched.
 #[tauri::command]
 fn patch_kilo_config(cfg: KiloConfig) -> Result<String, String> {
-    let (dir, fname) = match cfg.target.as_str() {
-        "opencode" => (format!("{}/.config/opencode", cfg.home), "opencode.json"),
-        _ => (format!("{}/.config/kilo", cfg.home), "kilo.jsonc"),
-    };
-    std::fs::create_dir_all(&dir).map_err(|e| ui_err("folder_error", &[], format!("Could not create the folder: {e}")))?;
-    let path = format!("{dir}/{fname}");
+    let (dir, path) = editor_config_path(&cfg.home, &cfg.target);
 
     // Reuse the existing config if it parses as a JSON object; else start fresh.
     // (A file with // comments won't parse - we then write a clean valid one.)
@@ -1759,7 +1880,6 @@ fn patch_kilo_config(cfg: KiloConfig) -> Result<String, String> {
     obj.insert("$schema".into(), json!("https://app.kilo.ai/config.json"));
     obj.insert("model".into(), json!(format!("peregrine/{}", cfg.model)));
     obj.insert("provider".into(), Value::Object(provider));
-    obj.entry("permission").or_insert_with(|| json!({ "bash": "allow" }));
     // Enable Kilo's codebase search (documented schema key). The embedder /
     // Qdrant values themselves live in Kilo's Settings UI, so we only flip the
     // valid flag here and don't inject uncertain keys that could invalidate.
@@ -1771,8 +1891,102 @@ fn patch_kilo_config(cfg: KiloConfig) -> Result<String, String> {
     }
 
     let out = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
-    std::fs::write(&path, out + "\n").map_err(|e| format!("Schreiben: {e}"))?;
+    write_private_config(&dir, &path, &(out + "\n"))
+        .map_err(|e| ui_err("write_error", &[], format!("Could not write {path}: {e}")))?;
     Ok(path)
+}
+
+/// After "Regenerate key": put the new key into every editor config Slipstream patched
+/// before (provider `peregrine` present); other files and keys are left alone. Returns the
+/// updated paths.
+fn update_editor_keys(home: &str, key: &str) -> Vec<String> {
+    let mut done = Vec::new();
+    for target in ["kilo", "opencode"] {
+        let (dir, path) = editor_config_path(home, target);
+        let Some(mut root) = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        else {
+            continue;
+        };
+        let Some(opts) = root.pointer_mut("/provider/peregrine/options").and_then(|o| o.as_object_mut()) else {
+            continue;
+        };
+        opts.insert("apiKey".into(), json!(key));
+        if let Ok(out) = serde_json::to_string_pretty(&root) {
+            if write_private_config(&dir, &path, &(out + "\n")).is_ok() {
+                done.push(path);
+            }
+        }
+    }
+    done
+}
+
+/// "Regenerate key" (Connect editor, review M2): a new local token, the forwarder restarted
+/// with it (when this Mac uses another Mac), and the patched editor configs updated.
+#[tauri::command]
+async fn regenerate_api_key(home: String, rs: State<'_, remote::RemoteState>) -> Result<Value, String> {
+    let key = rs.regenerate_key().await?;
+    let patched = update_editor_keys(&home, &key);
+    Ok(json!({ "key": key, "patched": patched }))
+}
+
+#[cfg(test)]
+mod editor_patch_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn cfg(home: &str, target: &str) -> KiloConfig {
+        KiloConfig {
+            home: home.into(),
+            base_url: "http://127.0.0.1:8080/v1".into(),
+            model: "slipstream".into(),
+            api_key: "sk-local".into(),
+            ctx: 40960,
+            max_out: 4096,
+            target: target.into(),
+        }
+    }
+
+    /// Review M2/M3: the token-bearing configs are 0600 (also an existing 0644 file), no
+    /// shell auto-approval is added, a user's own permission block survives, and a new key
+    /// reaches every patched config.
+    #[test]
+    fn editor_configs_are_private_and_grant_no_shell() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_str().unwrap().to_string();
+        std::env::set_var("SLIPSTREAM_P2P_DIR", tmp.path().join("p2p"));
+        let mode = |p: &str| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        // kilo: fresh file
+        let k = patch_kilo_config(cfg(&home, "kilo")).unwrap();
+        assert_eq!(mode(&k), 0o600);
+        assert_eq!(mode(&format!("{home}/.config/kilo")), 0o700);
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&k).unwrap()).unwrap();
+        assert!(v.get("permission").is_none(), "no shell auto-approval by default: {v}");
+        // opencode: existing 0644 file with the user's own permission block
+        std::fs::create_dir_all(format!("{home}/.config/opencode")).unwrap();
+        let o = format!("{home}/.config/opencode/opencode.json");
+        std::fs::write(&o, r#"{"permission":{"bash":"ask","edit":"allow"},"mcp":{"x":1}}"#).unwrap();
+        std::fs::set_permissions(&o, std::fs::Permissions::from_mode(0o644)).unwrap();
+        patch_kilo_config(cfg(&home, "opencode")).unwrap();
+        assert_eq!(mode(&o), 0o600);
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&o).unwrap()).unwrap();
+        assert_eq!(v["permission"], json!({"bash":"ask","edit":"allow"}));
+        assert_eq!(v["mcp"], json!({"x":1}));
+        let old = v["provider"]["peregrine"]["options"]["apiKey"].as_str().unwrap().to_string();
+        assert_eq!(old.len(), 64);
+        // regenerate → both configs carry the new key, still 0600
+        let new = p2p_forward::regenerate_token(&tmp.path().join("p2p/local.token")).unwrap();
+        let patched = update_editor_keys(&home, &new);
+        assert_eq!(patched.len(), 2);
+        for p in [&k, &o] {
+            assert_eq!(mode(p), 0o600);
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+            assert_eq!(v["provider"]["peregrine"]["options"]["apiKey"], json!(new));
+        }
+        // no temp files left
+        let names: Vec<_> = std::fs::read_dir(format!("{home}/.config/opencode")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+        std::env::remove_var("SLIPSTREAM_P2P_DIR");
+    }
 }
 
 #[cfg(test)]
@@ -1830,6 +2044,14 @@ fn show_main(app: &tauri::AppHandle) {
 struct TauriModel(tauri::AppHandle);
 
 impl remote::AppModel for TauriModel {
+    fn server_pid(&self) -> Option<u32> {
+        let state = self.0.state::<AppState>();
+        if !alive(&state.server) {
+            return None;
+        }
+        let guard = state.server.lock().ok()?;
+        guard.as_ref().map(|c| c.id())
+    }
     fn running(&self) -> bool {
         let state = self.0.state::<AppState>();
         alive(&state.server) || (!remote::using() && port_alive(SERVER_PORT))
@@ -1867,7 +2089,8 @@ fn main() {
             remote::remote_pair_code, remote::remote_pair_cancel, remote::remote_discover, remote::remote_pair,
             remote::remote_use, remote::remote_stop_using, remote::remote_trusted, remote::remote_revoke,
             remote::remote_start_model, remote::remote_stop_model, remote::remote_set_model_control,
-            remote::remote_dismiss_removed, remote::remote_api_key,
+            remote::remote_dismiss_removed, remote::remote_api_key, regenerate_api_key,
+            remote::remote_set_battery_start,
             open_feedback_page
         ])
         .setup(|app| {

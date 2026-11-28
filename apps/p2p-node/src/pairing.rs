@@ -9,22 +9,29 @@
 //! ```text
 //! client (A, types the code)                  server (B, shows the code)
 //!   Start  {spake_a, x25519_a}          →
-//!                                       ←     Reply {spake_b, x25519_b, info_b*, confirm_b}
+//!                                       ←     Reply {spake_b, x25519_b}
 //!   Finish {info_a*, confirm_a}         →                  (* = encrypted under K)
-//!                                       ←     Done {ack*}   (B stored A)
+//!                                       ←     Done {info_b*, confirm_b, ack*}   (B stored A)
 //!   A stores B
 //! ```
+//! Order (security review M5): the client confirms first. B's `Reply` carries nothing that
+//! depends on the session key, so a client that stops after `Reply` learned nothing about
+//! the code — such a session does **not** count as an attempt. A guess can only be tested
+//! by sending `Finish`, and every `Finish` that does not verify counts. (`confirm_b` covers
+//! `confirm_a`, so the second tag still covers the whole exchange.)
 //! `Refused {code, message}` from B ends a session early (window closed / expired / busy /
 //! wrong code). A second stream type on the same protocol is `Unpair`: hello, then the
 //! authenticated SealedStream (pinned static keys) carrying one `Unpair` frame.
 //!
 //! # Window (server)
 //! [`PairingWindow`]: code from OsRng, open for [`PAIRING_WINDOW`] (5 min, injectable
-//! [`Clock`]), one session at a time, closes after one success or after
-//! [`MAX_FAILED_ATTEMPTS`] failed sessions. A session counts as an attempt as soon as B
-//! has sent its `Reply` (that is when an attacker could test one guess), so aborted
-//! sessions count too. Untrusted peers are admitted by the gate only while the window is
-//! open, and only this protocol serves them.
+//! [`Clock`]), at most [`MAX_CONCURRENT_SESSIONS`] sessions at a time (one slow or stalled
+//! client cannot block the real one), closes after one success or after
+//! [`MAX_FAILED_ATTEMPTS`] failed sessions. A session counts as an attempt once B received
+//! its `Finish` (reserved before verifying, so concurrent sessions never test more than
+//! [`MAX_FAILED_ATTEMPTS`] guesses). Untrusted peers are admitted by the gate only while the
+//! window is open (at most 4 guest connections, 2 per IP address), and only this protocol
+//! serves them.
 
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -47,6 +54,8 @@ use crate::trust::{unix_now, NodeTrust, PeerRole, TrustStore, TrustedPeer};
 
 pub const PAIRING_WINDOW: Duration = Duration::from_secs(5 * 60);
 pub const MAX_FAILED_ATTEMPTS: u32 = 3;
+/// Sessions running at once (review M5; was 1, which let one stalled client block pairing).
+pub const MAX_CONCURRENT_SESSIONS: u32 = 4;
 pub const MAX_MSG: usize = 4096;
 /// Per-message timeout inside a session (a human already typed the code before dialing).
 pub const MSG_TIMEOUT: Duration = Duration::from_secs(10);
@@ -105,7 +114,10 @@ pub enum WindowState {
 
 struct WindowInner {
     failed: u32,
-    busy: bool,
+    /// Sessions running now.
+    sessions: u32,
+    /// Sessions that received a `Finish` and are verifying it (each may become a failure).
+    armed: u32,
     closed: Option<WindowState>,
     paired: Option<TrustedPeer>,
 }
@@ -140,7 +152,8 @@ impl PairingWindow {
             clock,
             inner: Mutex::new(WindowInner {
                 failed: 0,
-                busy: false,
+                sessions: 0,
+                armed: 0,
                 closed: None,
                 paired: None,
             }),
@@ -211,20 +224,20 @@ impl PairingWindow {
         }
     }
 
-    /// Start a session (one at a time).
+    /// Start a session (at most [`MAX_CONCURRENT_SESSIONS`] at a time).
     pub fn begin(self: &Arc<Self>) -> Result<Attempt, Refusal> {
         let state = self.state();
         if state != WindowState::Open {
             return Err(Self::refusal_for(state));
         }
         let mut inner = self.inner.lock().unwrap();
-        if inner.busy {
+        if inner.sessions >= MAX_CONCURRENT_SESSIONS {
             return Err(Refusal {
                 code: "busy",
                 message: "Another Mac is pairing right now. Try again in a moment.",
             });
         }
-        inner.busy = true;
+        inner.sessions += 1;
         Ok(Attempt {
             window: self.clone(),
             armed: false,
@@ -253,9 +266,20 @@ pub struct Attempt {
 }
 
 impl Attempt {
-    /// B has sent its `Reply` — from now on this session counts.
-    pub fn arm(&mut self) {
+    /// B received the client's `Finish` — from now on this session counts (a guess is being
+    /// tested). Refused when the failures so far plus the sessions already verifying would
+    /// reach [`MAX_FAILED_ATTEMPTS`], so concurrency never buys extra guesses.
+    pub fn arm(&mut self) -> Result<(), Refusal> {
+        let mut inner = self.window.inner.lock().unwrap();
+        if let Some(s) = inner.closed {
+            return Err(PairingWindow::refusal_for(s));
+        }
+        if inner.failed + inner.armed >= MAX_FAILED_ATTEMPTS {
+            return Err(PairingWindow::refusal_for(WindowState::TooManyFailures));
+        }
+        inner.armed += 1;
         self.armed = true;
+        Ok(())
     }
 
     pub fn succeed(mut self, peer: TrustedPeer) {
@@ -269,7 +293,10 @@ impl Attempt {
 impl Drop for Attempt {
     fn drop(&mut self) {
         let mut inner = self.window.inner.lock().unwrap();
-        inner.busy = false;
+        inner.sessions = inner.sessions.saturating_sub(1);
+        if self.armed {
+            inner.armed = inner.armed.saturating_sub(1);
+        }
         if self.armed && !self.done {
             inner.failed += 1;
             if inner.failed >= MAX_FAILED_ATTEMPTS && inner.closed.is_none() {
@@ -287,9 +314,11 @@ impl Drop for Attempt {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum PairMsg {
     Start { spake: String, x25519: String },
-    Reply { spake: String, x25519: String, info: String, confirm: String },
+    /// No key-dependent field (review M5): nothing here lets a client test a guess.
+    Reply { spake: String, x25519: String },
     Finish { info: String, confirm: String },
-    Done { ack: String },
+    /// B's claims, B's tag (covering `confirm_a`) and the ack, after B verified A.
+    Done { info: String, confirm: String, ack: String },
     Refused { code: String, message: String },
     Unpair,
 }
@@ -384,6 +413,37 @@ impl From<io::Error> for PairError {
             },
             _ => PairError::Io(e),
         }
+    }
+}
+
+/// Review L6: a `Refused` comes from an unauthenticated peer. Only its code is used, mapped
+/// to our own text; its free-text message is dropped (never shown).
+pub fn refusal_from_peer(code: &str) -> PairError {
+    let known = [
+        WindowState::Expired,
+        WindowState::TooManyFailures,
+        WindowState::Paired,
+        WindowState::Cancelled,
+    ]
+    .into_iter()
+    .map(PairingWindow::refusal_for)
+    .chain([
+        Refusal {
+            code: "busy",
+            message: "Another Mac is pairing right now. Try again in a moment.",
+        },
+    ])
+    .find(|r| r.code == code);
+    match (code, known) {
+        ("wrong_code", _) => PairError::WrongCode,
+        (_, Some(r)) => PairError::Refused {
+            code: r.code.into(),
+            message: r.message.into(),
+        },
+        _ => PairError::Refused {
+            code: "refused".into(),
+            message: "The other Mac refused pairing.".into(),
+        },
     }
 }
 
@@ -486,29 +546,30 @@ async fn handle_pair_stream(ctx: &PairCtx, peer: PeerId, stream: libp2p::Stream)
                 x25519_a,
                 x25519_b,
             };
-            let confirm_b = key.confirm(&t, &ctx.info, &[]);
+            // Nothing key-dependent yet: a client that stops here learned nothing (M5).
             write_msg(
                 &mut io,
                 &PairMsg::Reply {
                     spake: hex::encode(&spake_b),
                     x25519: hex::encode(x25519_b),
-                    info: hex::encode(key.seal_info(&ctx.info)),
-                    confirm: hex::encode(confirm_b),
                 },
             )
             .await?;
-            attempt.arm();
             let msg = read_msg(&mut io).await?;
             let PairMsg::Finish { info, confirm } = msg else {
-                ctx.stats.lock().unwrap().failed += 1;
+                // no guess was tested: not an attempt
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "expected Finish"));
             };
-            let verified = key
-                .open_info(&unhex_vec(&info)?)
-                .and_then(|info_a| {
-                    key.verify_peer(&t, &info_a, &confirm_b, &unhex_vec(&confirm).unwrap_or_default())
-                        .map(|_| info_a)
-                });
+            // A guess is tested from here on: reserve the attempt before verifying.
+            if let Err(r) = attempt.arm() {
+                ctx.stats.lock().unwrap().refused += 1;
+                return refuse(&mut io, r).await;
+            }
+            let confirm_a = unhex_vec(&confirm).unwrap_or_default();
+            let verified = unhex_vec(&info)
+                .map_err(|_| PakeError::BadMessage)
+                .and_then(|sealed| key.open_info(&sealed))
+                .and_then(|info_a| key.verify_peer(&t, &info_a, &[], &confirm_a).map(|_| info_a));
             let info_a = match verified {
                 Ok(i) => i,
                 Err(_) => {
@@ -544,7 +605,16 @@ async fn handle_pair_stream(ctx: &PairCtx, peer: PeerId, stream: libp2p::Stream)
                 wake_macs: vec![],
             };
             ctx.trust.store.add(entry.clone())?;
-            write_msg(&mut io, &PairMsg::Done { ack: hex::encode(key.seal_ack()) }).await?;
+            let confirm_b = key.confirm(&t, &ctx.info, &confirm_a);
+            write_msg(
+                &mut io,
+                &PairMsg::Done {
+                    info: hex::encode(key.seal_info(&ctx.info)),
+                    confirm: hex::encode(confirm_b),
+                    ack: hex::encode(key.seal_ack()),
+                },
+            )
+            .await?;
             let _ = io.shutdown().await;
             ctx.stats.lock().unwrap().paired += 1;
             eprintln!("pair event=paired peer={peer} name={:?}", entry.name);
@@ -556,7 +626,8 @@ async fn handle_pair_stream(ctx: &PairCtx, peer: PeerId, stream: libp2p::Stream)
 }
 
 async fn handle_unpair(ctx: &PairCtx, peer: PeerId, stream: libp2p::Stream) -> io::Result<()> {
-    // Only a paired Mac can unpair, proven by the authenticated SealedStream.
+    // Only a paired Mac can unpair, proven by the authenticated SealedStream. Direction-free
+    // (either role may say goodbye), unlike the forwarder (review M1).
     let Some(key) = ctx.trust.trusted_key(&peer) else {
         return Ok(());
     };
@@ -640,6 +711,7 @@ pub async fn start_pair_listener(
         trust.clone(),
         Default::default(),
         "pair",
+        p2p_forward::Role::Use,
         false,
     )
     .await?;
@@ -721,11 +793,34 @@ pub async fn connect_first(
     addrs: &[Multiaddr],
     paired: &PairedConfig,
 ) -> Result<(PairConnection, Multiaddr), PairError> {
+    connect_first_checked(node, addrs, paired, None).await
+}
+
+/// [`connect_first`], with the fingerprint checked **inside each attempt** (review M5): a
+/// connection to a different Mac is dropped and the other addresses keep racing, so a decoy
+/// answering at one discovered address cannot win the race and fail the pairing.
+pub async fn connect_first_checked(
+    node: &NodeKeypair,
+    addrs: &[Multiaddr],
+    paired: &PairedConfig,
+    expect_fp: Option<&str>,
+) -> Result<(PairConnection, Multiaddr), PairError> {
     if addrs.is_empty() {
         return Err(PairError::Unreachable("no address to try".into()));
     }
     let attempts = addrs.iter().map(|a| {
-        Box::pin(async move { connect(node, a, paired).await.map(|c| (c, a.clone())) })
+        Box::pin(async move {
+            let c = connect(node, a, paired).await?;
+            if let Some(fp) = expect_fp {
+                let got = crate::lan::fingerprint(&c.remote);
+                if !got.starts_with(fp) {
+                    return Err(PairError::Protocol(format!(
+                        "the Mac at {a} has fingerprint {got}, not {fp}; refusing to pair"
+                    )));
+                }
+            }
+            Ok((c, a.clone()))
+        })
     });
     match futures::future::select_ok(attempts).await {
         Ok((won, _rest)) => Ok(won),
@@ -746,16 +841,8 @@ pub async fn pair_with_checked(
     paired: &PairedConfig,
     expect_fp: Option<&str>,
 ) -> Result<TrustedPeer, PairError> {
-    let (conn, addr) = connect_first(node, addrs, paired).await?;
+    let (conn, addr) = connect_first_checked(node, addrs, paired, expect_fp).await?;
     let addr = &addr;
-    if let Some(fp) = expect_fp {
-        let got = crate::lan::fingerprint(&conn.remote);
-        if !got.starts_with(fp) {
-            return Err(PairError::Protocol(format!(
-                "the Mac at {addr} has fingerprint {got}, not {fp}; refusing to pair"
-            )));
-        }
-    }
     let mut control = conn.control.clone();
     let stream = tokio::time::timeout(Duration::from_secs(3), control.open_stream(conn.remote, PAIR_PROTOCOL_V1))
         .await
@@ -776,16 +863,9 @@ pub async fn pair_with_checked(
         },
     )
     .await?;
-    let (spake_b, x25519_b, sealed_b, confirm_b) = match read_msg(&mut io).await? {
-        PairMsg::Reply { spake, x25519, info, confirm } => {
-            (unhex_vec(&spake)?, unhex::<32>(&x25519)?, unhex_vec(&info)?, unhex_vec(&confirm)?)
-        }
-        PairMsg::Refused { code, message } => {
-            return Err(PairError::Refused {
-                code,
-                message: p2p_forward::allowlist::display_safe(&message),
-            })
-        }
+    let (spake_b, x25519_b) = match read_msg(&mut io).await? {
+        PairMsg::Reply { spake, x25519 } => (unhex_vec(&spake)?, unhex::<32>(&x25519)?),
+        PairMsg::Refused { code, .. } => return Err(refusal_from_peer(&code)),
         _ => return Err(PairError::Protocol("unexpected reply".into())),
     };
     let key = start.finish(&spake_b)?;
@@ -795,10 +875,9 @@ pub async fn pair_with_checked(
         x25519_a,
         x25519_b,
     };
-    // Verify B first: a wrong code or a relay stops here, before we reveal anything.
-    let info_b = key.open_info(&sealed_b)?;
-    key.verify_peer(&t, &info_b, &[], &confirm_b)?;
-    let confirm_a = key.confirm(&t, &info, &confirm_b);
+    // We confirm first (M5): B can then count every guess, and a client that stops early
+    // costs the window nothing. Our claims (name, version) travel encrypted under K.
+    let confirm_a = key.confirm(&t, &info, &[]);
     write_msg(
         &mut io,
         &PairMsg::Finish {
@@ -807,16 +886,17 @@ pub async fn pair_with_checked(
         },
     )
     .await?;
-    match read_msg(&mut io).await? {
-        PairMsg::Done { ack } => key.open_ack(&unhex_vec(&ack)?)?,
-        PairMsg::Refused { code, message } => {
-            return Err(PairError::Refused {
-                code,
-                message: p2p_forward::allowlist::display_safe(&message),
-            })
+    let info_b = match read_msg(&mut io).await? {
+        PairMsg::Done { info, confirm, ack } => {
+            // A wrong code or a relay fails here (AEAD or tag); B's tag covers ours.
+            let info_b = key.open_info(&unhex_vec(&info)?)?;
+            key.verify_peer(&t, &info_b, &confirm_a, &unhex_vec(&confirm)?)?;
+            key.open_ack(&unhex_vec(&ack)?)?;
+            info_b
         }
+        PairMsg::Refused { code, .. } => return Err(refusal_from_peer(&code)),
         _ => return Err(PairError::Protocol("unexpected final message".into())),
-    }
+    };
     let pinned = strip_p2p(addr).with(Protocol::P2p(conn.remote));
     let entry = TrustedPeer {
         peer_id: conn.remote.to_string(),
@@ -867,15 +947,25 @@ mod tests {
     fn window_counts_armed_failures_and_closes() {
         let clock = Arc::new(ManualClock::default());
         let w = PairingWindow::open(clock.clone(), Default::default());
-        // unarmed sessions (nothing sent) do not count
+        // unarmed sessions (no Finish received) do not count
         drop(w.begin().unwrap());
         assert_eq!(w.failed_attempts(), 0);
-        let a = w.begin().unwrap();
-        assert_eq!(w.begin().err().unwrap().code, "busy", "one session at a time");
-        drop(a);
+        // up to MAX_CONCURRENT_SESSIONS at once (M5: one stalled client cannot block pairing)
+        let held: Vec<Attempt> = (0..MAX_CONCURRENT_SESSIONS).map(|_| w.begin().unwrap()).collect();
+        assert_eq!(w.begin().err().unwrap().code, "busy");
+        // concurrent Finishes never test more than MAX_FAILED_ATTEMPTS guesses
+        let mut held = held;
+        for a in held.iter_mut().take(3) {
+            a.arm().unwrap();
+        }
+        assert_eq!(held[3].arm().unwrap_err().code, "too_many_attempts");
+        drop(held);
+        assert_eq!(w.failed_attempts(), 3);
+        assert_eq!(w.state(), WindowState::TooManyFailures);
+        let w = PairingWindow::open(clock.clone(), Default::default());
         for i in 1..=3 {
             let mut a = w.begin().unwrap();
-            a.arm();
+            a.arm().unwrap();
             drop(a);
             assert_eq!(w.failed_attempts(), i);
         }
@@ -894,7 +984,7 @@ mod tests {
         assert_eq!(w.begin().err().unwrap().code, "expired");
         let w = PairingWindow::open(clock.clone(), Default::default());
         let mut a = w.begin().unwrap();
-        a.arm();
+        a.arm().unwrap();
         let node = NodeKeypair::generate();
         a.succeed(crate::trust::TrustedPeer {
             peer_id: p2p_forward::transport_identity(&node).public().to_peer_id().to_string(),
@@ -924,5 +1014,28 @@ mod tests {
         assert_eq!(clean_name("Mac\u{1b}[31m Studio\n\u{202E}"), "Mac[31m Studio");
         assert_eq!(clean_name(""), "Mac");
         assert_eq!(clean_name(&"x".repeat(200)).len(), 64);
+    }
+
+    /// Review L6: an unauthenticated `Refused` only selects one of our own texts.
+    #[test]
+    fn peer_refusals_map_to_local_text() {
+        match refusal_from_peer("expired") {
+            PairError::Refused { code, message } => {
+                assert_eq!(code, "expired");
+                assert_eq!(message, "The pairing code expired. Show a new code on the other Mac.");
+            }
+            e => panic!("{e:?}"),
+        }
+        assert!(matches!(refusal_from_peer("wrong_code"), PairError::WrongCode));
+        for code in ["busy", "too_many_attempts", "already_used", "not_pairing"] {
+            assert!(matches!(refusal_from_peer(code), PairError::Refused { code: c, .. } if c == code));
+        }
+        match refusal_from_peer("evil\u{1b}[31m visit http://x") {
+            PairError::Refused { code, message } => {
+                assert_eq!(code, "refused");
+                assert_eq!(message, "The other Mac refused pairing.");
+            }
+            e => panic!("{e:?}"),
+        }
     }
 }

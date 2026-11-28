@@ -171,6 +171,18 @@ no downgrade; `NodeMode::Paired` never enables community donation; no prompt con
 key test; fuzz frame decoder and allowlist parser; pcap check; docs (`docs/USE_YOUR_OTHER_MAC.md`,
 threat model in `COMMUNITY_MESH_OPERATIONS.md`).
 
+Update 2026-11-28 (fresh v0.6 security review, all fixed — bench/RESULTS.md "v0.6 security review
+fixes"): trust is **directional** (share side admits only role Use, use side dials only role Share);
+trust store under an inter-process `flock` with a MAC'd generation (rollback refused in-process);
+pairing confirms client-first (a session without `Finish` is not an attempt), guests capped at 4
+(2 per IP) on top of the trusted slots, fingerprint checked per dialed address; the share side
+forwards only to the app's own model process (`lsof` owner check; headless `--forward-pid` or
+same uid); editor configs 0600 + "Regenerate key", no default shell auto-approval; engine log moved
+to `~/Library/Logs/Slipstream/engine.log` (0600, `O_NOFOLLOW`); WoL only during the 20 s window on the
+last-seen subnet; StartModel: battery opt-in, stop only by the starter, RAM check also for dense
+models; status cached 1 s + 2 streams per peer; fuzzing = proptest targets (cargo-fuzz needs
+nightly/network); pcap check = pure-Rust datagram capture in the userspace shaper.
+
 ## 9. Milestones
 
 | M | Scope | Acceptance | Effort |

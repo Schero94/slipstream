@@ -48,9 +48,27 @@ impl TrustEpoch {
     }
 }
 
+/// The role a paired Mac has **relative to this one** (v0.6 security review M1: pairing is
+/// directional). The code-showing Mac stores the other one as [`Role::Use`] ("it uses my
+/// model"), the code-typing Mac stores the other one as [`Role::Share`] ("it shares its
+/// model with me").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// It shares its model with this Mac: the use side (client) may dial it.
+    Share,
+    /// It uses this Mac's model: the share side admits its connections and streams.
+    Use,
+}
+
 pub trait PeerTrust: Send + Sync + 'static {
-    /// The static X25519 public key pinned for `peer` at pairing time, if trusted.
+    /// The static X25519 public key pinned for `peer` at pairing time, if trusted **in any
+    /// role**. Only for direction-free messages (`Unpair`); the forwarder asks
+    /// [`trusted_key_for`](Self::trusted_key_for).
     fn trusted_key(&self, peer: &PeerId) -> Option<[u8; 32]>;
+
+    /// The pinned key, only if `peer` is trusted in `role` (security review M1): the share
+    /// side admits only [`Role::Use`] peers, the use side dials only [`Role::Share`] peers.
+    fn trusted_key_for(&self, peer: &PeerId, role: Role) -> Option<[u8; 32]>;
 
     /// Whether a pairing window is open right now (untrusted peers may connect, pair
     /// protocol only). Re-polled by the gate at least every [`GATE_TICK`].
@@ -89,11 +107,12 @@ pub const GATE_TICK: std::time::Duration = std::time::Duration::from_millis(250)
 /// streams are aborted immediately, not after this.
 pub const NOTIFY_REVOKED_BUDGET: std::time::Duration = std::time::Duration::from_millis(400);
 
-/// Resolves once `peer` no longer has exactly `key` pinned (revoked or re-paired).
-pub async fn until_untrusted(trust: &dyn PeerTrust, peer: PeerId, key: [u8; 32]) {
+/// Resolves once `peer` no longer has exactly `key` pinned in `role` (revoked, re-paired
+/// or re-paired in the other direction).
+pub async fn until_untrusted(trust: &dyn PeerTrust, peer: PeerId, key: [u8; 32], role: Role) {
     let mut rx = trust.subscribe();
     loop {
-        if trust.trusted_key(&peer) != Some(key) {
+        if trust.trusted_key_for(&peer, role) != Some(key) {
             return;
         }
         if rx.changed().await.is_err() {
@@ -103,10 +122,11 @@ pub async fn until_untrusted(trust: &dyn PeerTrust, peer: PeerId, key: [u8; 32])
     }
 }
 
-/// In-memory trust (tests, benchmarks): PeerId → static X25519 public key.
+/// In-memory trust (tests, benchmarks): PeerId → static X25519 public key and an optional
+/// role (`None` = trusted in both roles, the M1/M2 test default).
 #[derive(Default)]
 pub struct StaticTrust {
-    peers: Mutex<HashMap<PeerId, [u8; 32]>>,
+    peers: Mutex<HashMap<PeerId, ([u8; 32], Option<Role>)>>,
     former: Mutex<HashMap<PeerId, [u8; 32]>>,
     open: std::sync::atomic::AtomicBool,
     epoch: TrustEpoch,
@@ -115,17 +135,23 @@ pub struct StaticTrust {
 impl StaticTrust {
     pub fn new(peers: impl IntoIterator<Item = (PeerId, [u8; 32])>) -> Arc<Self> {
         let s = Self::default();
-        s.peers.lock().unwrap().extend(peers);
+        s.peers.lock().unwrap().extend(peers.into_iter().map(|(p, k)| (p, (k, None))));
         Arc::new(s)
     }
 
     pub fn insert(&self, peer: PeerId, key: [u8; 32]) {
-        self.peers.lock().unwrap().insert(peer, key);
+        self.peers.lock().unwrap().insert(peer, (key, None));
+        self.epoch.bump();
+    }
+
+    /// Trust `peer` in one role only.
+    pub fn insert_role(&self, peer: PeerId, key: [u8; 32], role: Role) {
+        self.peers.lock().unwrap().insert(peer, (key, Some(role)));
         self.epoch.bump();
     }
 
     pub fn remove(&self, peer: &PeerId) -> Option<[u8; 32]> {
-        let r = self.peers.lock().unwrap().remove(peer);
+        let r = self.peers.lock().unwrap().remove(peer).map(|(k, _)| k);
         if let Some(k) = r {
             self.former.lock().unwrap().insert(*peer, k);
         }
@@ -145,7 +171,15 @@ impl StaticTrust {
 
 impl PeerTrust for StaticTrust {
     fn trusted_key(&self, peer: &PeerId) -> Option<[u8; 32]> {
-        self.peers.lock().unwrap().get(peer).copied()
+        self.peers.lock().unwrap().get(peer).map(|(k, _)| *k)
+    }
+
+    fn trusted_key_for(&self, peer: &PeerId, role: Role) -> Option<[u8; 32]> {
+        match self.peers.lock().unwrap().get(peer) {
+            Some((k, None)) => Some(*k),
+            Some((k, Some(r))) if *r == role => Some(*k),
+            _ => None,
+        }
     }
 
     fn pairing_open(&self) -> bool {
@@ -171,7 +205,7 @@ mod tests {
         let peer = PeerId::random();
         let trust = StaticTrust::new([(peer, [1u8; 32])]);
         let t2 = trust.clone();
-        let waiter = tokio::spawn(async move { until_untrusted(&*t2, peer, [1u8; 32]).await });
+        let waiter = tokio::spawn(async move { until_untrusted(&*t2, peer, [1u8; 32], Role::Use).await });
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(!waiter.is_finished());
         trust.insert(PeerId::random(), [3u8; 32]); // unrelated change
@@ -181,8 +215,27 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), waiter).await.unwrap().unwrap();
         // already untrusted → immediate
         trust.remove(&peer);
-        tokio::time::timeout(Duration::from_millis(100), until_untrusted(&*trust, peer, [2u8; 32]))
+        tokio::time::timeout(Duration::from_millis(100), until_untrusted(&*trust, peer, [2u8; 32], Role::Use))
             .await
             .unwrap();
+    }
+
+    /// Security review M1: a peer trusted in one role is not trusted in the other.
+    #[tokio::test]
+    async fn roles_are_directional() {
+        let peer = PeerId::random();
+        let trust = StaticTrust::new([]);
+        trust.insert_role(peer, [7u8; 32], Role::Share);
+        assert_eq!(trust.trusted_key(&peer), Some([7u8; 32]), "Unpair accepts any role");
+        assert_eq!(trust.trusted_key_for(&peer, Role::Share), Some([7u8; 32]));
+        assert_eq!(trust.trusted_key_for(&peer, Role::Use), None);
+        // a stream admitted as Use ends when the role flips
+        trust.insert_role(peer, [7u8; 32], Role::Use);
+        let t2 = trust.clone();
+        let waiter = tokio::spawn(async move { until_untrusted(&*t2, peer, [7u8; 32], Role::Use).await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!waiter.is_finished());
+        trust.insert_role(peer, [7u8; 32], Role::Share);
+        tokio::time::timeout(Duration::from_secs(1), waiter).await.unwrap().unwrap();
     }
 }

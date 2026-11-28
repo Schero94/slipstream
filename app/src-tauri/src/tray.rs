@@ -14,7 +14,7 @@ use tauri::{Manager, Wry};
 
 use crate::servestats::{ServeSnapshot, Store};
 use crate::sysstats::{SysSnapshot, Sampler};
-use crate::{show_main, stop_server_impl, tray_status_line, AppState, LOG_PATH, SERVER_PORT};
+use crate::{log_path, show_main, stop_server_impl, tray_status_line, AppState, SERVER_PORT};
 
 const TRAY_ID: &str = "slipstream-tray";
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -106,7 +106,7 @@ pub fn expert_cache(state: &AppState) -> Option<ExpertCache> {
 }
 
 fn expert_cache_from_log() -> Option<ExpertCache> {
-    parse_expert_cache(&log_tail(LOG_PATH, 256 * 1024)?)
+    parse_expert_cache(&log_tail(&log_path().to_string_lossy(), 256 * 1024)?)
 }
 
 /// The last `bytes` of a file, cut back to a line boundary. The window asks for

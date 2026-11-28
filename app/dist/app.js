@@ -1415,7 +1415,11 @@ const REMOTE_I18N = {
     "macs.sharedNoModel": "Shared · the model is not running on this Mac",
     "macs.stayAwake": "This Mac stays awake while it shares.",
     "macs.privacyTitle": "Private by design",
-    "macs.privacy": "Only Macs you paired with a code can connect. Your prompts travel encrypted inside your own network and are processed on the other Mac — whoever administers that Mac could see them. Nothing goes to the internet or to strangers.",
+    "macs.privacy": "Only Macs you paired with a code can connect. Your prompts travel encrypted inside your own network and are processed on the other Mac — whoever administers that Mac could see them. That Mac's model also writes the answers your editor acts on, so it can drive your editor's agent tools (for example commands you let the agent run). Nothing goes to the internet or to strangers.",
+    "macs.batteryStart": "…also while this Mac runs on battery",
+    "macs.regenKey": "Regenerate key",
+    "macs.regenKeyHint": "Makes a new local API key. Editors set up here get it automatically; others need the new key.",
+    "macs.regenDone": "New key written to {n} editor config(s). Restart your editor.",
     "macs.removedYou": "{name} removed this Mac. Pair again to use it.",
     "macs.pairingsReset": "Your pairings were reset because the list of paired Macs failed its integrity check. Pair your Macs again.",
     "macs.advancedMesh": "Advanced: community mesh (experimental)",
@@ -1539,7 +1543,11 @@ const REMOTE_I18N = {
     "macs.sharedNoModel": "Geteilt · das Modell läuft auf diesem Mac nicht",
     "macs.stayAwake": "Dieser Mac bleibt wach, solange er teilt.",
     "macs.privacyTitle": "Privat gebaut",
-    "macs.privacy": "Verbinden können sich nur Macs, die du mit einem Code gekoppelt hast. Deine Prompts gehen verschlüsselt durch dein eigenes Netzwerk und werden auf dem anderen Mac verarbeitet – wer diesen Mac verwaltet, könnte sie sehen. Nichts geht ins Internet oder an Fremde.",
+    "macs.privacy": "Verbinden können sich nur Macs, die du mit einem Code gekoppelt hast. Deine Prompts gehen verschlüsselt durch dein eigenes Netzwerk und werden auf dem anderen Mac verarbeitet – wer diesen Mac verwaltet, könnte sie sehen. Das Modell dieses Macs schreibt auch die Antworten, nach denen dein Editor handelt – es kann also die Agent-Werkzeuge deines Editors steuern (zum Beispiel Befehle, die du den Agenten ausführen lässt). Nichts geht ins Internet oder an Fremde.",
+    "macs.batteryStart": "…auch wenn dieser Mac im Akkubetrieb läuft",
+    "macs.regenKey": "Schlüssel neu erzeugen",
+    "macs.regenKeyHint": "Erzeugt einen neuen lokalen API-Schlüssel. Hier eingerichtete Editoren bekommen ihn automatisch; andere brauchen den neuen Schlüssel.",
+    "macs.regenDone": "Neuer Schlüssel in {n} Editor-Config(s) geschrieben. Starte deinen Editor neu.",
     "macs.removedYou": "{name} hat diesen Mac entfernt. Kopple ihn neu, um ihn zu nutzen.",
     "macs.pairingsReset": "Deine Kopplungen wurden zurückgesetzt, weil die Liste der gekoppelten Macs ihre Integritätsprüfung nicht bestanden hat. Kopple deine Macs neu.",
     "macs.advancedMesh": "Erweitert: Community-Mesh (experimentell)",
@@ -5865,10 +5873,12 @@ function remoteName(r) { return (r && r.use && r.use.name) || "Mac"; }
 /** Whether this Mac is using another Mac right now (forwarder on 8080). */
 function remoteUsing() { return !!(state.remote && state.remote.mode === "using" && state.remote.use); }
 /** Authorization for requests to 127.0.0.1:8080: the forwarder needs this install's key;
- *  a local llama-server ignores it, so it is only sent while using another Mac. */
+ *  a local llama-server ignores it, so it is only sent while using another Mac — and only
+ *  while our forwarder owns the port (security review M3: in port_busy something else listens
+ *  on 8080 and must never receive the key). */
 function srvHeaders(h) {
   const out = Object.assign({}, h || {});
-  if (remoteUsing() && state.apiKey) out.Authorization = `Bearer ${state.apiKey}`;
+  if (remoteUsing() && state.remote.use.bound === true && state.apiKey) out.Authorization = `Bearer ${state.apiKey}`;
   return out;
 }
 /** Top bar pill mode for the remote states (plan §6: Using / Waking / unreachable / busy). */
@@ -6030,6 +6040,8 @@ function renderMacs() {
   tog.checked = !!share;
   tog.disabled = !!using;
   $("macsMayStart").checked = !!r.may_start_model;
+  $("macsBatteryStart").checked = !!r.start_on_battery;
+  $("macsBatteryStart").disabled = !r.may_start_model;
   const pairing = share && share.pairing;
   const codeOpen = !!(pairing && pairing.state === "open");
   $("macsCodeBox").hidden = !(pairing && pairing.state !== "cancelled");
@@ -6256,6 +6268,19 @@ function initMacs() {
   $("macsMayStart").onchange = async (e) => {
     try { state.remote = await invoke("remote_set_model_control", { allowed: !!e.target.checked }); } catch (err) { toast(remoteErr(err), true); }
     renderMacs();
+  };
+  // L3: remote starts on battery only with this opt-in (default off).
+  $("macsBatteryStart").onchange = async (e) => {
+    try { state.remote = await invoke("remote_set_battery_start", { allowed: !!e.target.checked }); } catch (err) { toast(remoteErr(err), true); }
+    renderMacs();
+  };
+  // M2: "Regenerate key" (Connect editor): new local token, patched editor configs updated.
+  $("regenKey").onclick = async () => {
+    try {
+      const r = await invoke("regenerate_api_key", { home: state.def ? state.def.home : "" });
+      state.apiKey = r.key;
+      toast(fillVars(t("macs.regenDone"), { n: (r.patched || []).length }));
+    } catch (err) { toast(remoteErr(err), true); }
   };
   // Experimental feedback link: opens the GitHub issues page in the browser (fixed URL in main.rs).
   $("macsFeedback").onclick = async () => { try { await invoke("open_feedback_page"); } catch {} };

@@ -37,6 +37,7 @@ async fn share(big: &Mac, mock: &MockLlama) -> Running {
             name: big.name.clone(),
             model: None,
             versions: Default::default(),
+            upstream_owner: Default::default(),
             verbose: false,
         },
     )
@@ -255,6 +256,7 @@ async fn dial_with_wrong_pinned_peer_id_is_refused() {
             name: "Mac Studio".into(),
             model: None,
             versions: Default::default(),
+            upstream_owner: Default::default(),
             verbose: false,
         },
     )
@@ -369,4 +371,68 @@ async fn tampered_trust_file_is_empty_with_flag_and_fails_closed() {
     std::fs::write(&path, serde_json::to_vec(&forged).unwrap()).unwrap();
     let s = TrustStore::load(&big.dir, &big.node).unwrap();
     assert!(!s.is_trusted(&book.peer) && s.pairings_reset());
+}
+
+/// Security review M1: pairing is directional. The MacBook paired as a *user* of the big Mac
+/// starts sharing its own model; the big Mac must not be able to use it — not through name
+/// resolution, not through `start_use` with the real trust store, and not even with a
+/// modified client that trusts the MacBook anyway (the MacBook's gate refuses it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reverse_direction_cannot_use_a_users_model() {
+    let root = tempfile::tempdir().unwrap();
+    let big = mac(root.path(), "Mac Studio");
+    let book = mac(root.path(), "MacBook");
+    pair(&big, &book).await; // book uses big
+    assert_eq!(big.store.get(&book.peer).unwrap().role, PeerRole::Use);
+    assert_eq!(book.store.get(&big.peer).unwrap().role, PeerRole::Share);
+    let book_mock = mock_llama::start("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let run = share(&book, &book_mock).await; // the MacBook now shares its own model
+    let pinned = run.share.dial_addr();
+
+    // 1. name / address resolution on the big Mac refuses the user Mac
+    let e = resolve_use_target(&big.store, Some("MacBook")).unwrap_err();
+    assert!(e.contains("paired to use this Mac"), "{e}");
+    let e = resolve_use_target(&big.store, Some(&pinned.to_string())).unwrap_err();
+    assert!(e.contains("paired to use this Mac"), "{e}");
+
+    // 2. start_use with the real trust store refuses before dialing
+    let cfg = |trust: Arc<dyn p2p_forward::PeerTrust>| UseConfig {
+        peer: pinned.clone(),
+        trust,
+        node: big.node.clone(),
+        bind: "127.0.0.1:0".parse().unwrap(),
+        paired: PairedConfig::default(),
+        spare_stream: false,
+        token: None,
+        local: Default::default(),
+        discovery: None,
+        app_origin: None,
+        persistent: false,
+        connect_wait: p2p_forward::client::CONNECT_WAIT,
+        versions: Default::default(),
+        before_dial: None,
+        verbose: false,
+    };
+    let err = start_use(p2p_forward::transport_identity(&big.node), cfg(big.trust.clone()))
+        .await
+        .err()
+        .expect("refused");
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+
+    // 3. a modified client that trusts the MacBook in every role: the MacBook's gate and
+    //    per-stream check refuse it (the big Mac is stored there as role Share).
+    let forged = StaticTrust::new([(book.peer, book.node.public_bytes())]);
+    if let Ok(handle) = start_use(p2p_forward::transport_identity(&big.node), cfg(forged)).await {
+        let host = handle.bind.to_string();
+        let resp = send(handle.bind, &request("POST", "/v1/chat/completions", &host, &chat_body())).await;
+        assert!(!resp.contains("data: [DONE]"), "the big Mac used the MacBook's model: {resp}");
+    }
+    wait_until("big Mac rejected by the MacBook's gate", Duration::from_secs(3), || {
+        run.share.stats.lock().unwrap().connections_rejected >= 1
+    })
+    .await;
+    let s = run.share.stats.lock().unwrap().clone();
+    assert_eq!(s.connections_established, 0, "{s:?}");
+    assert_eq!(s.streams_accepted, 0, "{s:?}");
+    assert!(book_mock.requests().is_empty());
 }

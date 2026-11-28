@@ -20,7 +20,9 @@ The engine is unchanged from 0.5.3; the models, speeds and answers on a single M
 - **Your editor does not change.** The Connect-editor setting now always includes this install's
   local key. The model on this Mac ignores it, the connection to the other Mac requires it — so the
   same setting works locally and with the other Mac. If the other Mac's model has a different
-  context size, the app offers a one-click update of the editor settings.
+  context size, the app offers a one-click update of the editor settings. The settings file is
+  readable only by you, **Regenerate key** makes a new key, and Slipstream no longer turns on
+  "run shell commands without asking" in your editor (earlier builds did).
 - **Private by design.** Pairing uses a password protocol (SPAKE2) on the 6-digit code; a wrong code
   three times closes the window, the code expires after 5 minutes. Each Mac remembers the other's
   identity and refuses everyone else before reading a request. Traffic between the Macs is encrypted
@@ -103,8 +105,9 @@ How to use it, the privacy boundary and what to include in a report: `docs/USE_Y
 
 An independent review of the first forwarder version found a critical request-smuggling bug (a
 paired Mac could have made the big Mac's model server write prompt files) and four medium issues;
-all were fixed with regression tests before pairing was built, and a fresh review of all v0.6 code
-was done before this release (see Validation).
+all were fixed with regression tests before pairing was built. A fresh review of all v0.6 code
+before this release found 0 critical and 5 medium issues (plus 6 low ones); all were fixed, each
+with a regression test (details: `bench/RESULTS.md`, "v0.6 security review fixes").
 
 ## Validation
 

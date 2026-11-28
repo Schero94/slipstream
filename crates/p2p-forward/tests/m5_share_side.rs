@@ -15,7 +15,10 @@ use support::{chat_body, request, rig, send, RigOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+/// A status collected after the change under test (review L4: the share side reuses a
+/// collected status for `STATUS_CACHE_TTL`).
 async fn status(r: &support::Rig) -> p2p_forward::Status {
+    tokio::time::sleep(p2p_forward::status::STATUS_CACHE_TTL + Duration::from_millis(50)).await;
     match r.use_side.status().await.unwrap() {
         StatusReply::Status(s) => s,
         other => panic!("{other:?}"),

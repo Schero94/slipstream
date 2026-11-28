@@ -50,6 +50,7 @@ pub struct RigOptions {
     pub local: LocalLimits,
     pub app_origin: Option<String>,
     pub model: Option<Arc<dyn p2p_forward::ModelControl>>,
+    pub upstream_owner: p2p_forward::upstream::UpstreamOwner,
 }
 
 impl Default for RigOptions {
@@ -64,6 +65,7 @@ impl Default for RigOptions {
             local: LocalLimits::default(),
             app_origin: None,
             model: None,
+            upstream_owner: Default::default(),
         }
     }
 }
@@ -90,6 +92,7 @@ pub async fn rig(opts: RigOptions) -> Rig {
             name: "Test Studio".into(),
             model: opts.model.clone(),
             versions: Default::default(),
+            upstream_owner: opts.upstream_owner.clone(),
             verbose: false,
         },
     )

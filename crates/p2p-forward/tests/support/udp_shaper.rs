@@ -27,6 +27,9 @@ pub struct ShaperControl {
     blackhole: AtomicBool,
     pub forwarded: AtomicU64,
     pub dropped: AtomicU64,
+    /// Pure-Rust "pcap" (v0.6 security review §8): every datagram that enters the shaper,
+    /// both directions, while capturing is on. No tcpdump, no privileges.
+    capture: Mutex<Option<Vec<Vec<u8>>>>,
 }
 
 impl ShaperControl {
@@ -44,6 +47,13 @@ impl ShaperControl {
     }
     pub fn set_blackhole(&self, on: bool) {
         self.blackhole.store(on, Ordering::Relaxed);
+    }
+    pub fn start_capture(&self) {
+        *self.capture.lock().unwrap() = Some(Vec::new());
+    }
+    /// Stop capturing and return the datagrams seen.
+    pub fn take_capture(&self) -> Vec<Vec<u8>> {
+        self.capture.lock().unwrap().take().unwrap_or_default()
     }
 }
 
@@ -86,6 +96,9 @@ fn delay_line(
         let mut rng = Rng(seed | 1);
         let mut last_release = Instant::now();
         while let Some(pkt) = rx.recv().await {
+            if let Some(cap) = control.capture.lock().unwrap().as_mut() {
+                cap.push(pkt.clone());
+            }
             if control.blackhole.load(Ordering::Relaxed) {
                 control.dropped.fetch_add(1, Ordering::Relaxed);
                 continue;

@@ -7,8 +7,14 @@
 //! under another node key) is **treated as empty** and [`TrustStore::pairings_reset`] is
 //! set, so the UI can say "pairings were reset" — never fall back to trusting it.
 //!
-//! The store is shared between processes (the running `share`/`use` and the
-//! `trust revoke` command): a watcher ([`TrustStore::spawn_watcher`]) polls the file every
+//! The store is shared between processes (the running `share`/`use`, the app and the
+//! `trust revoke` command). Every read-modify-write holds an exclusive `flock` on
+//! `trusted_macs.json.lock` and reads the file **inside** the lock (security review M4: no
+//! lost updates, a revoke is never undone by a concurrent `add` / `record_seen`); readers
+//! hold a shared lock. The MAC'd body carries a monotonic `generation`; a file with a lower
+//! generation than this process has already seen (a rolled-back copy) is treated like a
+//! tampered one. (Rollback across restarts is not detected: whoever can write the data dir
+//! can also read `node.key`.) A watcher ([`TrustStore::spawn_watcher`]) polls the file every
 //! [`WATCH_INTERVAL`] and reloads on change, so a revoke in another process takes effect
 //! in the running one within ≲ 0.25 s (connections closed, active streams aborted).
 
@@ -22,7 +28,7 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use libp2p::PeerId;
 use p2p_crypto::NodeKeypair;
-use p2p_forward::trust::{BoxFuture, PeerTrust, TrustEpoch};
+use p2p_forward::trust::{BoxFuture, PeerTrust, Role, TrustEpoch};
 use p2p_libp2p::paired::Control;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -32,6 +38,8 @@ use zeroize::Zeroizing;
 use crate::pairing::PairingWindow;
 
 pub const TRUST_FILE: &str = "trusted_macs.json";
+/// Inter-process lock file (exclusive for writers, shared for readers; review M4).
+pub const TRUST_LOCK_FILE: &str = "trusted_macs.json.lock";
 pub const TRUST_FILE_VERSION: u32 = 1;
 /// How often running processes check the file for changes made by other processes.
 pub const WATCH_INTERVAL: Duration = Duration::from_millis(250);
@@ -117,16 +125,25 @@ impl TrustedPeer {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct Body {
     version: u32,
+    /// Monotonic write counter (review M4 rollback check). Omitted when 0, so files written
+    /// before it keep their MAC.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    generation: u64,
     peers: Vec<TrustedPeer>,
     /// M5 tombstones; omitted when empty (pre-M5 files keep their MAC).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     removed: Vec<FormerPeer>,
 }
 
+fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Data {
     peers: Vec<TrustedPeer>,
     removed: Vec<FormerPeer>,
+    generation: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -170,6 +187,8 @@ struct State {
     removed: Vec<FormerPeer>,
     pairings_reset: bool,
     stamp: Option<Stamp>,
+    /// Highest file generation this process has read or written (rollback check).
+    generation: u64,
 }
 
 /// Outcome of reading the file.
@@ -177,6 +196,8 @@ enum Loaded {
     Missing,
     Valid(Data),
     Tampered,
+    /// MAC-valid, but older than a generation this process already saw.
+    RolledBack,
 }
 
 pub struct TrustStore {
@@ -211,6 +232,7 @@ impl TrustStore {
                 removed: Vec::new(),
                 pairings_reset: false,
                 stamp: None,
+                generation: 0,
             }),
             epoch: TrustEpoch::default(),
         });
@@ -231,6 +253,26 @@ impl TrustStore {
         let mut mac = <HmacSha256 as Mac>::new_from_slice(&self.key[..]).expect("any key length");
         mac.update(&bytes);
         mac.finalize().into_bytes().to_vec()
+    }
+
+    /// Hold `trusted_macs.json.lock` (exclusive for read-modify-write, shared for reads).
+    /// `flock` locks per open file description, so this also orders threads of one process.
+    fn lock(&self, exclusive: bool) -> io::Result<fs::File> {
+        let path = self.path.with_file_name(TRUST_LOCK_FILE);
+        let mut opts = fs::OpenOptions::new();
+        opts.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let f = opts.open(&path)?;
+        if exclusive {
+            f.lock()?;
+        } else {
+            f.lock_shared()?;
+        }
+        Ok(f)
     }
 
     fn read_file(&self) -> io::Result<(Loaded, Option<Stamp>)> {
@@ -262,10 +304,14 @@ impl TrustStore {
         {
             return Ok((Loaded::Tampered, st));
         }
+        if file.body.generation < self.state.lock().unwrap().generation {
+            return Ok((Loaded::RolledBack, st));
+        }
         Ok((
             Loaded::Valid(Data {
                 peers: file.body.peers,
                 removed: file.body.removed,
+                generation: file.body.generation,
             }),
             st,
         ))
@@ -274,22 +320,26 @@ impl TrustStore {
     /// Re-read the file. Returns whether the trusted set (or the reset flag) changed;
     /// bumps the trust epoch if so.
     pub fn reload(&self) -> io::Result<bool> {
+        // Shared lock: never read between a writer's read and its state update (M4).
+        let _lock = self.lock(false)?;
         let (loaded, st) = self.read_file()?;
         let mut state = self.state.lock().unwrap();
         state.stamp = st;
         let (data, tampered) = match loaded {
-            Loaded::Missing => (Data::default(), false),
-            Loaded::Valid(d) => (d, false),
-            Loaded::Tampered => (Data::default(), true),
+            Loaded::Missing => (Data::default(), None),
+            Loaded::Valid(d) => (d, None),
+            Loaded::Tampered => (Data::default(), Some("integrity_check_failed")),
+            Loaded::RolledBack => (Data::default(), Some("rolled_back")),
         };
-        let Data { peers, removed } = data;
+        let Data { peers, removed, generation } = data;
+        state.generation = state.generation.max(generation);
         state.removed = removed;
         let mut changed = state.peers != peers;
-        if tampered && !state.pairings_reset {
+        if let Some(reason) = tampered.filter(|_| !state.pairings_reset) {
             state.pairings_reset = true;
             changed = true;
             eprintln!(
-                "trust event=pairings_reset file={} reason=integrity_check_failed (treated as empty; pair again)",
+                "trust event=pairings_reset file={} reason={reason} (treated as empty; pair again)",
                 self.path.display()
             );
         }
@@ -331,6 +381,7 @@ impl TrustStore {
     fn write(&self, data: &Data) -> io::Result<()> {
         let body = Body {
             version: TRUST_FILE_VERSION,
+            generation: data.generation,
             peers: data.peers.clone(),
             removed: data.removed.clone(),
         };
@@ -374,16 +425,22 @@ impl TrustStore {
     }
 
     fn modify_all<T>(&self, f: impl FnOnce(&mut Data) -> io::Result<T>) -> io::Result<T> {
+        // Exclusive inter-process lock around read → modify → write (M4); the file is read
+        // inside it, so a concurrent writer's change is never overwritten with a stale view.
+        let _lock = self.lock(true)?;
         let (loaded, _) = self.read_file()?;
         let mut state = self.state.lock().unwrap();
         let mut data = match loaded {
             Loaded::Valid(d) => d,
-            // a tampered file is replaced by what we trust in memory (empty after a reset)
-            Loaded::Missing | Loaded::Tampered => Data {
+            // a tampered / rolled-back file is replaced by what we trust in memory (empty
+            // after a reset)
+            Loaded::Missing | Loaded::Tampered | Loaded::RolledBack => Data {
                 peers: state.peers.clone(),
                 removed: state.removed.clone(),
+                generation: 0,
             },
         };
+        data.generation = data.generation.max(state.generation) + 1;
         let out = f(&mut data)?;
         // tombstones: re-paired peers drop theirs; old / excess ones expire
         let now = unix_now();
@@ -396,6 +453,7 @@ impl TrustStore {
         }
         self.write(&data)?;
         state.stamp = stamp(&self.path);
+        state.generation = data.generation;
         state.removed = data.removed;
         let peers = data.peers;
         let changed = state.peers != peers;
@@ -593,9 +651,23 @@ impl NodeTrust {
     }
 }
 
+impl PeerRole {
+    /// The forwarder's view of this role.
+    pub fn as_role(self) -> Role {
+        match self {
+            PeerRole::Share => Role::Share,
+            PeerRole::Use => Role::Use,
+        }
+    }
+}
+
 impl PeerTrust for NodeTrust {
     fn trusted_key(&self, peer: &PeerId) -> Option<[u8; 32]> {
         self.store.trusted_key(peer)
+    }
+
+    fn trusted_key_for(&self, peer: &PeerId, role: Role) -> Option<[u8; 32]> {
+        self.store.get(peer).filter(|p| p.role.as_role() == role).and_then(|p| p.static_key())
     }
 
     fn pairing_open(&self) -> bool {
@@ -677,6 +749,7 @@ pub fn resolve_use_peer(store: &TrustStore, selector: Option<&str>) -> Result<(P
             .iter()
             .find(|p| p.peer() == Some(id))
             .ok_or_else(|| format!("{id} is not a paired Mac. Pair first: slipstream-node pair --peer <addr> --code <code>"))?;
+        not_a_user(entry)?;
         return pinned(entry, Some(addr));
     }
     let shares: Vec<&TrustedPeer> = all.iter().filter(|p| p.role == PeerRole::Share).collect();
@@ -687,7 +760,10 @@ pub fn resolve_use_peer(store: &TrustStore, selector: Option<&str>) -> Result<(P
                 .filter(|p| p.peer_id == sel || p.name.eq_ignore_ascii_case(sel))
                 .collect();
             match hits.as_slice() {
-                [one] => pinned(one, None),
+                [one] => {
+                    not_a_user(one)?;
+                    pinned(one, None)
+                }
                 [] => Err(format!("no paired Mac named or with PeerId \"{sel}\"{}", reset_hint(store))),
                 _ => Err(format!("several paired Macs are named \"{sel}\"; use the PeerId")),
             }
@@ -705,6 +781,18 @@ pub fn resolve_use_peer(store: &TrustStore, selector: Option<&str>) -> Result<(P
             )),
         },
     }
+}
+
+/// Security review M1: pairing is directional. A Mac paired as a *user* of this one cannot be
+/// used from here (it never offered its model to this Mac); pair the other way round.
+fn not_a_user(entry: &TrustedPeer) -> Result<(), String> {
+    if entry.role == PeerRole::Use {
+        return Err(format!(
+            "\"{}\" was paired to use this Mac, not to share with it. To use its model, show a code on \"{}\" and pair again from here.",
+            entry.name, entry.name
+        ));
+    }
+    Ok(())
 }
 
 /// Error for `share` when nothing is paired.
@@ -766,8 +854,9 @@ mod tests {
         assert!(store.reload_if_changed().unwrap());
         assert!(!store.is_trusted(&pa));
         // no temp files left behind
-        let names: Vec<_> = fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
-        assert_eq!(names, vec![std::ffi::OsString::from(TRUST_FILE)]);
+        let mut names: Vec<_> = fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        names.sort();
+        assert_eq!(names, vec![std::ffi::OsString::from(TRUST_FILE), std::ffi::OsString::from(TRUST_LOCK_FILE)]);
     }
 
     #[test]
@@ -821,6 +910,88 @@ mod tests {
         assert_eq!(resolve_use_target(&store, None).unwrap().1.to_string(), e.last_addrs[0]);
         // persisted and still MAC-valid
         assert_eq!(TrustStore::load(dir.path(), &me).unwrap().get(&pa).unwrap().last_addrs, e.last_addrs);
+    }
+
+    /// Review M4: a MAC-valid but older copy of the file (rollback) is refused like a
+    /// tampered one; generations only grow.
+    #[test]
+    fn rolled_back_file_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let me = NodeKeypair::generate();
+        let store = TrustStore::load(dir.path(), &me).unwrap();
+        let a = NodeKeypair::generate();
+        store.add(sample(&a, "Mac Studio", PeerRole::Use)).unwrap();
+        let old = fs::read(store.path()).unwrap(); // generation 1, Mac Studio trusted
+        store.revoke("Mac Studio").unwrap(); // generation 2
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(text.contains("\"generation\": 2"), "{text}");
+        // an attacker (or a stale backup) puts the old, validly MAC'd file back
+        let tmp = dir.path().join("old.json");
+        fs::write(&tmp, &old).unwrap();
+        fs::rename(&tmp, store.path()).unwrap();
+        store.reload().unwrap();
+        let pa = p2p_forward::transport_identity(&a).public().to_peer_id();
+        assert!(!store.is_trusted(&pa), "rollback resurrected a revoked Mac");
+        assert!(store.pairings_reset());
+        // a fresh process cannot tell (documented): it loads the old file
+        assert!(TrustStore::load(dir.path(), &me).unwrap().is_trusted(&pa));
+    }
+
+    /// Child mode of [`concurrent_processes_never_resurrect_a_revoked_peer`]: runs only when
+    /// the parent sets `SLIPSTREAM_TRUST_CHILD` (otherwise a no-op).
+    #[test]
+    fn trust_child_writer() {
+        let Ok(spec) = std::env::var("SLIPSTREAM_TRUST_CHILD") else { return };
+        let mut it = spec.split('|');
+        let (dir, secret, target, tag) = (it.next().unwrap(), it.next().unwrap(), it.next().unwrap(), it.next().unwrap());
+        let me = NodeKeypair::from_secret_bytes(hex::decode(secret).unwrap().try_into().unwrap());
+        let store = TrustStore::load(Path::new(dir), &me).unwrap();
+        let target: PeerId = target.parse().unwrap();
+        for i in 0..40u16 {
+            let n = NodeKeypair::generate();
+            store.add(sample(&n, &format!("{tag}-{i}"), PeerRole::Use)).unwrap();
+            let addr: libp2p::Multiaddr = format!("/ip4/10.0.0.{}/udp/{}/quic-v1", i % 200 + 1, 9000 + i).parse().unwrap();
+            let _ = store.record_seen(&target, &addr).unwrap();
+        }
+    }
+
+    /// Review M4: four other processes add Macs and record addresses of the target while this
+    /// one revokes it — the revoked Mac never comes back and no add is lost.
+    #[test]
+    fn concurrent_processes_never_resurrect_a_revoked_peer() {
+        let dir = tempfile::tempdir().unwrap();
+        let me = NodeKeypair::generate();
+        let store = TrustStore::load(dir.path(), &me).unwrap();
+        let t = NodeKeypair::generate();
+        let target = p2p_forward::transport_identity(&t).public().to_peer_id();
+        store.add(sample(&t, "Target", PeerRole::Use)).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let spawn = |tag: &str| {
+            std::process::Command::new(&exe)
+                .args(["--exact", "trust::tests::trust_child_writer", "--test-threads=1", "--quiet"])
+                .env(
+                    "SLIPSTREAM_TRUST_CHILD",
+                    format!("{}|{}|{}|{tag}", dir.path().display(), hex::encode(me.secret_bytes()), target),
+                )
+                .spawn()
+                .unwrap()
+        };
+        let mut kids = vec![spawn("a"), spawn("b"), spawn("c"), spawn("d")];
+        // revoke while the children write (wait until they started)
+        let t0 = std::time::Instant::now();
+        while store.list().len() < 3 && t0.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(5));
+            store.reload().unwrap();
+        }
+        store.revoke("Target").unwrap();
+        for k in &mut kids {
+            assert!(k.wait().unwrap().success());
+        }
+        let after = TrustStore::load(dir.path(), &me).unwrap();
+        assert!(!after.is_trusted(&target), "a concurrent writer resurrected the revoked Mac");
+        assert!(after.former_key(&target).is_some(), "tombstone lost");
+        assert_eq!(after.list().len(), 4 * 40, "lost updates: {}", after.list().len());
+        assert!(!after.pairings_reset());
     }
 
     #[test]

@@ -44,7 +44,7 @@ use crate::proto::{
     Versions, WireError, BODY_CHUNK, OPENAI_PROTOCOL_V1, STATUS_PROTOCOL_V1,
 };
 use crate::status::{StatusReply, StatusRequest};
-use crate::trust::{PeerTrust, NOTIFY_REVOKED_BUDGET};
+use crate::trust::{PeerTrust, Role, NOTIFY_REVOKED_BUDGET};
 use crate::unix_ms;
 
 pub const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
@@ -357,7 +357,7 @@ fn other<E: std::fmt::Display>(e: E) -> io::Error {
 impl Shared {
     async fn open(&self, protocol: libp2p::StreamProtocol) -> io::Result<Channel> {
         // Per-stream trust check: a revoked peer gets no new stream.
-        let Some(peer_key) = self.trust.trusted_key(&self.peer) else {
+        let Some(peer_key) = self.trust.trusted_key_for(&self.peer, Role::Share) else {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "that Mac is no longer paired with this one",
@@ -480,10 +480,10 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
             "the editor address must be loopback (127.0.0.1)",
         ));
     }
-    if cfg.trust.trusted_key(&peer).is_none() {
+    if cfg.trust.trusted_key_for(&peer, Role::Share).is_none() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("{peer} is not a paired Mac (pair first: slipstream-node pair --peer <addr> --code <code>)"),
+            format!("{peer} is not a paired Mac that shares its model with this one (pair first: slipstream-node pair --peer <addr> --code <code>)"),
         ));
     }
     if cfg.token.as_deref().is_some_and(|t| t.len() < 16 || !t.bytes().all(|b| b.is_ascii_graphic())) {
@@ -645,7 +645,7 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
         redial.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut epoch = trust.subscribe();
         let mut epoch_live = true;
-        let mut last_key = trust.trusted_key(&peer);
+        let mut last_key = trust.trusted_key_for(&peer, Role::Share);
         // Peer lost trust: no re-dial until it is trusted again.
         let mut suspended = false;
         let (close_tx, mut close_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
@@ -655,7 +655,7 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
                     if changed.is_err() {
                         epoch_live = false;
                     }
-                    match (trust.trusted_key(&peer), last_key) {
+                    match (trust.trusted_key_for(&peer, Role::Share), last_key) {
                         (None, Some(old)) => {
                             last_key = None;
                             suspended = true;
@@ -676,7 +676,7 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
                     }
                 }
                 Some(()) = close_rx.recv() => {
-                    if trust.trusted_key(&peer).is_none() {
+                    if trust.trusted_key_for(&peer, Role::Share).is_none() {
                         let _ = swarm.disconnect_peer_id(peer);
                     }
                 }
@@ -1553,6 +1553,28 @@ impl ChunkedDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig {
+            cases: std::env::var("PROPTEST_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(2_000),
+            failure_persistence: None,
+            ..Default::default()
+        })]
+
+        /// v0.6 review §8: the editor-side chunked request decoder takes arbitrary bytes in
+        /// arbitrary splits without panicking and never yields more than it was fed.
+        #[test]
+        fn chunked_decoder_total(buf in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..512), cut in 0usize..512) {
+            let cut = cut.min(buf.len());
+            let mut d = ChunkedDecoder::default();
+            let mut out = Vec::new();
+            let r1 = d.feed(&buf[..cut], &mut out);
+            if r1 == Ok(false) {
+                let _ = d.feed(&buf[cut..], &mut out);
+            }
+            proptest::prop_assert!(out.len() <= buf.len());
+        }
+    }
 
     #[test]
     fn bearer_token_check() {

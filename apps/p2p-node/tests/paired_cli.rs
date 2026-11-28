@@ -141,9 +141,15 @@ fn pair_share_use_trust_revoke_end_to_end() {
     }
     // M5: the editor port is bound at once; until the paired connection is up it answers
     // 503 (peer_waking), so wait for the first 200.
+    // Review M2: `use` requires the local token by default (<data dir>/local.token, 0600).
+    let token = std::fs::read_to_string(book.join("local.token")).unwrap().trim().to_string();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(book.join("local.token")).unwrap().permissions().mode() & 0o777, 0o600);
+    }
     let deadline = Instant::now() + Duration::from_secs(15);
     let models = loop {
-        let m = http(local, format!("GET /v1/models HTTP/1.1\r\nHost: {local}\r\nConnection: close\r\n\r\n"));
+        let m = http(local, format!("GET /v1/models HTTP/1.1\r\nHost: {local}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"));
         if m.starts_with("HTTP/1.1 200") || Instant::now() > deadline {
             break m;
         }
@@ -156,14 +162,16 @@ fn pair_share_use_trust_revoke_end_to_end() {
     let chat = http(
         local,
         format!(
-            "POST /v1/chat/completions?n=5 HTTP/1.1\r\nHost: {local}\r\nAuthorization: Bearer x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "POST /v1/chat/completions?n=5 HTTP/1.1\r\nHost: {local}\r\nAuthorization: Bearer {token}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         ),
     );
     assert!(chat.contains("data: [DONE]"), "{chat}");
+    let anon = http(local, format!("GET /v1/models HTTP/1.1\r\nHost: {local}\r\nConnection: close\r\n\r\n"));
+    assert!(anon.starts_with("HTTP/1.1 401"), "no token must be refused: {anon}");
     let save = http(
         local,
-        format!("POST /slots/0?action=save HTTP/1.1\r\nHost: {local}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"),
+        format!("POST /slots/0?action=save HTTP/1.1\r\nHost: {local}\r\nAuthorization: Bearer {token}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"),
     );
     assert!(save.starts_with("HTTP/1.1 403"), "{save}");
     assert!(save.contains("Not available through a shared Mac"));

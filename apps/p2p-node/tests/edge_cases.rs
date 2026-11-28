@@ -249,3 +249,57 @@ async fn editor_port_taken_by_another_program_is_reported() {
     drop(u);
     drop(share);
 }
+
+/// Security review L2: magic packets only inside the waking window and only on the network
+/// where the big Mac was last seen. Elsewhere (a stored address in another subnet) nothing
+/// is broadcast at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn wake_only_inside_the_window_and_on_the_last_seen_network() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mock = p2p_forward::mock_llama::start("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let big = Node::open(&tmp.path().join("big")).unwrap();
+    let book = Node::open(&tmp.path().join("book")).unwrap();
+    let (share, big_peer) = pair(&big, &book, mock.addr, Versions::default()).await;
+    drop(share);
+    let peer: libp2p::PeerId = big_peer.parse().unwrap();
+    // make sure there is a MAC to wake, so "no packet" means "suppressed"
+    let mut e = book.store.get(&peer).unwrap();
+    e.wake_macs = vec!["a4:83:e7:01:02:03".into()];
+    let home = e.last_addrs.clone();
+    assert!(home[0].starts_with("/ip4/127.0.0.1/"), "{home:?}");
+    book.store.add(e.clone()).unwrap();
+
+    let drain = |s: &UdpSocket| {
+        let mut n = 0;
+        let mut buf = [0u8; 256];
+        while s.recv_from(&mut buf).is_ok() {
+            n += 1;
+        }
+        n
+    };
+    // 1. home network (loopback subnet): packets during the window, none after it
+    let wol = UdpSocket::bind("127.0.0.1:0").unwrap();
+    wol.set_nonblocking(true).unwrap();
+    let bind = free_tcp();
+    let u = UseSession::start(book.clone(), use_opts(&big_peer, bind, WakeTargets::Fixed(vec![wol.local_addr().unwrap()])))
+        .unwrap();
+    wait_state(&u, "asleep", 8, |s| matches!(s, UseState::Asleep { .. })).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(drain(&wol) >= 1, "no magic packet inside the window");
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(drain(&wol), 0, "magic packets after the waking window");
+    drop(u);
+
+    // 2. another network: the stored address is in a subnet this Mac is not on
+    e.last_addrs = vec![format!("/ip4/203.0.113.7/udp/9003/quic-v1/p2p/{big_peer}")];
+    book.store.add(e).unwrap();
+    let wol2 = UdpSocket::bind("127.0.0.1:0").unwrap();
+    wol2.set_nonblocking(true).unwrap();
+    let mut o = use_opts(&big_peer, free_tcp(), WakeTargets::Fixed(vec![wol2.local_addr().unwrap()]));
+    o.addr = Some(format!("/ip4/127.0.0.1/udp/9/quic-v1/p2p/{big_peer}").parse().unwrap());
+    let u = UseSession::start(book.clone(), o).unwrap();
+    let st = wait_state(&u, "waking", 5, |s| matches!(s, UseState::Waking { .. })).await;
+    wait_state(&u, "asleep", 8, |s| matches!(s, UseState::Asleep { .. })).await;
+    assert_eq!(drain(&wol2), 0, "broadcast on a foreign network ({st:?})");
+    assert!(matches!(u.state(), UseState::Asleep { .. }));
+}

@@ -71,6 +71,11 @@ pub fn api_key() -> Result<String, String> {
 /// What the big Mac's app does for a paired Mac's StartModel / StopModel (main.rs implements
 /// it with `start_server_impl` / `stop_server_impl`; tests use a fake).
 pub trait AppModel: Send + Sync + 'static {
+    /// PID of this app's model child (llama-server / oMLX launcher), if one runs. The share
+    /// side forwards only to a listener owned by it or a descendant (security review M3).
+    fn server_pid(&self) -> Option<u32> {
+        None
+    }
     /// The local model process runs (loading or ready).
     fn running(&self) -> bool;
     /// Start with the last configuration (through the RAM admission of `start_server`).
@@ -87,6 +92,10 @@ struct Settings {
     share: bool,
     #[serde(default = "yes")]
     may_start_model: bool,
+    /// Security review L3: a paired Mac may start this Mac's model while it runs on battery
+    /// only if the owner opted in (default off).
+    #[serde(default)]
+    start_on_battery: bool,
 }
 
 fn yes() -> bool {
@@ -99,6 +108,7 @@ impl Default for Settings {
             use_peer: None,
             share: false,
             may_start_model: true,
+            start_on_battery: false,
         }
     }
 }
@@ -121,6 +131,8 @@ pub struct RemoteConfig {
     pub wake: p2p_node::wake::WakeTargets,
     /// Shorter waking phase (tests); `None` = 20 s.
     pub wake_window: Option<Duration>,
+    /// Power source probe (tests fake "on battery"; L3).
+    pub on_battery: fn() -> bool,
 }
 
 impl RemoteConfig {
@@ -140,6 +152,7 @@ impl RemoteConfig {
             caffeinate: true,
             wake: p2p_node::wake::WakeTargets::Broadcast,
             wake_window: None,
+            on_battery,
         }
     }
 }
@@ -186,8 +199,8 @@ pub struct Core {
     inner: Mutex<Inner>,
     settings: Mutex<Settings>,
     model: Mutex<Option<Arc<dyn AppModel>>>,
-    /// The running model was started by a paired Mac (only then may one stop it).
-    remote_started: AtomicBool,
+    /// The paired Mac that started the running model (L3: only that one may stop it).
+    remote_started: Mutex<Option<PeerId>>,
 }
 
 pub struct RemoteState {
@@ -233,7 +246,7 @@ impl RemoteState {
                 inner: Mutex::default(),
                 settings: Mutex::new(settings),
                 model: Mutex::new(None),
-                remote_started: AtomicBool::new(false),
+                remote_started: Mutex::new(None),
             }),
         }
     }
@@ -267,7 +280,25 @@ impl RemoteState {
 
     /// A local Start / Stop from the window: the model is no longer "remotely started".
     pub fn local_lifecycle(&self) {
-        self.core.remote_started.store(false, Ordering::SeqCst);
+        *self.core.remote_started.lock().unwrap() = None;
+    }
+
+    /// "Regenerate key" (review M2): a new local token; a running use session is restarted
+    /// so the forwarder requires the new one at once. Returns the new key.
+    pub async fn regenerate_key(&self) -> Result<String, String> {
+        self.run(|c| async move {
+            let path = c.cfg.dir.join("local.token");
+            let key = tokio::task::spawn_blocking(move || p2p_forward::regenerate_token(&path))
+                .await
+                .map_err(err_text)?
+                .map_err(|e| ui_err("key_failed", &[], format!("Could not write a new key: {e}")))?;
+            let using = c.inner.lock().unwrap().use_.as_ref().map(|u| u.peer.to_string());
+            if let Some(peer) = using {
+                c.use_start(peer, true).await?;
+            }
+            Ok(key)
+        })
+        .await
     }
 
     /// App start: bring back what the user turned on before (sharing, using a Mac). The
@@ -492,6 +523,9 @@ impl Core {
                 "peer_id": u.peer.to_string(),
                 "name": u.name,
                 "state": state,
+                // M3: the forwarder owns the editor port (never true in port_busy) — the
+                // window sends the local key to 8080 only then.
+                "bound": u.handle().is_some(),
                 "error": error,
                 "bind": self.cfg.use_bind.to_string(),
                 "model_running": st.map(|s| s.model_running),
@@ -527,7 +561,7 @@ impl Core {
                 "lan_ips": net.lan_ips,
                 "on_battery": net.on_battery,
                 "caffeinate": inner.caffeinate.is_some(),
-                "remote_started": self.remote_started.load(Ordering::SeqCst),
+                "remote_started": self.remote_started.lock().unwrap().is_some(),
             })
         });
         let mode = if inner.use_.is_some() {
@@ -543,6 +577,7 @@ impl Core {
             "share": share_v,
             "paired": paired,
             "may_start_model": settings.may_start_model,
+            "start_on_battery": settings.start_on_battery,
             "removed_by": inner.removed_by,
             "pairings_reset": node.as_ref().map(|n| n.store.pairings_reset()).unwrap_or(false),
             "lan_started": inner.browser.is_some(),
@@ -573,6 +608,13 @@ impl Core {
             opts.may_start_model = may;
             opts.announce = self.cfg.announce;
             opts.model = Some(ctl);
+            // M3: forward only to this app's own model process (or its children).
+            let weak = Arc::downgrade(self);
+            opts.upstream_owner = p2p_forward::upstream::UpstreamOwner::Pid(Arc::new(move || {
+                let c = weak.upgrade()?;
+                let m = c.model.lock().unwrap().clone()?;
+                m.server_pid()
+            }));
             let session = ShareSession::start(node, opts)
             .await
             .map_err(|e| ui_err("share_failed", &[], format!("Sharing could not start: {e}")))?;
@@ -618,6 +660,10 @@ impl Core {
             s.cancel_pairing();
         }
         self.status().await
+    }
+
+    pub fn set_battery_start(&self, allowed: bool) {
+        self.update_settings(|s| s.start_on_battery = allowed);
     }
 
     pub fn set_may_start(&self, allowed: bool) {
@@ -962,7 +1008,7 @@ impl ModelControl for Control {
         on && is_user
     }
 
-    fn start(&self, _peer: PeerId) -> ReplyFuture {
+    fn start(&self, peer: PeerId) -> ReplyFuture {
         let core = self.core.clone();
         Box::pin(async move {
             let Some(c) = core.upgrade() else {
@@ -970,6 +1016,15 @@ impl ModelControl for Control {
             };
             if c.inner.lock().unwrap().use_.is_some() {
                 return refused("remote_active", "That Mac is itself using another Mac.");
+            }
+            // L3: on battery only if this Mac's owner allowed it.
+            let battery = c.cfg.on_battery;
+            let on_battery = tokio::task::spawn_blocking(battery).await.unwrap_or(false);
+            if !c.settings.lock().unwrap().start_on_battery && on_battery {
+                return refused(
+                    "on_battery",
+                    "That Mac runs on battery; its owner has not allowed starting the model on battery.",
+                );
             }
             let Some(model) = c.model.lock().unwrap().clone() else {
                 return refused("no_model", "The model cannot be started from here.");
@@ -980,7 +1035,7 @@ impl ModelControl for Control {
             match out {
                 Ok(Ok(None)) => Control::status(&c, true),
                 Ok(Ok(Some(_))) => {
-                    c.remote_started.store(true, Ordering::SeqCst);
+                    *c.remote_started.lock().unwrap() = Some(peer);
                     Control::status(&c, false)
                 }
                 Ok(Err(e)) => refused("start_refused", &plain(&e)),
@@ -989,17 +1044,25 @@ impl ModelControl for Control {
         })
     }
 
-    fn stop(&self, _peer: PeerId) -> ReplyFuture {
+    fn stop(&self, peer: PeerId) -> ReplyFuture {
         let core = self.core.clone();
         Box::pin(async move {
             let Some(c) = core.upgrade() else {
                 return refused("gone", "The app is quitting.");
             };
-            if !c.remote_started.load(Ordering::SeqCst) {
-                return refused(
-                    "not_started_remotely",
-                    "The model was started on that Mac itself; only it can stop it.",
-                );
+            let starter = *c.remote_started.lock().unwrap();
+            match starter {
+                None => {
+                    return refused(
+                        "not_started_remotely",
+                        "The model was started on that Mac itself; only it can stop it.",
+                    )
+                }
+                // L3: only the paired Mac that started it may stop it.
+                Some(p) if p != peer => {
+                    return refused("not_started_by_you", "Another paired Mac started the model; only it can stop it.")
+                }
+                Some(_) => {}
             }
             // M5 busy accounting: llama-server's requests (processing + deferred from
             // /metrics, else busy /slots) beyond the forwarded requests that hold an upstream
@@ -1012,7 +1075,7 @@ impl ModelControl for Control {
                 return refused("no_model", "The model cannot be stopped from here.");
             };
             let _ = tokio::task::spawn_blocking(move || model.stop()).await;
-            c.remote_started.store(false, Ordering::SeqCst);
+            *c.remote_started.lock().unwrap() = None;
             Control::status(&c, false)
         })
     }
@@ -1118,6 +1181,15 @@ pub async fn remote_set_model_control(allowed: bool, rs: State<'_, RemoteState>)
 }
 
 #[tauri::command]
+pub async fn remote_set_battery_start(allowed: bool, rs: State<'_, RemoteState>) -> Result<Value, String> {
+    rs.run(move |c| async move {
+        c.set_battery_start(allowed);
+        c.status().await
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn remote_dismiss_removed(rs: State<'_, RemoteState>) -> Result<Value, String> {
     rs.run(|c| async move {
         c.dismiss_removed();
@@ -1149,6 +1221,10 @@ mod tests {
     }
 
     impl AppModel for FakeModel {
+        /// The mock llama-server runs inside the test process (M3 owner check).
+        fn server_pid(&self) -> Option<u32> {
+            Some(std::process::id())
+        }
         fn running(&self) -> bool {
             self.running.load(Ordering::SeqCst)
         }
@@ -1184,6 +1260,7 @@ mod tests {
             caffeinate: false,
             wake: p2p_node::wake::WakeTargets::Off,
             wake_window: None,
+            on_battery: || false,
         }
     }
 
@@ -1306,7 +1383,7 @@ mod tests {
             .unwrap();
         assert_eq!(s["can_start_model"], true);
         assert_eq!(big_model.starts.load(Ordering::SeqCst), 1);
-        assert!(big.core.remote_started.load(Ordering::SeqCst));
+        assert!(big.core.remote_started.lock().unwrap().is_some());
         // The mock's slot is busy and no paired request is in flight = a local request: refused.
         let e = book.block(|c| async move { c.rpc(StatusRequest::StopModel).await }).unwrap_err();
         assert!(e.starts_with("[remote_local_request]"), "{e}");
@@ -1375,7 +1452,7 @@ mod tests {
         let peer = PeerId::random();
         let r = rs.rt.block_on(ctl.start(peer));
         assert!(matches!(r, StatusReply::Status(_)), "{r:?}");
-        assert!(model.running() && rs.core.remote_started.load(Ordering::SeqCst));
+        assert!(model.running() && rs.core.remote_started.lock().unwrap().is_some());
         let r = rs.rt.block_on(ctl.stop(peer));
         assert!(matches!(r, StatusReply::Status(ref s) if !s.model_running), "{r:?}");
         assert_eq!(model.stops.load(Ordering::SeqCst), 1);
@@ -1383,7 +1460,36 @@ mod tests {
         model.running.store(true, Ordering::SeqCst);
         let r = rs.rt.block_on(ctl.start(peer));
         assert!(matches!(r, StatusReply::Status(ref s) if s.model_running), "{r:?}");
-        assert!(!rs.core.remote_started.load(Ordering::SeqCst));
+        assert!(!rs.core.remote_started.lock().unwrap().is_some());
+    }
+
+    /// Security review L3: StartModel on battery only with the owner's opt-in; only the
+    /// paired Mac that started the model may stop it.
+    #[test]
+    fn remote_start_battery_opt_in_and_stop_only_by_the_starter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let idle = SocketAddr::from(([127, 0, 0, 1], free_port()));
+        let mut c = cfg(tmp.path(), idle, free_port());
+        c.on_battery = || true;
+        let rs = RemoteState::new(c);
+        let model = Arc::new(FakeModel::default());
+        rs.set_model(model.clone());
+        let ctl = Control { core: Arc::downgrade(&rs.core) };
+        let (a, b) = (PeerId::random(), PeerId::random());
+        let r = rs.rt.block_on(ctl.start(a));
+        assert!(matches!(&r, StatusReply::Refused { code, .. } if code == "on_battery"), "{r:?}");
+        assert_eq!(model.starts.load(Ordering::SeqCst), 0);
+        rs.core.set_battery_start(true);
+        let r = rs.rt.block_on(ctl.start(a));
+        assert!(matches!(r, StatusReply::Status(_)), "{r:?}");
+        assert_eq!(*rs.core.remote_started.lock().unwrap(), Some(a));
+        let r = rs.rt.block_on(ctl.stop(b));
+        assert!(matches!(&r, StatusReply::Refused { code, .. } if code == "not_started_by_you"), "{r:?}");
+        assert!(model.running());
+        let r = rs.rt.block_on(ctl.stop(a));
+        assert!(matches!(r, StatusReply::Status(ref s) if !s.model_running), "{r:?}");
+        let st = rs.block(|c| async move { c.status().await }).unwrap();
+        assert_eq!(st["start_on_battery"], true);
     }
 
     /// Pair a fresh big Mac (sharing, upstream = `upstream`) with a fresh MacBook.
@@ -1441,6 +1547,7 @@ mod tests {
         c2.share_listen = Some(format!("/ip4/127.0.0.1/udp/{port}/quic-v1"));
         drop(big);
         let big = RemoteState::new(c2);
+        big.set_model(Arc::new(FakeModel::default())); // M3: the app's model owns the upstream
         big.block(|c| async move { c.share_start().await }).unwrap();
         wait_for("connected", 15, || book.block(|c| async move { c.status().await }).unwrap()["use"]["state"] == "connected");
         assert!(http(bind, &req).starts_with("HTTP/1.1 200"));

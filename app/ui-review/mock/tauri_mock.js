@@ -54,6 +54,7 @@
       wol_sent: R.useState === "waking" && R.wakeKnown, wake_known: R.wakeKnown,
       mismatch_side: R.useState === "version_mismatch" ? R.mismatchSide : null,
       mismatch_version: R.useState === "version_mismatch" ? R.remoteVersion : null, min_version: "0.6",
+      bound: R.useState !== "port_busy" && R.useState !== "unreachable",
     } : null;
     let pairing = null;
     if (R.pairing) {
@@ -66,7 +67,7 @@
       dial: "/ip4/0.0.0.0/udp/9003/quic-v1/p2p/" + STUDIO, lan_ips: ["192.168.1.20"], caffeinate: !R.shareBattery || R.shareRequests > 0,
       on_battery: R.shareBattery, remote_started: false } : null;
     return { mode: R.mode === "using" ? "using" : (R.shareOn ? "sharing" : "off"), use: u, share: sh, paired: R.paired,
-      may_start_model: R.mayStart, removed_by: R.removedBy, pairings_reset: R.pairingsReset, lan_started: R.lanStarted, fp: "a1b2c3d4e5f60718",
+      may_start_model: R.mayStart, start_on_battery: !!R.batteryStart, removed_by: R.removedBy, pairings_reset: R.pairingsReset, lan_started: R.lanStarted, fp: "a1b2c3d4e5f60718",
       on_battery: R.selfBattery };
   };
   R.peerPairs = (name = "MacBook Air") => {
@@ -142,6 +143,8 @@
     remote_start_model: () => { if (!R.canStart) throw "[remote_model_control_off] no"; R.modelRunning = true; return { model_running: true }; },
     remote_stop_model: () => { R.modelRunning = false; return { model_running: false }; },
     remote_set_model_control: ({ allowed }) => { R.mayStart = !!allowed; return remoteStatus(); },
+    remote_set_battery_start: ({ allowed }) => { R.batteryStart = !!allowed; return remoteStatus(); },
+    regenerate_api_key: () => ({ key: "mock1local1token1111111111111111", patched: ["~/.config/kilo/kilo.jsonc"] }),
     remote_dismiss_removed: () => { R.removedBy = null; return remoteStatus(); },
     read_log: () => M.log, tail_file: () => "",
     live_stats: live, clear_stats: () => null,

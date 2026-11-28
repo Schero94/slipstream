@@ -236,7 +236,9 @@ pub fn dechunk_strict(mut body: &[u8], limit: usize) -> Option<Vec<u8>> {
         if size == 0 {
             return Some(out);
         }
-        if body.len() < size + 2 || out.len() + size > limit {
+        // checked: a hostile size near usize::MAX must not overflow (v0.6 review §8 fuzzing)
+        let need = size.checked_add(2)?;
+        if body.len() < need || out.len().checked_add(size)? > limit {
             return None;
         }
         out.extend_from_slice(&body[..size]);

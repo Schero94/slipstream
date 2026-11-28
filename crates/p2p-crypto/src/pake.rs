@@ -10,12 +10,12 @@
 //! - An online attacker gets exactly one code guess per session (SPAKE2); the share side
 //!   allows 3 failed sessions per window and 5 minutes (enforced by the caller).
 //! - Key confirmation, one tag per side:
-//!   `HMAC-SHA256(Kc, "slipstream-pair-v1" ‖ role ‖ PeerIdA ‖ PeerIdB ‖ X25519A ‖ X25519B
+//!   `HMAC-SHA256(Kc, "slipstream-pair-v2" ‖ role ‖ PeerIdA ‖ PeerIdB ‖ X25519A ‖ X25519B
 //!   ‖ name ‖ app_version ‖ may_start_model ‖ prev)`, where `Kc = HKDF(K, "confirm")`,
 //!   `role` is `A`/`B` (so a tag cannot be reflected), variable fields are length-prefixed,
 //!   `name`/`app_version`/`may_start_model` are the **sender's** claims and `prev` is the
-//!   peer's confirmation tag (empty for B, B's tag for A — the second tag covers the whole
-//!   exchange). Verification uses HMAC's constant-time compare.
+//!   peer's confirmation tag (v2, security review M5: empty for A, which confirms first;
+//!   A's tag for B — the second tag covers the whole exchange). Verification uses HMAC's constant-time compare.
 //! - The claims ([`PairInfo`]) travel encrypted under K (ChaCha20-Poly1305, one key per
 //!   direction derived from K, each key used for exactly one message).
 //!
@@ -35,7 +35,7 @@ use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Domain label of the pairing transcript (bump when the layout changes).
-pub const PAIR_TRANSCRIPT_LABEL: &[u8] = b"slipstream-pair-v1";
+pub const PAIR_TRANSCRIPT_LABEL: &[u8] = b"slipstream-pair-v2";
 /// Digits in a pairing code.
 pub const CODE_DIGITS: usize = 6;
 /// Upper bound for a claimed name / version (bytes) — both are display strings.

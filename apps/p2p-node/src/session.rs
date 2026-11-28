@@ -90,6 +90,9 @@ pub struct ShareOpts {
     pub model: Option<Arc<dyn ModelControl>>,
     pub paired: p2p_libp2p::paired::PairedConfig,
     pub versions: Versions,
+    /// Who must own the upstream listener (review M3): the app passes its model child's
+    /// PID; headless default = this user.
+    pub upstream_owner: p2p_forward::upstream::UpstreamOwner,
     pub verbose: bool,
 }
 
@@ -104,6 +107,7 @@ impl ShareOpts {
             model: None,
             paired: p2p_libp2p::paired::PairedConfig::default(),
             versions: Versions::default(),
+            upstream_owner: Default::default(),
             verbose: false,
         }
     }
@@ -174,6 +178,7 @@ impl ShareSession {
             name: name.clone(),
             model: opts.model.clone(),
             versions: opts.versions,
+            upstream_owner: opts.upstream_owner.clone(),
             verbose: opts.verbose,
         };
         let identity = || p2p_forward::transport_identity(&node.node);
@@ -382,6 +387,13 @@ impl UseSession {
     pub fn start(node: Arc<Node>, opts: UseOpts) -> Result<Self, String> {
         let peer: PeerId = opts.peer.parse().map_err(|_| "bad PeerId".to_string())?;
         let entry = node.store.get(&peer).ok_or("that Mac is not paired")?;
+        if entry.role != crate::trust::PeerRole::Share {
+            // Review M1: a Mac paired as a user of this one never offered its model here.
+            return Err(format!(
+                "\"{}\" was paired to use this Mac, not to share with it; pair again from this Mac with a code shown on \"{}\"",
+                entry.name, entry.name
+            ));
+        }
         let inner = Arc::new(UseInner {
             state: Mutex::new(UseState::Connecting),
             handle: Mutex::new(None),
@@ -645,16 +657,20 @@ async fn supervise(node: Arc<Node>, peer: PeerId, opts: UseOpts, inner: Arc<UseI
                 set(if ever_connected { UseState::Reconnecting } else { UseState::Connecting });
             } else {
                 let waking_for = down - opts.wake_grace;
-                let resend = if waking_for < opts.wake_window {
-                    crate::wake::WAKE_RESEND
-                } else {
-                    Duration::from_secs(60)
-                };
-                if last_wol.is_none_or(|t| now.duration_since(t) >= resend) {
+                // L2: magic packets only inside the waking window, and only on the network
+                // where the other Mac was last seen.
+                if waking_for < opts.wake_window
+                    && last_wol.is_none_or(|t| now.duration_since(t) >= crate::wake::WAKE_RESEND)
+                {
                     last_wol = Some(now);
-                    let macs = node.store.get(&peer).map(|p| p.wake_macs).unwrap_or_default();
+                    let entry = node.store.get(&peer);
+                    let macs = entry.as_ref().map(|p| p.wake_macs.clone()).unwrap_or_default();
+                    let last = entry.map(|p| p.last_addrs).unwrap_or_default();
                     let targets = opts.wake.clone();
                     let sent = tokio::task::spawn_blocking(move || {
+                        if !crate::wake::on_last_seen_network(&last, &crate::wake::local_ipv4_nets()) {
+                            return 0;
+                        }
                         crate::wake::send_wake(&macs, &targets.resolve()).unwrap_or(0)
                     })
                     .await
