@@ -3,6 +3,9 @@
 //! timestamps).
 //!
 //! - `POST /v1/chat/completions[?n=&gap_us=&prefill_ms=]`: chunked SSE like llama-server
+//!   (the same parameters can be sent as `X-Mock-Params: n=..&gap_us=..`, which overrides
+//!   the query — the share side drops query strings since the M1 security fixes, headers
+//!   pass; `delay_ms=` delays any non-streamed answer)
 //!   (one chunk + flush per event). Variant from the JSON body: `tool_choice` object →
 //!   forced tool-call stream; `response_format` → strict-JSON content; else plain text.
 //!   `"stream": false` → one JSON object with Content-Length. The head is sent with the
@@ -209,21 +212,25 @@ struct Params {
     n: usize,
     gap_us: u64,
     prefill_ms: u64,
+    delay_ms: u64,
 }
 
-fn params(target: &str) -> Params {
+fn params(head: &http::RequestHead) -> Params {
     let mut p = Params {
         n: 64,
         gap_us: 0,
         prefill_ms: 0,
+        delay_ms: 0,
     };
-    if let Some((_, q)) = target.split_once('?') {
+    let query = head.target.split_once('?').map(|(_, q)| q);
+    for q in [query, head.header("x-mock-params")].into_iter().flatten() {
         for kv in q.split('&') {
             let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
             match k {
                 "n" => p.n = v.parse().unwrap_or(p.n),
                 "gap_us" => p.gap_us = v.parse().unwrap_or(0),
                 "prefill_ms" => p.prefill_ms = v.parse().unwrap_or(0),
+                "delay_ms" => p.delay_ms = v.parse().unwrap_or(0),
                 _ => {}
             }
         }
@@ -293,7 +300,7 @@ async fn serve_one(m: &MockLlama, mut sock: TcpStream) -> io::Result<()> {
                 .and_then(|v| v.get("stream").and_then(|s| s.as_bool()))
                 .unwrap_or(false);
             if streamed {
-                return stream(m, sock, variant_of(&body), params(&head.target)).await;
+                return stream(m, sock, variant_of(&body), params(&head)).await;
             }
             json(
                 200,
@@ -338,6 +345,10 @@ async fn serve_one(m: &MockLlama, mut sock: TcpStream) -> io::Result<()> {
         ("POST", p) if p.starts_with("/slots/") => json(200, r#"{"id_slot":0,"filename":"x.bin","n_saved":1}"#),
         _ => json(404, r#"{"error":{"code":404,"message":"File Not Found","type":"not_found_error"}}"#),
     };
+    let delay = params(&head).delay_ms;
+    if delay > 0 {
+        tokio::time::sleep(Duration::from_millis(delay)).await;
+    }
     sock.write_all(&resp).await?;
     sock.shutdown().await?;
     Ok(())

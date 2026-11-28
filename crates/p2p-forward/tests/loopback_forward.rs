@@ -37,7 +37,6 @@ async fn sse_byte_identical_plain_json_tool_and_models() {
     for (method, target, body) in [
         ("GET", "/v1/models", &b""[..]),
         ("GET", "/health", b""),
-        ("GET", "/props", b""),
         ("GET", "/metrics", b""),
         ("POST", "/tokenize", br#"{"content":"abc"}"#),
         ("POST", "/detokenize", br#"{"tokens":[1]}"#),
@@ -50,6 +49,14 @@ async fn sse_byte_identical_plain_json_tool_and_models() {
         assert_eq!(direct.status(), 200, "{method} {target}");
         assert_eq!(forwarded.bytes, direct.bytes, "{method} {target}");
     }
+    // GET /props: sanitized (M1 security review), no model path / chat template
+    let props = send(fwd, &request("GET", "/props", &fwd_host, &[], b"")).await;
+    assert_eq!(props.status(), 200);
+    let v: serde_json::Value = serde_json::from_str(&props.body_text()).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"default_generation_settings":{"n_ctx":8192},"total_slots":1,"model_name":"m.gguf"})
+    );
     let s = r.use_side.stats.lock().unwrap().clone();
     assert_eq!(s.connections_established, 1, "one persistent connection");
     assert!(s.spare_hits > 0, "pre-opened spare stream used");
@@ -76,6 +83,10 @@ async fn refused_requests_never_reach_llama_server() {
         (request("POST", "/v1/chat/completions", &host, &[("Origin", "https://evil.example")], &chat_body("plain")), "Origin"),
         (request("POST", "/v1/chat/completions", &host, &[("Origin", &format!("http://{host}"))], &chat_body("plain")), "same-host Origin"),
         (request("POST", "/v1/chat/completions", &host, &[("Origin", "null"), ("Sec-Fetch-Site", "cross-site")], &chat_body("plain")), "sandboxed frame"),
+        (request("GET", "/health", &host, &[("Origin", "null")], b""), "Origin: null"),
+        (request("GET", "/health", &host, &[("Sec-Fetch-Site", "same-origin")], b""), "same-origin fetch"),
+        (request("GET", "/health", &host, &[("Sec-Fetch-Site", "none"), ("Sec-Fetch-Site", "cross-site")], b""), "second Sec-Fetch-Site"),
+        (request("GET", "/health", &host, &[("X-A", "1"), ("Origin", "https://evil.example"), ("Origin", "null")], b""), "two Origins"),
     ];
     for (req, what) in &cases {
         let resp = send(fwd, req).await;
@@ -87,8 +98,11 @@ async fn refused_requests_never_reach_llama_server() {
     assert_eq!(resp.status(), 403);
     assert!(r.mock.requests().is_empty(), "nothing reached llama-server: {:?}", r.mock.requests());
     assert_eq!(r.share.stats.lock().unwrap().requests, 0, "refused before opening a stream");
-    // a null Origin without cross-site marking (e.g. a non-browser tool) is allowed
-    let ok = send(fwd, &request("GET", "/health", &host, &[("Origin", "null")], b"")).await;
+    // Node's undici fetch sends `sec-fetch-mode: cors` (not a browser signal), and
+    // `Sec-Fetch-Site: none` is a user-initiated request: both allowed
+    let ok = send(fwd, &request("GET", "/health", &host, &[("Sec-Fetch-Mode", "cors")], b"")).await;
+    assert_eq!(ok.status(), 200);
+    let ok = send(fwd, &request("GET", "/health", &host, &[("Sec-Fetch-Site", "none")], b"")).await;
     assert_eq!(ok.status(), 200);
     let ok = send(fwd, &request("GET", "/health", "localhost", &[], b"")).await;
     assert_eq!(ok.status(), 200);
@@ -234,7 +248,7 @@ async fn bodies_capped_chunked_and_expect_continue() {
     // chunked request body
     let payload = chat_body("tool");
     let mut req = format!(
-        "POST /v1/chat/completions?n=8 HTTP/1.1\r\nHost: {host}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        "POST /v1/chat/completions?n=8 HTTP/1.1\r\nHost: {host}\r\nX-Mock-Params: n=8\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
     )
     .into_bytes();
     for part in payload.chunks(7) {
@@ -270,6 +284,8 @@ async fn untrusted_peer_is_disconnected() {
             bind: "127.0.0.1:0".parse().unwrap(),
             paired: PairedConfig::default(),
             spare_stream: true,
+            token: None,
+            local: Default::default(),
             verbose: false,
         },
     )

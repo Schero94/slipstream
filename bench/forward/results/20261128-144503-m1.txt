@@ -1,0 +1,37 @@
+# M1 forwarder 20261128-144503  host=Mac15,6 27.0.1  commit=d2f158d+dirty  RTT_MS=8
+## AEAD per chunk (SealedStream framing on ring 0.17, release)
+aead chunk=64B seal_ns=219 open_ns=200 sum_ns=420 (0.29 GB/s seal)
+aead chunk=200B seal_ns=228 open_ns=335 sum_ns=563 (0.88 GB/s seal)
+aead chunk=512B seal_ns=407 open_ns=497 sum_ns=904 (1.26 GB/s seal)
+aead chunk=1024B seal_ns=702 open_ns=841 sum_ns=1543 (1.46 GB/s seal)
+aead chunk=4096B seal_ns=2328 open_ns=2593 sum_ns=4921 (1.76 GB/s seal)
+aead chunk=16384B seal_ns=8901 open_ns=9264 sum_ns=18164 (1.84 GB/s seal)
+raw ring 0.17 ChaCha20-Poly1305 (SealedStream's backend since M1; the lines above include its framing)
+ring chunk=64B seal_ns=193 open_ns=187 sum_ns=380 (0.33 GB/s seal)
+ring chunk=200B seal_ns=219 open_ns=323 sum_ns=542 (0.91 GB/s seal)
+ring chunk=512B seal_ns=366 open_ns=480 sum_ns=846 (1.40 GB/s seal)
+ring chunk=1024B seal_ns=641 open_ns=755 sum_ns=1396 (1.60 GB/s seal)
+ring chunk=4096B seal_ns=1892 open_ns=2322 sum_ns=4214 (2.17 GB/s seal)
+ring chunk=16384B seal_ns=7487 open_ns=8831 sum_ns=16318 (2.19 GB/s seal)
+## Mock upstream (forward-spike mock-llama), shaped RTT 8 ms
+### TTFT back-to-back: 32-token SSE, N=150/arm (request start incl. TCP connect -> first body byte)
+arm=direct n=150 ttft_us p50=241 p95=434 p99=1141 | total_ms p50=0.39 | event_rate mean=204495.4/s median=235360.9/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+arm=fwd n=150 ttft_us p50=12081 p95=13609 p99=13904 | total_ms p50=12.17 | event_rate mean=430494.8/s median=396695.8/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +11840 us, p95 +13174 us (difference of percentiles); paired per-iteration delta p50 +11768 us, p95 +13372 us; event_rate +110.52 %
+arm=fwd_nospare n=150 ttft_us p50=24852 p95=26805 p99=27604 | total_ms p50=24.91 | event_rate mean=554259.4/s median=496654.9/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +24611 us, p95 +26370 us (difference of percentiles); paired per-iteration delta p50 +24571 us, p95 +26536 us; event_rate +171.04 %
+### TTFT after 1 s idle (editor think time), N=40/arm
+arm=direct n=40 ttft_us p50=1480 p95=1630 p99=1751 | total_ms p50=1.98 | event_rate mean=86560.0/s median=70502.9/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+arm=fwd n=40 ttft_us p50=14894 p95=16057 p99=16251 | total_ms p50=15.49 | event_rate mean=410432.2/s median=70821.1/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +13414 us, p95 +14427 us (difference of percentiles); paired per-iteration delta p50 +13449 us, p95 +14883 us; event_rate +374.16 %
+arm=fwd_nospare n=40 ttft_us p50=29130 p95=30913 p99=31805 | total_ms p50=29.80 | event_rate mean=211678.5/s median=86349.2/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +27649 us, p95 +29284 us (difference of percentiles); paired per-iteration delta p50 +27715 us, p95 +29439 us; event_rate +144.55 %
+### Paced decode: 512 tokens every 25 ms, N=3/arm
+arm=direct n=3 ttft_us p50=2102 p95=2631 p99=2631 | total_ms p50=14249.24 | event_rate mean=36.1/s median=36.1/s | events=515 body_len=114939 body_sha={"36a61f614abd9d63"} content_sha={"df5d9eb7fecb389e"} status={"HTTP/1.1 200 OK"}
+arm=fwd n=3 ttft_us p50=15021 p95=15200 p99=15200 | total_ms p50=14233.84 | event_rate mean=36.2/s median=36.1/s | events=515 body_len=114939 body_sha={"36a61f614abd9d63"} content_sha={"df5d9eb7fecb389e"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +12919 us, p95 +12569 us (difference of percentiles); paired per-iteration delta p50 +12726 us, p95 +13472 us; event_rate +0.22 %
+arm=fwd_nospare n=3 ttft_us p50=27508 p95=27559 p99=27559 | total_ms p50=14258.45 | event_rate mean=36.1/s median=36.1/s | events=515 body_len=114939 body_sha={"36a61f614abd9d63"} content_sha={"df5d9eb7fecb389e"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +25407 us, p95 +24928 us (difference of percentiles); paired per-iteration delta p50 +24928 us, p95 +25959 us; event_rate +0.10 %
+spare:    stream_open_us n=200 p50=12234 p95=14291 | shaped ping_rtt_us n=149 p50=12553 p95=14161
+nospare:  stream_open_us n=199 p50=12520 p95=14997 | shaped ping_rtt_us n=149 p50=12360 p95=14069
+log: /Volumes/Crucial X10/SLipstream clone/slipstream/bench/forward/results/20261128-144503-m1.txt

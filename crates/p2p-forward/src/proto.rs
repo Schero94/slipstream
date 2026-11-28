@@ -41,6 +41,8 @@ pub const PROTO_HEADER_LEN: usize = 5;
 pub const MAX_PAYLOAD: usize = MAX_FRAME_PLAINTEXT - PROTO_HEADER_LEN;
 /// Body bytes per `ReqBody` / `RespBody` frame (SSE events are far smaller).
 pub const BODY_CHUNK: usize = 16 * 1024;
+/// Request body cap, enforced on **both** ends (plan §3: 32 MiB, streamed).
+pub const MAX_BODY: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -171,6 +173,7 @@ pub struct FrameWriter<W> {
     plain: Vec<u8>,
     sealed: Vec<u8>,
     finished: bool,
+    sent: u64,
 }
 
 impl<W: AsyncWrite + Unpin> FrameWriter<W> {
@@ -181,7 +184,13 @@ impl<W: AsyncWrite + Unpin> FrameWriter<W> {
             plain: Vec::with_capacity(BODY_CHUNK + PROTO_HEADER_LEN),
             sealed: Vec::with_capacity(BODY_CHUNK + 64),
             finished: false,
+            sent: 0,
         }
+    }
+
+    /// Protocol frames sent so far (0 = the peer has seen nothing yet).
+    pub fn frames_sent(&self) -> u64 {
+        self.sent
     }
 
     pub async fn send(&mut self, kind: FrameType, payload: &[u8]) -> io::Result<()> {
@@ -191,6 +200,7 @@ impl<W: AsyncWrite + Unpin> FrameWriter<W> {
         self.tx
             .seal_into(&self.plain, false, &mut self.sealed)
             .map_err(crypto_io)?;
+        self.sent += 1;
         self.w.write_all(&self.sealed).await?;
         self.w.flush().await
     }
@@ -231,6 +241,8 @@ pub struct FrameReader<R> {
     r: R,
     rx: FrameOpener,
     body: Vec<u8>,
+    /// First header byte already read by [`Self::wait_readable`].
+    stash: Option<u8>,
 }
 
 impl<R: AsyncRead + Unpin> FrameReader<R> {
@@ -239,12 +251,36 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
             r,
             rx,
             body: Vec::with_capacity(BODY_CHUNK + 64),
+            stash: None,
         }
+    }
+
+    /// Wait until the next frame starts arriving (reads and keeps its first byte).
+    /// Cancel-safe — unlike [`Self::next`], dropping this future never loses bytes — so
+    /// it can sit under a timeout. `Ok(false)` = the stream ended.
+    pub async fn wait_readable(&mut self) -> io::Result<bool> {
+        if self.stash.is_some() {
+            return Ok(true);
+        }
+        let mut b = [0u8; 1];
+        let n = self.r.read(&mut b).await?;
+        if n == 0 {
+            return Ok(false);
+        }
+        self.stash = Some(b[0]);
+        Ok(true)
     }
 
     pub async fn next(&mut self) -> io::Result<Option<Frame>> {
         let mut header = [0u8; FRAME_HEADER_LEN];
-        if let Err(e) = self.r.read_exact(&mut header).await {
+        let start = match self.stash.take() {
+            Some(b) => {
+                header[0] = b;
+                1
+            }
+            None => 0,
+        };
+        if let Err(e) = self.r.read_exact(&mut header[start..]).await {
             if e.kind() == io::ErrorKind::UnexpectedEof {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -361,6 +397,29 @@ mod tests {
             }
             let _ = decode(&buf);
         }
+    }
+
+    /// `wait_readable` is cancel-safe under a timeout and `next` uses the stashed byte.
+    #[tokio::test]
+    async fn wait_readable_then_next() {
+        let (a, b) = tokio::io::duplex(64 * 1024);
+        let hs_a = StreamHandshake::new();
+        let hs_b = StreamHandshake::new();
+        let (pa, pb) = (hs_a.public(), hs_b.public());
+        let sa = hs_a.finish(&pb, StreamRole::Initiator, b"ctx").unwrap();
+        let sb = hs_b.finish(&pa, StreamRole::Responder, b"ctx").unwrap();
+        let mut w = FrameWriter::new(a, sa.tx);
+        let mut r = FrameReader::new(b, sb.rx);
+        // nothing sent: the timeout fires, no bytes lost
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(20), r.wait_readable())
+            .await
+            .is_err());
+        w.send(FrameType::ReqHead, b"hello").await.unwrap();
+        assert!(r.wait_readable().await.unwrap());
+        assert!(r.wait_readable().await.unwrap(), "idempotent");
+        assert_eq!(r.next().await.unwrap().unwrap(), Frame::new(FrameType::ReqHead, b"hello".to_vec()));
+        w.send(FrameType::ReqBody, b"x").await.unwrap();
+        assert_eq!(r.next().await.unwrap().unwrap().payload, b"x");
     }
 
     #[test]

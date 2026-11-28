@@ -3866,6 +3866,7 @@ dependencies = [
  "libp2p",
  "p2p-crypto",
  "p2p-libp2p",
+ "rand 0.8.8",
  "ring",
  "serde",
  "serde_json",

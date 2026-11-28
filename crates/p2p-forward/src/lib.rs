@@ -27,8 +27,8 @@ pub mod proto;
 pub mod status;
 pub mod worker;
 
-pub use client::{start_use, UseConfig, UseHandle};
-pub use worker::{parse_upstream, start_share, ShareConfig, ShareHandle};
+pub use client::{start_use, LocalLimits, UseConfig, UseHandle};
+pub use worker::{parse_upstream, start_share, ShareConfig, ShareHandle, ShareLimits};
 
 pub(crate) fn unix_ms() -> u128 {
     std::time::SystemTime::now()
@@ -64,4 +64,86 @@ pub fn transport_identity(node: &NodeKeypair) -> libp2p::identity::Keypair {
         .expect("32-byte Ed25519 seed is always valid");
     seed.fill(0);
     identity
+}
+
+/// Load the per-install local bearer token from `path`, or create it: 32 random bytes as
+/// 64 lowercase hex characters, written to a new file opened with mode 0600 and
+/// `create_new` (no permission window, never follows an existing file or symlink).
+///
+/// The use side requires `Authorization: Bearer <token>` on its loopback listener when a
+/// token is configured (`slipstream-node use --token-file <path>`). The app (M4) creates
+/// this file and writes the token into the editor configs as their "API key", so other
+/// local processes / users cannot use the paired Mac through the forwarder.
+pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
+    use std::io::{Read, Write};
+    match std::fs::File::open(path) {
+        Ok(mut f) => {
+            let mut s = String::new();
+            Read::by_ref(&mut f).take(4096).read_to_string(&mut s)?;
+            let token = s.trim().to_string();
+            if token.len() < 16 || !token.bytes().all(|b| b.is_ascii_graphic()) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{}: token must be at least 16 visible ASCII characters", path.display()),
+                ));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = f.metadata()?.permissions().mode();
+                if mode & 0o077 != 0 {
+                    eprintln!(
+                        "warning: {} is readable by other users (mode {:o}); chmod 600 it",
+                        path.display(),
+                        mode & 0o777
+                    );
+                }
+            }
+            Ok(token)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut bytes = [0u8; 32];
+            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+            let token = hex::encode(bytes);
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut f = opts.open(path)?;
+            f.write_all(format!("{token}\n").as_bytes())?;
+            f.sync_all()?;
+            Ok(token)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_file_created_0600_and_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sub/local.token");
+        let t = load_or_create_token(&path).unwrap();
+        assert_eq!(t.len(), 64);
+        assert!(t.bytes().all(|b| b.is_ascii_hexdigit()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        assert_eq!(load_or_create_token(&path).unwrap(), t, "reused, not regenerated");
+        let other = load_or_create_token(&dir.path().join("b.token")).unwrap();
+        assert_ne!(other, t);
+        std::fs::write(dir.path().join("short"), "abc\n").unwrap();
+        assert!(load_or_create_token(&dir.path().join("short")).is_err());
+    }
 }

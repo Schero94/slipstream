@@ -118,14 +118,18 @@ fn parse_secret_bytes(buf: &[u8]) -> Result<[u8; 32], IdentityIoError> {
     Ok(out)
 }
 
+/// Create the key file with mode 0600 at `open(2)` time and `O_CREAT|O_EXCL`
+/// (`create_new`): no window in which the secret is readable by others (the old
+/// create-then-chmod had one), and an existing file or symlink is never overwritten.
 fn write_secret_file(path: &Path, data: &[u8]) -> Result<(), IdentityIoError> {
-    let mut file = fs::File::create(path).map_err(IdentityIoError::Io)?;
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o600);
-        file.set_permissions(perms).map_err(IdentityIoError::Io)?;
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
+    let mut file = opts.open(path).map_err(IdentityIoError::Io)?;
     file.write_all(data).map_err(IdentityIoError::Io)?;
     file.sync_all().map_err(IdentityIoError::Io)?;
     Ok(())
@@ -155,11 +159,39 @@ mod tests {
     #[test]
     fn load_save_hex_roundtrip() {
         let kp = NodeKeypair::from_secret_bytes([9u8; 32]);
-        let tmp = NamedTempFile::new().unwrap();
-        kp.save(tmp.path()).unwrap();
-        let loaded = NodeKeypair::load(tmp.path()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.key");
+        kp.save(&path).unwrap();
+        let loaded = NodeKeypair::load(&path).unwrap();
         assert_eq!(loaded.public_bytes(), kp.public_bytes());
         assert_eq!(loaded.secret_bytes(), kp.secret_bytes());
+    }
+
+    /// M1 security review finding 7: created 0600 atomically, never overwrites.
+    #[test]
+    fn save_creates_0600_and_refuses_existing_file() {
+        let kp = NodeKeypair::from_secret_bytes([5u8; 32]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.key");
+        kp.save(&path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        // existing file (or a planted symlink) is not overwritten
+        let other = NodeKeypair::from_secret_bytes([6u8; 32]);
+        assert!(other.save(&path).is_err());
+        assert_eq!(NodeKeypair::load(&path).unwrap().secret_bytes(), kp.secret_bytes());
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("victim");
+            fs::write(&target, b"keep").unwrap();
+            let link = dir.path().join("link.key");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            assert!(other.save(&link).is_err());
+            assert_eq!(fs::read(&target).unwrap(), b"keep");
+        }
     }
 
     #[test]

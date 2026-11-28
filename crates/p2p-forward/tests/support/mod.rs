@@ -8,10 +8,16 @@ pub mod udp_shaper;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use futures::StreamExt;
+use p2p_crypto::StreamRole;
 use p2p_forward::admission::AdmissionLimits;
 use p2p_forward::mock_llama::{self, MockLlama};
-use p2p_forward::{load_or_create_identity, start_share, start_use, ShareConfig, ShareHandle, UseConfig, UseHandle};
-use p2p_libp2p::paired::PairedConfig;
+use p2p_forward::proto::{channel_context, open_channel, BodyKind, FrameType, ReqHead, OPENAI_PROTOCOL_V1};
+use p2p_forward::{
+    load_or_create_identity, start_share, start_use, LocalLimits, ShareConfig, ShareHandle, ShareLimits, UseConfig,
+    UseHandle,
+};
+use p2p_libp2p::paired::{build_paired_swarm, Control, PairedConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -27,6 +33,10 @@ pub struct RigOptions {
     pub rtt: Option<Duration>,
     pub paired: PairedConfig,
     pub spare_stream: bool,
+    pub admission: AdmissionLimits,
+    pub share_limits: ShareLimits,
+    pub token: Option<String>,
+    pub local: LocalLimits,
 }
 
 impl Default for RigOptions {
@@ -35,6 +45,10 @@ impl Default for RigOptions {
             rtt: None,
             paired: PairedConfig::default(),
             spare_stream: true,
+            admission: AdmissionLimits::default(),
+            share_limits: ShareLimits::default(),
+            token: None,
+            local: LocalLimits::default(),
         }
     }
 }
@@ -50,7 +64,8 @@ pub async fn rig(opts: RigOptions) -> Rig {
             upstream: mock.addr,
             allow: vec![use_identity.public().to_peer_id()],
             paired: opts.paired.clone(),
-            admission: AdmissionLimits::default(),
+            admission: opts.admission,
+            limits: opts.share_limits,
             name: "Test Studio".into(),
             verbose: false,
         },
@@ -73,6 +88,8 @@ pub async fn rig(opts: RigOptions) -> Rig {
             bind: "127.0.0.1:0".parse().unwrap(),
             paired: opts.paired,
             spare_stream: opts.spare_stream,
+            token: opts.token,
+            local: opts.local,
             verbose: false,
         },
     )
@@ -114,8 +131,13 @@ impl Raw {
     }
 }
 
+/// A raw HTTP/1.1 request. A query string in `target` is also sent as
+/// `X-Mock-Params` (the share side drops queries; the mock reads the header).
 pub fn request(method: &str, target: &str, host: &str, extra: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
     let mut s = format!("{method} {target} HTTP/1.1\r\nHost: {host}\r\n");
+    if let Some((_, q)) = target.split_once('?') {
+        s.push_str(&format!("X-Mock-Params: {q}\r\n"));
+    }
     for (k, v) in extra {
         s.push_str(&format!("{k}: {v}\r\n"));
     }
@@ -171,4 +193,68 @@ pub fn chat_body(variant: &str) -> Vec<u8> {
 pub fn p95(v: &mut [f64]) -> f64 {
     v.sort_by(|a, b| a.partial_cmp(b).unwrap());
     v[((v.len() - 1) as f64 * 0.95).round() as usize]
+}
+
+/// A "modified use side": a raw swarm with the rig's MacBook identity that talks the
+/// wire protocol directly (skips every use-side check).
+pub struct RawPeer {
+    pub control: Control,
+    pub local: libp2p::PeerId,
+    pub peer: libp2p::PeerId,
+}
+
+pub async fn raw_peer(r: &Rig) -> RawPeer {
+    let identity = load_or_create_identity(&r.dir.path().join("macbook")).unwrap();
+    let local = identity.public().to_peer_id();
+    let mut swarm = build_paired_swarm(identity, &PairedConfig::default());
+    swarm.dial(r.share.dial_addr()).unwrap();
+    let control = swarm.behaviour().stream.new_control();
+    tokio::spawn(async move {
+        loop {
+            swarm.select_next_some().await;
+        }
+    });
+    RawPeer { control, local, peer: r.share.peer_id }
+}
+
+impl RawPeer {
+    pub async fn channel(&self) -> (p2p_forward::proto::ChannelReader, p2p_forward::proto::ChannelWriter) {
+        let mut control = self.control.clone();
+        let stream = control.open_stream(self.peer, OPENAI_PROTOCOL_V1).await.unwrap();
+        let ctx = channel_context(&self.local, &self.peer, &OPENAI_PROTOCOL_V1);
+        open_channel(stream, StreamRole::Initiator, &ctx).await.unwrap()
+    }
+
+    /// Send one ReqHead (+ body frames), return the raw response bytes as text
+    /// (`Err` if the stream broke before the response ended).
+    pub async fn exchange(
+        &self,
+        method: &str,
+        target: &str,
+        headers: Vec<(String, String)>,
+        body: BodyKind,
+        body_frames: &[Vec<u8>],
+    ) -> Result<String, std::io::Error> {
+        let (mut rd, mut wr) = self.channel().await;
+        let head = ReqHead { method: method.into(), target: target.into(), headers, body };
+        wr.send_json(FrameType::ReqHead, &head).await?;
+        for f in body_frames {
+            if wr.send(FrameType::ReqBody, f).await.is_err() {
+                break;
+            }
+        }
+        let _ = wr.send(FrameType::ReqBody, &[]).await;
+        read_response(&mut rd).await
+    }
+}
+
+pub async fn read_response(rd: &mut p2p_forward::proto::ChannelReader) -> Result<String, std::io::Error> {
+    let mut out = Vec::new();
+    while let Some(f) = rd.next().await? {
+        if f.kind == FrameType::RespBody && f.payload.is_empty() {
+            break;
+        }
+        out.extend_from_slice(&f.payload);
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }

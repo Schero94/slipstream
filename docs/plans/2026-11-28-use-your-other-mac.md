@@ -76,6 +76,21 @@ New crate `crates/p2p-forward` (hyper 1, libp2p-stream, tokio):
 - Timeouts: dial 3 s, stream open 2 s, no first-byte timeout (prefill can take minutes; liveness via
   keep-alive), peer gone → SSE error event or 502, total cap 2 h.
 - Fidelity: response bytes identical to upstream (SHA-256 of the SSE body, greedy, fixed seed).
+- M1 security fixes (review of d2f158d, bench/RESULTS.md "v0.6 M1 security fixes"): the share side
+  rebuilds the upstream request line from the allowlist's constant method/path and drops the query
+  (only `GET /slots?fail_on_no_slot=0|1` survives); both ends reject target bytes outside `0x21..=0x7E`;
+  32 MiB body cap on both ends (declared + streamed/chunked); light routes capped (4 per peer, 16 global,
+  2 s wait → 503); `GET /props` reduced to n_ctx / total_slots / model alias + file name / build_info;
+  SealedStream handshake and first frame ≤ 5 s except ≤ 2 idle (pre-ReqHead) streams per peer (the spare);
+  the use side binds `127.0.0.1` **and** `[::1]` on the same port (refuses to start if either is taken),
+  refuses any `Origin` (incl. `null`) and any `Sec-Fetch-Site` but `none` (`Sec-Fetch-Mode` is not a
+  browser signal: Node's undici sends `cors`), caps local connections (16) and body read idle time (30 s).
+- **Local API key (M4 contract):** `slipstream-node use --token-file <path>` loads or creates (0600,
+  `create_new`, 32 random bytes hex) a per-install token; the listener then requires
+  `Authorization: Bearer <token>` (constant-time compare, checked before the header is stripped, 401
+  otherwise). The app (M4) creates this file under Application Support and writes the token into the editor
+  configs as the provider's "API key" (`p2p_forward::load_or_create_token`), so other local processes or
+  users cannot use the paired Mac through the forwarder.
 
 ## 4. Big-Mac side
 
@@ -137,7 +152,8 @@ RTT/jitter vs targets; real sleep/wake (WoL, Sleep Proxy); Wi-Fi↔Ethernet roam
 
 Trust gate before any read/decrypt (connection + per stream); SPAKE2 transcript binding, 3
 failures / 5 min; pinned dialing only, mDNS untrusted; trust store 0600 + HMAC; immediate revoke;
-forwarder on 127.0.0.1 only, Host allowlist, Origin rejected, streamed body cap; method/path
+forwarder on 127.0.0.1 + [::1] only, Host allowlist, any Origin rejected (incl. null), local bearer token
+(M4 writes it into editor configs), streamed body cap on both ends, request line rebuilt from constants; method/path
 allowlist on both ends (block `POST /slots/*`, `POST /props`; sanitize `/slots`); header
 stripping; share listener only while sharing; connection + admission limits; TLS 1.3 + SealedStream,
 no downgrade; `NodeMode::Paired` never enables community donation; no prompt content in logs

@@ -145,6 +145,7 @@ pub fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
         408 => "Request Timeout",
@@ -188,7 +189,8 @@ pub fn error_body(status: u16, kind: &str, slipstream_code: &str, message: &str)
 
 pub fn error_response(status: u16, slipstream_code: &str, message: &str) -> Vec<u8> {
     let kind = match status {
-        400 | 413 => "invalid_request_error",
+        400 | 408 | 413 => "invalid_request_error",
+        401 => "authentication_error",
         403 => "permission_error",
         503 => "unavailable_error",
         _ => "server_error",
@@ -206,6 +208,20 @@ pub const NOT_AVAILABLE: &str = "Not available through a shared Mac";
 
 pub fn forbidden() -> Vec<u8> {
     error_response(403, "not_allowed", NOT_AVAILABLE)
+}
+
+/// Missing / wrong local bearer token (use side with `--token-file`).
+pub fn unauthorized() -> Vec<u8> {
+    json_response(
+        401,
+        &[("WWW-Authenticate", "Bearer".to_string())],
+        &error_body(
+            401,
+            "authentication_error",
+            "bad_local_token",
+            "Missing or wrong API key for the local Slipstream forwarder (use the key the Slipstream app shows).",
+        ),
+    )
 }
 
 /// Decode a complete chunked body (bounded; trailers ignored). `None` if malformed.

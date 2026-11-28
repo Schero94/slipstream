@@ -4,8 +4,16 @@
 //! response bytes back. A `Cancel` frame, a stream reset or peer loss drops the upstream
 //! connection at once, which is how llama-server learns that the client went away
 //! (it then cancels the task, including a layer-major prefill).
+//!
+//! Hardening (M1 security review): the upstream request line is rebuilt from the
+//! allowlist's constant method/path ([`allowlist::canonical`]) — the peer's target bytes
+//! never reach llama-server; request bodies are capped at [`MAX_BODY`] (declared and
+//! streamed/chunked); light routes have their own admission; the SealedStream handshake
+//! and the first frame must arrive within 5 s, except for at most
+//! [`ShareLimits::idle_streams_per_peer`] idle (pre-`ReqHead`) streams per peer (the use
+//! side's pre-opened spare); `GET /props` and `GET /slots` are sanitized.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -24,11 +32,11 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::admission::{Admission, AdmissionLimits, Busy};
-use crate::allowlist::{self, Route};
+use crate::allowlist::{self, Canonical, Route};
 use crate::http;
 use crate::proto::{
     channel_context, open_channel, BodyKind, ChannelReader, ChannelWriter, FrameType, ReqHead,
-    BODY_CHUNK, OPENAI_PROTOCOL_V1, STATUS_PROTOCOL_V1,
+    BODY_CHUNK, MAX_BODY, OPENAI_PROTOCOL_V1, STATUS_PROTOCOL_V1,
 };
 use crate::status::{self, StatusRequest};
 use crate::unix_ms;
@@ -36,8 +44,36 @@ use crate::unix_ms;
 pub const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// Hard cap per forwarded request (plan §3 timeouts: no first-byte timeout, total 2 h).
 pub const REQUEST_TOTAL_CAP: Duration = Duration::from_secs(2 * 60 * 60);
-/// Largest `/slots` response buffered for sanitizing.
+/// Largest `/slots` / `/props` response buffered for sanitizing.
 const SLOTS_MAX: usize = 4 * 1024 * 1024;
+/// At most one `rejected_peer` log line per this interval (the rest are counted).
+const REJECT_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Share-side stream limits (M1 security review).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShareLimits {
+    /// Request body cap (declared `Content-Length` and streamed/chunked bytes).
+    pub max_body: u64,
+    /// The SealedStream handshake must finish within this time.
+    pub handshake_timeout: Duration,
+    /// The first frame (`ReqHead` / `StatusReq`) must arrive within this time, unless
+    /// the stream gets one of the per-peer idle places.
+    pub first_frame_timeout: Duration,
+    /// Streams per peer allowed to stay idle (handshaken, no `ReqHead` yet) beyond
+    /// `first_frame_timeout` — the use side keeps one pre-opened spare.
+    pub idle_streams_per_peer: usize,
+}
+
+impl Default for ShareLimits {
+    fn default() -> Self {
+        Self {
+            max_body: MAX_BODY,
+            handshake_timeout: Duration::from_secs(5),
+            first_frame_timeout: Duration::from_secs(5),
+            idle_streams_per_peer: 2,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ShareConfig {
@@ -48,6 +84,7 @@ pub struct ShareConfig {
     pub allow: Vec<PeerId>,
     pub paired: PairedConfig,
     pub admission: AdmissionLimits,
+    pub limits: ShareLimits,
     pub name: String,
     pub verbose: bool,
 }
@@ -82,6 +119,9 @@ pub struct ShareStats {
     pub cancelled: u64,
     pub upstream_errors: u64,
     pub status_requests: u64,
+    pub body_too_large: u64,
+    pub idle_streams_refused: u64,
+    pub handshake_timeouts: u64,
 }
 
 pub type SharedShareStats = Arc<Mutex<ShareStats>>;
@@ -118,8 +158,116 @@ struct Ctx {
     upstream: SocketAddr,
     name: String,
     admission: Admission,
+    limits: ShareLimits,
+    idle: Arc<Mutex<HashMap<PeerId, usize>>>,
     stats: SharedShareStats,
     verbose: bool,
+}
+
+/// One of a peer's idle-stream places; released on drop.
+struct IdleSlot {
+    idle: Arc<Mutex<HashMap<PeerId, usize>>>,
+    peer: PeerId,
+}
+
+impl Drop for IdleSlot {
+    fn drop(&mut self) {
+        if let Some(n) = self.idle.lock().unwrap().get_mut(&self.peer) {
+            *n = n.saturating_sub(1);
+        }
+    }
+}
+
+impl Ctx {
+    fn idle_slot(&self, peer: PeerId) -> Option<IdleSlot> {
+        let mut idle = self.idle.lock().unwrap();
+        let n = idle.entry(peer).or_insert(0);
+        if *n >= self.limits.idle_streams_per_peer {
+            return None;
+        }
+        *n += 1;
+        Some(IdleSlot {
+            idle: self.idle.clone(),
+            peer,
+        })
+    }
+
+    /// Handshake (bounded) + first frame: within `first_frame_timeout`, or later if the
+    /// stream holds an idle place (released as soon as the frame starts arriving). A
+    /// started frame must complete within `first_frame_timeout` (slow-loris guard).
+    async fn open_and_first_frame(
+        &self,
+        peer: PeerId,
+        stream: libp2p::Stream,
+        protocol: &libp2p::StreamProtocol,
+    ) -> io::Result<Option<(crate::proto::Frame, ChannelReader, ChannelWriter)>> {
+        let context = channel_context(&peer, &self.local, protocol);
+        let (mut reader, writer) = match tokio::time::timeout(
+            self.limits.handshake_timeout,
+            open_channel(stream, StreamRole::Responder, &context),
+        )
+        .await
+        {
+            Ok(r) => r?,
+            Err(_) => {
+                self.stats.lock().unwrap().handshake_timeouts += 1;
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "stream handshake timed out"));
+            }
+        };
+        let readable =
+            match tokio::time::timeout(self.limits.first_frame_timeout, reader.wait_readable()).await {
+                Ok(r) => r?,
+                Err(_) => {
+                    let Some(_slot) = self.idle_slot(peer) else {
+                        self.stats.lock().unwrap().idle_streams_refused += 1;
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "idle stream refused (per-peer idle cap)",
+                        ));
+                    };
+                    reader.wait_readable().await?
+                }
+            };
+        if !readable {
+            return Ok(None);
+        }
+        let frame = tokio::time::timeout(self.limits.first_frame_timeout, reader.next())
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "first frame timed out"))??;
+        Ok(frame.map(|f| (f, reader, writer)))
+    }
+}
+
+/// Log at most one line per `interval`; the lines in between are counted.
+#[derive(Debug)]
+pub struct LogRateLimit {
+    interval: Duration,
+    last: Option<Instant>,
+    suppressed: u64,
+}
+
+impl LogRateLimit {
+    pub fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last: None,
+            suppressed: 0,
+        }
+    }
+
+    /// `Some(suppressed since the last logged line)` if this event may be logged.
+    pub fn allow(&mut self, now: Instant) -> Option<u64> {
+        match self.last {
+            Some(t) if now.duration_since(t) < self.interval => {
+                self.suppressed += 1;
+                None
+            }
+            _ => {
+                self.last = Some(now);
+                Some(std::mem::take(&mut self.suppressed))
+            }
+        }
+    }
 }
 
 pub async fn start_share(
@@ -157,6 +305,8 @@ pub async fn start_share(
         upstream: cfg.upstream,
         name: cfg.name.clone(),
         admission: admission.clone(),
+        limits: cfg.limits,
+        idle: Arc::default(),
         stats: stats.clone(),
         verbose: cfg.verbose,
     });
@@ -165,6 +315,7 @@ pub async fn start_share(
     let swarm_allow = allow.clone();
     let verbose = cfg.verbose;
     let swarm_task = tokio::spawn(async move {
+        let mut reject_log = LogRateLimit::new(REJECT_LOG_INTERVAL);
         loop {
             match swarm.select_next_some().await {
                 SwarmEvent::Behaviour(PairedEvent::Ping(event)) => {
@@ -183,10 +334,12 @@ pub async fn start_share(
                     // before any stream of theirs is read.
                     if !swarm_allow.contains(&peer_id) {
                         swarm_stats.lock().unwrap().connections_rejected += 1;
-                        eprintln!(
-                            "share event=rejected_peer peer={peer_id} unix_ms={}",
-                            unix_ms()
-                        );
+                        if let Some(suppressed) = reject_log.allow(Instant::now()) {
+                            eprintln!(
+                                "share event=rejected_peer peer={peer_id} suppressed_since_last={suppressed} unix_ms={}",
+                                unix_ms()
+                            );
+                        }
                         swarm.close_connection(connection_id);
                     } else {
                         swarm_stats.lock().unwrap().connections_established += 1;
@@ -266,8 +419,13 @@ pub async fn start_share(
 
 async fn handle_status(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::Result<()> {
     let context = channel_context(&peer, &ctx.local, &STATUS_PROTOCOL_V1);
-    let (mut reader, mut writer) = open_channel(stream, StreamRole::Responder, &context).await?;
-    let frame = tokio::time::timeout(Duration::from_secs(10), reader.next())
+    let (mut reader, mut writer) = tokio::time::timeout(
+        ctx.limits.handshake_timeout,
+        open_channel(stream, StreamRole::Responder, &context),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "stream handshake timed out"))??;
+    let frame = tokio::time::timeout(ctx.limits.first_frame_timeout, reader.next())
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "status request timed out"))??;
     let Some(frame) = frame.filter(|f| f.kind == FrameType::StatusReq) else {
@@ -297,11 +455,12 @@ enum Outcome {
 }
 
 async fn handle_openai(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::Result<()> {
-    let context = channel_context(&peer, &ctx.local, &OPENAI_PROTOCOL_V1);
-    let (mut reader, mut writer) = open_channel(stream, StreamRole::Responder, &context).await?;
-    // No timeout here: the use side keeps one pre-opened spare stream that may sit idle
-    // for hours; connection liveness comes from QUIC keep-alive.
-    let Some(first) = reader.next().await? else {
+    // Handshake ≤ 5 s; the first frame ≤ 5 s unless this is one of the peer's (≤ 2) idle
+    // streams — the use side keeps one pre-opened spare that may sit idle for hours
+    // (connection liveness comes from QUIC keep-alive).
+    let Some((first, reader, mut writer)) =
+        ctx.open_and_first_frame(peer, stream, &OPENAI_PROTOCOL_V1).await?
+    else {
         return Ok(());
     };
     if first.kind != FrameType::ReqHead {
@@ -310,30 +469,65 @@ async fn handle_openai(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::R
     let head: ReqHead = serde_json::from_slice(&first.payload)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     ctx.stats.lock().unwrap().requests += 1;
-    let path = allowlist::path_of(&head.target).to_string();
-    // Allowlist, second time (the use side already checked).
-    let Some(route) = allowlist::route(&head.method, &head.target) else {
+    // Allowlist, second time (the use side already checked), and rebuild the request
+    // from constants: the peer's method/target bytes are never written upstream.
+    let Some(canon) = allowlist::canonical(&head.method, &head.target) else {
         ctx.stats.lock().unwrap().forbidden += 1;
         eprintln!(
             "share event=forbidden peer={peer} method={} path={}",
-            head.method,
-            sanitize_log(&path)
+            sanitize_log(&head.method),
+            sanitize_log(allowlist::path_of(&head.target))
         );
         return send_response(&mut writer, &http::forbidden()).await;
     };
+    let route = canon.route;
+    let path = canon.path;
+    if let BodyKind::Length(n) = head.body {
+        if n > ctx.limits.max_body {
+            ctx.stats.lock().unwrap().body_too_large += 1;
+            return send_response(&mut writer, &body_too_large()).await;
+        }
+    }
 
     // Request-direction reader: body chunks → channel, Cancel / reset / FIN → cancel.
     let cancel = CancellationToken::new();
     let cancel_at: Arc<Mutex<Option<Instant>>> = Arc::default();
     let (body_tx, body_rx) = mpsc::channel::<Vec<u8>>(8);
+    let too_large = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reader_task = tokio::spawn(read_request_side(
         reader,
         body_tx,
         cancel.clone(),
         cancel_at.clone(),
+        ctx.limits.max_body,
+        too_large.clone(),
     ));
 
     let t0 = Instant::now();
+    let _light_permit = if route == Route::Inference {
+        None
+    } else {
+        tokio::select! {
+            p = ctx.admission.acquire_light(peer) => match p {
+                Ok(p) => Some(p),
+                Err(Busy) => {
+                    ctx.stats.lock().unwrap().busy += 1;
+                    eprintln!("share event=busy_light peer={peer} path={path}");
+                    reader_task.abort();
+                    return send_response(&mut writer, &http::error_response(
+                        503,
+                        "busy",
+                        "The shared Mac is busy with other requests from this Mac. Try again in a few seconds.",
+                    )).await;
+                }
+            },
+            _ = cancel.cancelled() => {
+                ctx.stats.lock().unwrap().cancelled += 1;
+                reader_task.abort();
+                return Ok(());
+            }
+        }
+    };
     let _permit = if route == Route::Inference {
         tokio::select! {
             p = ctx.admission.acquire(peer) => match p {
@@ -360,7 +554,7 @@ async fn handle_openai(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::R
     };
 
     let outcome = tokio::select! {
-        r = tokio::time::timeout(REQUEST_TOTAL_CAP, forward(ctx, &head, route, body_rx, &mut writer)) => match r {
+        r = tokio::time::timeout(REQUEST_TOTAL_CAP, forward(ctx, &head, canon, body_rx, &mut writer)) => match r {
             Ok(Ok(o)) => o,
             Ok(Err(e)) => {
                 if ctx.verbose { eprintln!("share event=forward_error peer={peer} error={e}"); }
@@ -373,6 +567,16 @@ async fn handle_openai(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::R
         _ = cancel.cancelled() => Outcome::Cancelled,
     };
     reader_task.abort();
+    if too_large.load(std::sync::atomic::Ordering::SeqCst) {
+        // Upstream connection already dropped (cancel). Answer 413 if the editor has
+        // not seen a response head yet.
+        ctx.stats.lock().unwrap().body_too_large += 1;
+        eprintln!("share event=body_too_large peer={peer} path={path}");
+        if writer.frames_sent() == 0 {
+            return send_response(&mut writer, &body_too_large()).await;
+        }
+        return Ok(());
+    }
     let mut s = ctx.stats.lock().unwrap();
     match outcome {
         Outcome::Completed => s.completed += 1,
@@ -394,7 +598,11 @@ async fn handle_openai(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::R
     Ok(())
 }
 
-/// Keep logs free of prompt content: paths only, bounded, printable.
+fn body_too_large() -> Vec<u8> {
+    http::error_response(413, "body_too_large", "Request body larger than 32 MiB.")
+}
+
+/// Keep logs free of prompt content: paths/methods only, bounded, printable.
 fn sanitize_log(path: &str) -> String {
     path.chars()
         .take(64)
@@ -407,8 +615,11 @@ async fn read_request_side(
     body_tx: mpsc::Sender<Vec<u8>>,
     cancel: CancellationToken,
     cancel_at: Arc<Mutex<Option<Instant>>>,
+    max_body: u64,
+    too_large: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut body_tx = Some(body_tx);
+    let mut received: u64 = 0;
     loop {
         match reader.next().await {
             Ok(Some(frame)) => match frame.kind {
@@ -416,6 +627,11 @@ async fn read_request_side(
                     body_tx = None;
                 }
                 FrameType::ReqBody => {
+                    received += frame.payload.len() as u64;
+                    if received > max_body {
+                        too_large.store(true, std::sync::atomic::Ordering::SeqCst);
+                        break;
+                    }
                     if let Some(tx) = &body_tx {
                         if tx.send(frame.payload).await.is_err() {
                             body_tx = None;
@@ -432,14 +648,20 @@ async fn read_request_side(
     cancel.cancel();
 }
 
-fn upstream_request(head: &ReqHead, upstream: SocketAddr) -> Vec<u8> {
-    let mut out = format!("{} {} HTTP/1.1\r\nHost: {upstream}\r\n", head.method, head.target);
+/// The upstream request head. Method and target come from the allowlist constants
+/// ([`Canonical`]); header names/values were filtered (token names, no control bytes).
+fn upstream_request(canon: Canonical, head: &ReqHead, upstream: SocketAddr) -> Vec<u8> {
+    let mut out = format!(
+        "{} {} HTTP/1.1\r\nHost: {upstream}\r\n",
+        canon.method,
+        canon.target()
+    );
     for (k, v) in allowlist::filter_request_headers(&head.headers) {
         out.push_str(&format!("{k}: {v}\r\n"));
     }
     match head.body {
         BodyKind::None => {
-            if head.method == "POST" {
+            if canon.method == "POST" {
                 out.push_str("Content-Length: 0\r\n");
             }
         }
@@ -488,7 +710,7 @@ async fn pump_body(
 async fn forward(
     ctx: &Ctx,
     head: &ReqHead,
-    route: Route,
+    canon: Canonical,
     body_rx: mpsc::Receiver<Vec<u8>>,
     writer: &mut ChannelWriter,
 ) -> io::Result<Outcome> {
@@ -514,12 +736,14 @@ async fn forward(
     };
     upstream.set_nodelay(true)?;
     let (mut up_r, mut up_w) = upstream.into_split();
-    up_w.write_all(&upstream_request(head, ctx.upstream)).await?;
+    up_w.write_all(&upstream_request(canon, head, ctx.upstream)).await?;
     let body = pump_body(up_w, body_rx, head.body);
     tokio::pin!(body);
     let resp = async {
-        if route == Route::SlotsSanitized {
-            return pump_slots(&mut up_r, writer).await;
+        match canon.route {
+            Route::SlotsSanitized => return pump_sanitized(&mut up_r, writer, allowlist::sanitize_slots).await,
+            Route::PropsSanitized => return pump_sanitized(&mut up_r, writer, allowlist::sanitize_props).await,
+            Route::Inference | Route::Light => {}
         }
         pump_response(&mut up_r, writer).await
     };
@@ -565,10 +789,12 @@ async fn pump_response(
     Ok(Outcome::Completed)
 }
 
-/// `GET /slots`: buffer, reduce to non-sensitive fields, answer with Content-Length.
-async fn pump_slots(
+/// `GET /slots` / `GET /props`: buffer, reduce to non-sensitive fields, answer with
+/// Content-Length.
+async fn pump_sanitized(
     up_r: &mut tokio::net::tcp::OwnedReadHalf,
     writer: &mut ChannelWriter,
+    sanitize: fn(&[u8]) -> Vec<u8>,
 ) -> io::Result<Outcome> {
     let mut raw = Vec::new();
     up_r.take(SLOTS_MAX as u64 + 1).read_to_end(&mut raw).await?;
@@ -589,7 +815,51 @@ async fn pump_slots(
         .await?;
         return Ok(Outcome::UpstreamError);
     };
-    send_response(writer, &http::json_response(status, &[], &allowlist::sanitize_slots(&body)))
+    send_response(writer, &http::json_response(status, &[], &sanitize(&body)))
         .await?;
     Ok(Outcome::Completed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// M1 review finding 1: the upstream request line is built from constants only.
+    #[test]
+    fn upstream_request_line_is_constant() {
+        let head = ReqHead {
+            method: "POST".into(),
+            target: "/v1/chat/completions?x=%0d%0aPOST%20/slots/0?action=save".into(),
+            headers: vec![
+                ("content-type".into(), "application/json".into()),
+                ("x-bad".into(), "a\r\nPOST /slots/0?action=save HTTP/1.1".into()),
+            ],
+            body: BodyKind::Length(2),
+        };
+        let canon = allowlist::canonical(&head.method, &head.target).unwrap();
+        let req = String::from_utf8(upstream_request(canon, &head, "127.0.0.1:8080".parse().unwrap())).unwrap();
+        assert_eq!(
+            req,
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:8080\r\ncontent-type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n"
+        );
+        assert_eq!(req.matches("HTTP/1.1").count(), 1);
+    }
+
+    #[test]
+    fn log_rate_limit_counts_suppressed_lines() {
+        let mut rl = LogRateLimit::new(Duration::from_secs(10));
+        let t0 = Instant::now();
+        assert_eq!(rl.allow(t0), Some(0));
+        for i in 1..100 {
+            assert_eq!(rl.allow(t0 + Duration::from_millis(i * 10)), None);
+        }
+        assert_eq!(rl.allow(t0 + Duration::from_secs(11)), Some(99));
+        assert_eq!(rl.allow(t0 + Duration::from_secs(12)), None);
+    }
+
+    #[test]
+    fn sanitize_log_bounds_method_and_path() {
+        assert_eq!(sanitize_log("GET\r\nX: SECRET"), "GET??X:?SECRET");
+        assert_eq!(sanitize_log(&"A".repeat(500)).len(), 64);
+    }
 }

@@ -1,10 +1,16 @@
 //! Use side ("MacBook", plan §3 `client.rs`): serves the editor on `127.0.0.1:<port>`
-//! and forwards each allowed request over one stream of a persistent, pinned QUIC
-//! connection to the share side.
+//! **and** `[::1]:<port>` (both or neither, so another local user cannot grab the other
+//! address family of `localhost`) and forwards each allowed request over one stream of a
+//! persistent, pinned QUIC connection to the share side.
 //!
 //! Local guards (before anything leaves this Mac): loopback bind only, `Host`
-//! allowlist and browser-origin refusal (DNS rebinding / web pages), method/path
-//! allowlist, credential + hop-by-hop header stripping, 32 MiB streamed body cap.
+//! allowlist and browser refusal (any `Origin`, incl. `null`; any `Sec-Fetch-Site` but
+//! `none` — DNS rebinding / web pages), optional per-install bearer token
+//! ([`UseConfig::token`], `Authorization: Bearer <token>`, constant-time compare; the app
+//! writes it into the editor configs as the "API key"), method/path allowlist and target
+//! byte check, credential + hop-by-hop header stripping, 32 MiB streamed body cap, at
+//! most [`LocalLimits::max_connections`] concurrent editor connections, 30 s idle
+//! timeout while reading a request body.
 //! Latency: TCP_NODELAY, one flush per response frame, one pre-opened + handshaken
 //! spare stream per connection (hides stream negotiation after idle, M0 finding).
 //! Cancellation: when the editor closes its connection (stop button), a `Cancel`
@@ -38,8 +44,8 @@ use crate::unix_ms;
 
 pub const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
 pub const STREAM_OPEN_TIMEOUT: Duration = Duration::from_secs(2);
-/// Streamed request body cap (plan §3).
-pub const MAX_BODY: u64 = 32 * 1024 * 1024;
+/// Streamed request body cap (plan §3), enforced on both ends.
+pub use crate::proto::MAX_BODY;
 /// The editor must send its request head within this time (slow-loris guard).
 pub const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -52,7 +58,29 @@ pub struct UseConfig {
     pub paired: PairedConfig,
     /// Keep one pre-opened spare stream (default on; off only for A/B measurements).
     pub spare_stream: bool,
+    /// Per-install bearer token: when set, every editor request must carry
+    /// `Authorization: Bearer <token>` (checked before the header is stripped).
+    pub token: Option<String>,
+    pub local: LocalLimits,
     pub verbose: bool,
+}
+
+/// Limits of the local editor listener.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalLimits {
+    /// Concurrent editor connections; more are answered 503 at once.
+    pub max_connections: usize,
+    /// Longest pause while reading a request body before 408.
+    pub body_idle_timeout: Duration,
+}
+
+impl Default for LocalLimits {
+    fn default() -> Self {
+        Self {
+            max_connections: 16,
+            body_idle_timeout: Duration::from_secs(30),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -65,6 +93,8 @@ pub struct UseStats {
     pub spare_misses: u64,
     pub requests: u64,
     pub refused_locally: u64,
+    pub unauthorized: u64,
+    pub connections_over_cap: u64,
     pub cancels_sent: u64,
     pub peer_lost_mid_request: u64,
 }
@@ -73,7 +103,10 @@ pub type SharedUseStats = Arc<Mutex<UseStats>>;
 
 pub struct UseHandle {
     pub peer_id: PeerId,
+    /// The configured loopback address (port resolved).
     pub bind: SocketAddr,
+    /// The other loopback family on the same port (`[::1]` for `127.0.0.1` and back).
+    pub bind_companion: SocketAddr,
     pub stats: SharedUseStats,
     shared: Arc<Shared>,
     tasks: Vec<JoinHandle<()>>,
@@ -120,6 +153,8 @@ struct Shared {
     spare_wanted: Notify,
     spare_enabled: bool,
     stats: SharedUseStats,
+    token: Option<String>,
+    local_limits: LocalLimits,
     verbose: bool,
 }
 
@@ -237,8 +272,15 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
             "the editor address must be loopback (127.0.0.1)",
         ));
     }
-    let listener = TcpListener::bind(cfg.bind).await?;
+    if cfg.token.as_deref().is_some_and(|t| t.len() < 16 || !t.bytes().all(|b| b.is_ascii_graphic())) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the local token must be at least 16 visible ASCII characters",
+        ));
+    }
+    let (listener, listener_companion) = bind_loopback_pair(cfg.bind).await?;
     let bind = listener.local_addr()?;
+    let bind_companion = listener_companion.local_addr()?;
 
     let mut swarm = build_paired_swarm(identity, &cfg.paired);
     let local = *swarm.local_peer_id();
@@ -274,6 +316,8 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
         spare_wanted: Notify::new(),
         spare_enabled: cfg.spare_stream,
         stats: stats.clone(),
+        token: cfg.token.clone(),
+        local_limits: cfg.local,
         verbose: cfg.verbose,
     });
 
@@ -335,31 +379,105 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
     if cfg.spare_stream {
         tasks.push(tokio::spawn(spare_refill(shared.clone())));
     }
-    let accept_shared = shared.clone();
-    tasks.push(tokio::spawn(async move {
-        loop {
-            let Ok((tcp, _)) = listener.accept().await else {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                continue;
-            };
-            let shared = accept_shared.clone();
-            tokio::spawn(async move {
-                if let Err(e) = serve_connection(&shared, tcp, bind.port()).await {
-                    if shared.verbose {
-                        eprintln!("use event=request_error error={e}");
+    let conn_cap = Arc::new(tokio::sync::Semaphore::new(cfg.local.max_connections.max(1)));
+    for listener in [listener, listener_companion] {
+        let accept_shared = shared.clone();
+        let conn_cap = conn_cap.clone();
+        tasks.push(tokio::spawn(async move {
+            loop {
+                let Ok((tcp, _)) = listener.accept().await else {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                };
+                let shared = accept_shared.clone();
+                let Ok(permit) = conn_cap.clone().try_acquire_owned() else {
+                    shared.stats.lock().unwrap().connections_over_cap += 1;
+                    tokio::spawn(async move {
+                        let mut tcp = tcp;
+                        let _ = tokio::time::timeout(
+                            Duration::from_secs(2),
+                            tcp.write_all(&http::error_response(
+                                503,
+                                "too_many_connections",
+                                "Too many open connections to the forwarder. Try again in a few seconds.",
+                            )),
+                        )
+                        .await;
+                        let _ = tcp.shutdown().await;
+                    });
+                    continue;
+                };
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    if let Err(e) = serve_connection(&shared, tcp, bind.port()).await {
+                        if shared.verbose {
+                            eprintln!("use event=request_error error={e}");
+                        }
                     }
-                }
-            });
-        }
-    }));
-    eprintln!("use event=serving bind=http://{bind}/v1 peer={peer}");
+                });
+            }
+        }));
+    }
+    eprintln!("use event=serving bind=http://{bind}/v1 also=http://{bind_companion}/v1 peer={peer} token={}", if cfg.token.is_some() { "required" } else { "off" });
     Ok(UseHandle {
         peer_id: peer,
         bind,
+        bind_companion,
         stats,
         shared,
         tasks,
     })
+}
+
+/// The other loopback family for `addr` (`127.0.0.1` ↔ `[::1]`).
+fn companion_ip(addr: SocketAddr) -> std::net::IpAddr {
+    match addr {
+        SocketAddr::V4(_) => std::net::Ipv6Addr::LOCALHOST.into(),
+        SocketAddr::V6(_) => std::net::Ipv4Addr::LOCALHOST.into(),
+    }
+}
+
+/// Bind the loopback address and its other family on the same port. Refuses to start if
+/// either is taken (an editor resolving `localhost` to the taken one would talk to
+/// someone else). Port 0: retried with fresh ports.
+async fn bind_loopback_pair(addr: SocketAddr) -> io::Result<(TcpListener, TcpListener)> {
+    let attempts = if addr.port() == 0 { 16 } else { 1 };
+    let mut last_err = None;
+    for _ in 0..attempts {
+        let first = TcpListener::bind(addr).await?;
+        let port = first.local_addr()?.port();
+        let companion = SocketAddr::new(companion_ip(addr), port);
+        match TcpListener::bind(companion).await {
+            Ok(second) => return Ok((first, second)),
+            Err(e) => {
+                last_err = Some(io::Error::new(
+                    e.kind(),
+                    format!("{companion} is not available ({e}); refusing to serve only half of localhost:{port}"),
+                ))
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| io::Error::other("bind failed")))
+}
+
+/// Constant-time equality (length is not secret).
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// `Authorization: Bearer <token>` present exactly once and matching.
+pub fn bearer_ok(headers: &[(String, String)], token: &str) -> bool {
+    let mut values = headers.iter().filter(|(k, _)| k == "authorization").map(|(_, v)| v);
+    let (Some(v), None) = (values.next(), values.next()) else {
+        return false;
+    };
+    let Some((scheme, cred)) = v.trim().split_once(' ') else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("bearer") && ct_eq(cred.trim().as_bytes(), token.as_bytes())
 }
 
 async fn reply(w: &mut OwnedWriteHalf, bytes: &[u8]) -> io::Result<()> {
@@ -386,6 +504,10 @@ fn body_kind(head: &RequestHead) -> Result<BodyKind, &'static str> {
         (Some(te), None) if te.eq_ignore_ascii_case("chunked") => Ok(BodyKind::Chunked),
         (Some(_), None) => Err("unsupported Transfer-Encoding"),
         (None, Some(cl)) => {
+            // Digits only: `u64::from_str` would accept a leading '+'.
+            if cl.is_empty() || !cl.bytes().all(|b| b.is_ascii_digit()) {
+                return Err("bad Content-Length");
+            }
             let n: u64 = cl.parse().map_err(|_| "bad Content-Length")?;
             Ok(if n == 0 { BodyKind::None } else { BodyKind::Length(n) })
         }
@@ -411,12 +533,18 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
     if !allowlist::host_allowed(head.header("host"), port) || head.header_count("host") != 1 {
         return refuse(shared, &mut w, &http::forbidden()).await;
     }
-    if allowlist::browser_origin_refused(head.header("origin"), head.header("sec-fetch-site")) {
+    if allowlist::browser_origin_refused(&head.headers) {
         return refuse(shared, &mut w, &http::forbidden()).await;
     }
-    if allowlist::route(&head.method, &head.target).is_none() {
-        return refuse(shared, &mut w, &http::forbidden()).await;
+    if let Some(token) = &shared.token {
+        if !bearer_ok(&head.headers, token) {
+            shared.stats.lock().unwrap().unauthorized += 1;
+            return refuse(shared, &mut w, &http::unauthorized()).await;
+        }
     }
+    let Some(canon) = allowlist::canonical(&head.method, &head.target) else {
+        return refuse(shared, &mut w, &http::forbidden()).await;
+    };
     let kind = match body_kind(&head) {
         Ok(k) => k,
         Err(msg) => return refuse(shared, &mut w, &http::error_response(400, "bad_request", msg)).await,
@@ -455,8 +583,8 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
         }
     };
     let req = ReqHead {
-        method: head.method.clone(),
-        target: head.target.clone(),
+        method: canon.method.to_string(),
+        target: canon.target(),
         headers: allowlist::filter_request_headers(&head.headers),
         body: kind,
     };
@@ -475,7 +603,7 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
     }
     let mut state = RespState::default();
     let end = {
-        let up = upload_then_watch(&mut r, early_body, kind, &mut writer);
+        let up = upload_then_watch(&mut r, early_body, kind, &mut writer, shared.local_limits.body_idle_timeout);
         let down = relay_response(&mut reader, &mut w, &mut state);
         tokio::pin!(up, down);
         tokio::select! {
@@ -484,6 +612,7 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
                 Upload::ClientGone => End::ClientGone,
                 Upload::TooLarge => End::BodyRefused("Request body larger than 32 MiB."),
                 Upload::Malformed => End::BodyRefused("Malformed chunked request body."),
+                Upload::TimedOut => End::BodyRefused("Timed out waiting for the request body."),
             },
         }
     };
@@ -533,7 +662,13 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
         End::BodyRefused(msg) => {
             let _ = writer.send(FrameType::Cancel, &[]).await;
             if !state.head_sent {
-                let status = if msg.contains("32 MiB") { 413 } else { 400 };
+                let status = if msg.contains("32 MiB") {
+                    413
+                } else if msg.starts_with("Timed out") {
+                    408
+                } else {
+                    400
+                };
                 let _ = reply(&mut w, &http::error_response(status, "bad_request", msg)).await;
             }
         }
@@ -552,6 +687,16 @@ enum Upload {
     ClientGone,
     TooLarge,
     Malformed,
+    TimedOut,
+}
+
+/// One body read with the idle timeout. `Err(Upload)` ends the upload.
+async fn read_body(r: &mut OwnedReadHalf, buf: &mut [u8], idle: Duration) -> Result<usize, Upload> {
+    match tokio::time::timeout(idle, r.read(buf)).await {
+        Err(_) => Err(Upload::TimedOut),
+        Ok(Ok(0)) | Ok(Err(_)) => Err(Upload::ClientGone),
+        Ok(Ok(k)) => Ok(k),
+    }
 }
 
 /// Stream the request body as ReqBody frames (cap 32 MiB), send the end marker, then
@@ -561,6 +706,7 @@ async fn upload_then_watch(
     early: Vec<u8>,
     kind: BodyKind,
     writer: &mut ChannelWriter,
+    idle: Duration,
 ) -> Upload {
     let mut buf = vec![0u8; BODY_CHUNK];
     match kind {
@@ -574,8 +720,8 @@ async fn upload_then_watch(
             left -= first as u64;
             while left > 0 {
                 let want = (left as usize).min(buf.len());
-                match r.read(&mut buf[..want]).await {
-                    Ok(0) | Err(_) => return Upload::ClientGone,
+                match read_body(r, &mut buf[..want], idle).await {
+                    Err(u) => return u,
                     Ok(k) => {
                         left -= k as u64;
                         if writer.send(FrameType::ReqBody, &buf[..k]).await.is_err() {
@@ -604,8 +750,8 @@ async fn upload_then_watch(
                         }
                     }
                 }
-                match r.read(&mut buf).await {
-                    Ok(0) | Err(_) => return Upload::ClientGone,
+                match read_body(r, &mut buf, idle).await {
+                    Err(u) => return u,
                     Ok(k) => pending = buf[..k].to_vec(),
                 }
             }
@@ -761,6 +907,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bearer_token_check() {
+        let h = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        };
+        let t = "0123456789abcdef0123456789abcdef";
+        assert!(bearer_ok(&h(&[("authorization", &format!("Bearer {t}"))]), t));
+        assert!(bearer_ok(&h(&[("authorization", &format!("bearer {t}"))]), t));
+        assert!(!bearer_ok(&h(&[]), t));
+        assert!(!bearer_ok(&h(&[("authorization", t)]), t));
+        assert!(!bearer_ok(&h(&[("authorization", &format!("Basic {t}"))]), t));
+        assert!(!bearer_ok(&h(&[("authorization", "Bearer 0123456789abcdef0123456789abcdeX")]), t));
+        assert!(!bearer_ok(&h(&[("authorization", "Bearer 0123")]), t));
+        // two Authorization headers: refused even if one matches
+        assert!(!bearer_ok(
+            &h(&[("authorization", "Bearer nope"), ("authorization", &format!("Bearer {t}"))]),
+            t
+        ));
+        assert!(ct_eq(b"abc", b"abc") && !ct_eq(b"abc", b"abd") && !ct_eq(b"abc", b"ab"));
+    }
+
+    #[test]
     fn chunked_decoder_incremental() {
         let body = b"4\r\nWiki\r\n5;ext=1\r\npedia\r\n0\r\nX-Trailer: 1\r\n\r\n";
         for split in 0..body.len() {
@@ -791,5 +958,10 @@ mod tests {
         assert!(body_kind(&head(&[("content-length", "5"), ("content-length", "6")])).is_err());
         assert!(body_kind(&head(&[("transfer-encoding", "gzip")])).is_err());
         assert!(body_kind(&head(&[("content-length", "-1")])).is_err());
+        // M1 review: only digits (u64::from_str alone accepts "+5")
+        for bad in ["+5", " 5", "5 ", "0x5", "5,5", "", "1e3", "٥"] {
+            assert!(body_kind(&head(&[("content-length", bad)])).is_err(), "{bad:?}");
+        }
+        assert_eq!(body_kind(&head(&[("content-length", "007")])), Ok(BodyKind::Length(7)));
     }
 }

@@ -4512,3 +4512,30 @@ one pre-opened + handshaken spare stream per paired connection, libp2p-stream `=
   response bytes are exactly llama-server's (chunk framing included); every upstream request is `Connection: close` (the end of
   the response = upstream close; closing it = cancel). Admission per peer 1 running + 2 queued for `POST /v1/chat/completions`
   and `/v1/completions` only (light GETs are never queued behind a generation), then 503 + `Retry-After: 5`.
+
+## v0.6 M1 security fixes (2026-11-28, review of d2f158d)
+
+Security review of the M1 forwarder (`crates/p2p-forward`, `apps/p2p-node`, `p2p-crypto` identity). Every finding fixed with a
+regression test; new tests in `crates/p2p-forward/tests/security.rs` plus unit tests next to the code.
+
+| # | Finding | Fix | Regression test(s) |
+|---|---|---|---|
+| 1 CRITICAL | Request smuggling: `route()` matched only the path before `?`, `upstream_request` wrote `ReqHead.target` verbatim → a paired peer injected `\r\n` and got 3 upstream requests (incl. `POST /slots/0?action=save`) from one | `allowlist::canonical()`: share side rebuilds method + path from the route-table constants and drops the query (only `GET /slots?fail_on_no_slot=0\|1` kept); both ends reject any target byte outside `0x21..=0x7E`; header values with control bytes dropped. Use side also sends the canonical target | `security::smuggled_target_never_reaches_llama_server` (verified exploit, CRLF, LF, space, U+0085, NUL, TAB → 403, mock sees 0 requests; hostile-but-visible query → exactly 1 upstream request `POST /v1/chat/completions`), `security::use_side_rejects_target_bytes_outside_visible_ascii`, `allowlist::target_bytes_and_canonical_rebuild`, `worker::upstream_request_line_is_constant` |
+| 2 MEDIUM | Share side had no body cap | `ShareLimits::max_body` (= `MAX_BODY` 32 MiB): `Length(n > cap)` → 413 before connecting upstream; streamed/chunked bytes counted in `read_request_side`, over cap → upstream dropped, 413 if no response head yet | `security::share_side_caps_request_bodies` |
+| 3 MEDIUM | Light routes bypassed admission | `Admission::acquire_light`: 4 per peer + 16 global, wait ≤ 2 s then 503 + `Retry-After: 5` | `admission::light_routes_capped_per_peer_and_globally`, `security::fifth_concurrent_light_request_gets_503` |
+| 4 MEDIUM | Any local process could use the listener | optional per-install bearer token (`use --token-file`, `p2p_forward::load_or_create_token`: created 0600 + `create_new`, 32 random bytes hex); `Authorization: Bearer` required (exactly one header, constant-time compare) before stripping, else 401; ≤ 16 concurrent local connections (503 beyond); 30 s idle timeout on body reads (408). M4 writes the token into editor configs (plan §3) | `security::local_token_required_when_configured`, `security::local_connection_cap_and_body_idle_timeout`, `client::bearer_token_check`, `tests::token_file_created_0600_and_reused` |
+| 5 MEDIUM | Only 127.0.0.1 bound → another local user could bind `[::1]:<port>` and catch `localhost` | use side binds `127.0.0.1` and `[::1]` on the same port; refuses to start if either is taken | `security::binds_ipv6_loopback_too_and_refuses_if_taken` |
+| 6 LOW | No handshake/first-frame timeout, unbounded idle streams; method unsanitized in logs; unthrottled `rejected_peer` logs; `/props` leaked `model_path` + chat template; peer `name` printed raw; `Content-Length: +5` accepted | handshake ≤ 5 s; first frame ≤ 5 s unless one of ≤ 2 idle places per peer (spare); cancel-safe `FrameReader::wait_readable`; `sanitize_log(method)`; `LogRateLimit` (1 line / 10 s + suppressed count); `Route::PropsSanitized` → n_ctx, total_slots, model alias / file name, build_info; `allowlist::display_safe` for status text; Content-Length digits only | `security::idle_streams_capped_and_handshake_bounded`, `security::props_sanitized_on_share_side`, `allowlist::props_sanitized`, `allowlist::display_safe_strips_control_characters`, `worker::log_rate_limit_counts_suppressed_lines`, `worker::sanitize_log_bounds_method_and_path`, `proto::wait_readable_then_next`, `client::body_framing_rules` |
+| 7 LOW | Key file chmod-after-create window; `/tmp/slipstream-p2p` fallback without HOME | `OpenOptions::mode(0o600).create_new(true)` (never overwrites a file or symlink); p2p-node refuses to run without HOME unless `--data-dir` | `identity::save_creates_0600_and_refuses_existing_file`, `data_dir_tests::data_dir_requires_home_or_explicit_dir` |
+| 8 decision | `Origin: null` was allowed | any `Origin` (every instance, incl. `null`) → 403; `Sec-Fetch-Site` must be absent or `none` (every instance); `Sec-Fetch-Mode` ignored (Node undici sends `cors`) | `allowlist::host_and_origin_guards`, `loopback_forward::refused_requests_never_reach_llama_server` (now: `Origin: null`, same-origin, second `Sec-Fetch-Site`, two Origins → 403; `Sec-Fetch-Mode: cors` → 200) |
+
+Side effect: the mock llama-server now also reads its stream parameters from an `X-Mock-Params` header (the share side drops
+queries); `forward-spike bench` and the test helper send it, so direct and forwarded arms still get identical streams.
+
+Tests: `cargo test --workspace` 246 passed (was 223), `app/src-tauri` 108/108; `security` + `loopback_forward` 5/5 repeat runs green.
+
+Latency check (mock only, `N_TTFT=150 N_IDLE=40 N_PACED=3 bench/forward/run_m1.sh`, shaped RTT 8 ms, raw log
+`bench/forward/results/20261128-144503-m1.txt`): back-to-back TTFT overhead p95 **+13.2 ms** (paired p95 +13.4; M1 before
+fixes +13.3 / +13.6), after 1 s idle p95 **+14.4 ms** (paired +14.9; before +14.5 / +15.0), no-spare arm +26.4 / +29.3 ms
+(before +26.7 / +29.4); paced 512 × 25 ms decode event rate +0.22 % (N=3). Body SHA identical across all arms. → overhead unchanged; no real-engine run needed (transport path
+unchanged apart from per-request constant-time checks).

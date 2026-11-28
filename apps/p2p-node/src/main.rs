@@ -225,6 +225,11 @@ enum Commands {
         /// QUIC idle timeout in ms (peer-loss detection; default 8000).
         #[arg(long)]
         idle_timeout_ms: Option<u64>,
+        /// Require `Authorization: Bearer <token>` from editors. The token is read from
+        /// this file, or created there (32 random bytes as hex, mode 0600) if missing.
+        /// Put it into the editor's "API key" field (the app does this for you).
+        #[arg(long, value_name = "PATH")]
+        token_file: Option<PathBuf>,
         /// Measurement only: do not keep a pre-opened spare stream.
         #[arg(long, default_value_t = false, hide = true)]
         no_spare_stream: bool,
@@ -393,11 +398,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             http,
             data_dir,
             idle_timeout_ms,
+            token_file,
             no_spare_stream,
             verbose,
-        } => cmd_use(peer, http, data_dir, idle_timeout_ms, !no_spare_stream, verbose).await?,
+        } => cmd_use(peer, http, data_dir, idle_timeout_ms, token_file, !no_spare_stream, verbose).await?,
         Commands::PeerId { data_dir } => {
-            let identity = p2p_forward::load_or_create_identity(&resolve_data_dir(data_dir))?;
+            let identity = p2p_forward::load_or_create_identity(&resolve_data_dir(data_dir)?)?;
             println!("{}", identity.public().to_peer_id());
         }
     }
@@ -710,12 +716,24 @@ fn refuse_paired_for_job_api(mode: NodeMode) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-/// `--data-dir` / `SLIPSTREAM_P2P_DIR`, else the app's directory.
-fn resolve_data_dir(data_dir: Option<PathBuf>) -> PathBuf {
-    data_dir.unwrap_or_else(|| match std::env::var_os("HOME") {
-        Some(home) => PathBuf::from(home).join("Library/Application Support/Slipstream/p2p"),
-        None => PathBuf::from("/tmp/slipstream-p2p"),
-    })
+/// `--data-dir` / `SLIPSTREAM_P2P_DIR`, else the app's directory. Without HOME there is
+/// no safe default (a shared `/tmp` directory could be pre-created by another user), so
+/// refuse instead.
+fn resolve_data_dir(data_dir: Option<PathBuf>) -> Result<PathBuf, String> {
+    resolve_data_dir_from(data_dir, std::env::var_os("HOME"))
+}
+
+fn resolve_data_dir_from(
+    data_dir: Option<PathBuf>,
+    home: Option<std::ffi::OsString>,
+) -> Result<PathBuf, String> {
+    if let Some(dir) = data_dir {
+        return Ok(dir);
+    }
+    match home.filter(|h| !h.is_empty()) {
+        Some(home) => Ok(PathBuf::from(home).join("Library/Application Support/Slipstream/p2p")),
+        None => Err("HOME is not set: pass --data-dir (or SLIPSTREAM_P2P_DIR) for the node identity".into()),
+    }
 }
 
 fn paired_config(idle_timeout_ms: Option<u64>) -> p2p_libp2p::paired::PairedConfig {
@@ -745,7 +763,7 @@ async fn cmd_share(
     let policy = NodePolicy::for_mode(NodeMode::Paired);
     policy.validate()?;
     let upstream = p2p_forward::parse_upstream(&forward)?;
-    let dir = resolve_data_dir(data_dir);
+    let dir = resolve_data_dir(data_dir)?;
     let identity = p2p_forward::load_or_create_identity(&dir)?;
     let handle = p2p_forward::start_share(
         identity,
@@ -755,6 +773,7 @@ async fn cmd_share(
             allow: allow_peer,
             paired: paired_config(idle_timeout_ms),
             admission: p2p_forward::admission::AdmissionLimits::default(),
+            limits: p2p_forward::ShareLimits::default(),
             name: name.unwrap_or_else(p2p_forward::status::default_name),
             verbose,
         },
@@ -775,13 +794,18 @@ async fn cmd_use(
     http: SocketAddr,
     data_dir: Option<PathBuf>,
     idle_timeout_ms: Option<u64>,
+    token_file: Option<PathBuf>,
     spare_stream: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let policy = NodePolicy::for_mode(NodeMode::Paired);
     policy.validate()?;
-    let dir = resolve_data_dir(data_dir);
+    let dir = resolve_data_dir(data_dir)?;
     let identity = p2p_forward::load_or_create_identity(&dir)?;
+    let token = match &token_file {
+        Some(path) => Some(p2p_forward::load_or_create_token(path)?),
+        None => None,
+    };
     let handle = p2p_forward::start_use(
         identity,
         p2p_forward::UseConfig {
@@ -789,6 +813,8 @@ async fn cmd_use(
             bind: http,
             paired: paired_config(idle_timeout_ms),
             spare_stream,
+            token: token.clone(),
+            local: p2p_forward::LocalLimits::default(),
             verbose,
         },
     )
@@ -796,18 +822,44 @@ async fn cmd_use(
     match handle.status().await {
         Ok(p2p_forward::status::StatusReply::Status(s)) => println!(
             "using \"{}\" (Slipstream {}) model={} running={} n_ctx={} busy={} on_battery={}",
-            s.name,
-            s.app_version,
-            s.model_id.as_deref().unwrap_or("-"),
+            p2p_forward::allowlist::display_safe(&s.name),
+            p2p_forward::allowlist::display_safe(&s.app_version),
+            p2p_forward::allowlist::display_safe(s.model_id.as_deref().unwrap_or("-")),
             s.model_running,
             s.n_ctx.map(|n| n.to_string()).unwrap_or_else(|| "-".into()),
             s.busy,
             s.on_battery
         ),
-        Ok(other) => println!("status: {other:?}"),
+        Ok(other) => println!(
+            "status: {}",
+            p2p_forward::allowlist::display_safe(&format!("{other:?}"))
+        ),
         Err(e) => eprintln!("status unavailable: {e}"),
     }
-    println!("editors: http://{}/v1", handle.bind);
+    println!("editors: http://{}/v1 (also http://{}/v1)", handle.bind, handle.bind_companion);
+    if let Some(path) = &token_file {
+        println!("editors must send the API key from {} (Authorization: Bearer)", path.display());
+    }
     wait_for_ctrl_c().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod data_dir_tests {
+    use super::*;
+
+    /// M1 security review finding 7: no `/tmp` fallback without HOME.
+    #[test]
+    fn data_dir_requires_home_or_explicit_dir() {
+        assert!(resolve_data_dir_from(None, None).is_err());
+        assert!(resolve_data_dir_from(None, Some("".into())).is_err());
+        assert_eq!(
+            resolve_data_dir_from(None, Some("/Users/a".into())).unwrap(),
+            PathBuf::from("/Users/a/Library/Application Support/Slipstream/p2p")
+        );
+        assert_eq!(
+            resolve_data_dir_from(Some("/x".into()), None).unwrap(),
+            PathBuf::from("/x")
+        );
+    }
 }

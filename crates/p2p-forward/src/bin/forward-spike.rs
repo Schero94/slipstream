@@ -119,14 +119,20 @@ enum Cmd {
 }
 
 fn build_request(path: &str, host: SocketAddr, body: Option<&[u8]>) -> Vec<u8> {
+    // The share side drops query strings (M1 security fixes); mock parameters travel in
+    // a header too, so direct and forwarded arms get the same stream.
+    let mock = path
+        .split_once('?')
+        .map(|(_, q)| format!("X-Mock-Params: {q}\r\n"))
+        .unwrap_or_default();
     let mut req = match body {
         Some(b) => format!(
-            "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nAccept: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "POST {path} HTTP/1.1\r\nHost: {host}\r\n{mock}Content-Type: application/json\r\nAccept: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             b.len()
         )
         .into_bytes(),
         None => format!(
-            "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "POST {path} HTTP/1.1\r\nHost: {host}\r\n{mock}Content-Length: 0\r\nConnection: close\r\n\r\n"
         )
         .into_bytes(),
     };
