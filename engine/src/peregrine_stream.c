@@ -42,6 +42,32 @@ struct pgr_stream {
     char      error[160];
 };
 
+static FILE *pgr_trace_fp = NULL;
+static pthread_once_t pgr_trace_once = PTHREAD_ONCE_INIT;
+static pthread_mutex_t pgr_trace_mu = PTHREAD_MUTEX_INITIALIZER;
+static void pgr_trace_close(void) { if (pgr_trace_fp) fflush(pgr_trace_fp); }
+static void pgr_trace_init(void) {
+    const char *path = getenv("PGRN_TRACE");
+    if (!path || !path[0]) return;
+    pgr_trace_fp = fopen(path, "w");
+    if (pgr_trace_fp) { setvbuf(pgr_trace_fp, NULL, _IOFBF, 1 << 20); atexit(pgr_trace_close); }
+}
+int pgr_trace_on(void) {
+    pthread_once(&pgr_trace_once, pgr_trace_init);
+    return pgr_trace_fp != NULL;
+}
+void pgr_trace_emit(char tag, long layer, long a, long b, int flush) {
+    if (!pgr_trace_on()) return;
+    pthread_mutex_lock(&pgr_trace_mu);
+    if (a < 0) fprintf(pgr_trace_fp, "%c %ld\n", tag, layer);
+    else if (b < 0) fprintf(pgr_trace_fp, "%c %ld %ld\n", tag, layer, a);
+    else fprintf(pgr_trace_fp, "%c %ld %ld %ld\n", tag, layer, a, b);
+    if (flush) fflush(pgr_trace_fp);
+    pthread_mutex_unlock(&pgr_trace_mu);
+}
+#define PGR_TR(tag, key, b) do { if (pgr_trace_on()) \
+    pgr_trace_emit((tag), (long)((unsigned long)(key) >> 16), (long)((key) & 0xFFFF), (long)(b), 0); } while (0)
+
 static void pgr_stream_set_error(pgr_stream *s, const char *message) {
     if (!s) return;
     snprintf(s->error, sizeof(s->error), "%s", message ? message : "unknown error");
@@ -166,6 +192,7 @@ static pgr_stream_status pgr_stream_get_internal(
         s->hits++;
         if (resident == PGR_TIER_HOT) s->hot_hits++;
         else s->warm_hits++;
+        PGR_TR('D', key, 1);
         if (hit) *hit = 1;
         *data = s->buf + (size_t)slot * s->rec;
         s->error[0] = '\0';
@@ -204,6 +231,7 @@ static pgr_stream_status pgr_stream_get_internal(
         pgr_stream_set_error(s, "cache insert failed");
         return PGR_STREAM_INVALID;
     }
+    PGR_TR('D', key, 0);
     char *dst = s->buf + (size_t)slot * s->rec;
     memcpy(dst, s->staging, got);
     if (got < s->rec) memset(dst + got, 0, s->rec - got);
@@ -270,6 +298,7 @@ pgr_stream_status pgr_stream_get_key_heat_slot(
         *generation = 0;
         return PGR_STREAM_INVALID;
     }
+    PGR_TR('N', key, 1);
     return PGR_STREAM_OK;
 }
 
@@ -331,6 +360,8 @@ pgr_stream_status pgr_stream_get_many(
             }
             s->hits++;
             if (cls == PGR_TIER_HOT) s->hot_hits++; else s->warm_hits++;
+            PGR_TR('D', keys[i], 1);
+            PGR_TR('N', keys[i], 2);
             data_out[i] = s->buf + (size_t)slot * s->rec;
             if (size_out) size_out[i] = s->sizes[slot];
             if (hit_out)  hit_out[i]  = 1;
@@ -388,6 +419,7 @@ pgr_stream_status pgr_stream_get_many(
                 rc = PGR_STREAM_INVALID;
                 break;
             }
+            PGR_TR('D', keys[i], 0);
             char *dstslot = s->buf + (size_t)slot * s->rec;
             memcpy(dstslot, task[k].dst, task[k].got);
             if (task[k].got < s->rec) memset(dstslot + task[k].got, 0, s->rec - task[k].got);
@@ -398,6 +430,7 @@ pgr_stream_status pgr_stream_get_many(
                 rc = PGR_STREAM_INVALID;
                 break;
             }
+            PGR_TR('N', keys[i], 2);
             data_out[i] = dstslot;
             if (size_out) size_out[i] = task[k].got;
             if (hit_out)  hit_out[i]  = 0;
@@ -407,6 +440,14 @@ pgr_stream_status pgr_stream_get_many(
     free(task); free(th); free(miss);
     if (rc == PGR_STREAM_OK) s->error[0] = '\0';
     return rc;
+}
+
+int pgr_stream_pin_resident(pgr_stream *s, long key) {
+    if (!s || !s->policy) return 0;
+    int slot = -1;
+    uint64_t generation = 0;
+    if (pgr_tier_peek(s->policy, key, &slot, &generation) == PGR_TIER_COLD) return 0;
+    return pgr_tier_pin(s->policy, slot);
 }
 
 int pgr_stream_is_resident(const pgr_stream *s, long key) {
@@ -434,6 +475,8 @@ int pgr_stream_prefetch_many(
         uint64_t generation = 0;
         if (pgr_tier_peek(s->policy, keys[i], &slot, &generation) == PGR_TIER_COLD) {
             miss[n_miss++] = i;
+        } else {
+            PGR_TR('P', keys[i], 0);
         }
     }
     if (n_miss == 0) { free(miss); return 0; }
@@ -464,14 +507,19 @@ int pgr_stream_prefetch_many(
             for (int k = 1; k < m; ++k) if (th[k]) pthread_join(th[k], NULL);
         }
         for (int k = 0; k < m; ++k) {
-            if (task[k].status != PGR_STREAM_OK) continue;   /* best-effort: skip failures */
+            if (task[k].status != PGR_STREAM_OK) { PGR_TR('P', task[k].key, 3); continue; }   /* best-effort: skip failures */
             const int i = miss[base + k];
             const float heat = heats ? heats[i] : 0.0f;
             int slot = -1;
             uint64_t generation = 0;
             if (pgr_tier_publish(s->policy, keys[i], heat, &slot, &generation) == PGR_TIER_COLD || slot < 0) {
+                PGR_TR('P', keys[i], 2);
                 continue;   /* no evictable slot right now — skip, don't error */
             }
+            PGR_TR('P', keys[i], 1);
+            /* PGRN_EVICT lookahead-protect: a later publish of this same kick must not evict
+             * what it just loaded; released by the layer's next batch begin. */
+            if (pgr_evict_protect()) pgr_tier_pin(s->policy, slot);
             char *dst = s->buf + (size_t)slot * s->rec;
             memcpy(dst, task[k].dst, task[k].got);
             if (task[k].got < s->rec) memset(dst + task[k].got, 0, s->rec - task[k].got);

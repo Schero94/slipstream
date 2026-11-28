@@ -53,5 +53,7 @@ open score. Add every new idea here with a one-line hypothesis.
 | 6.7 | Prompt states survive app/server restart (Colibrì #2781/#3083; --slot-save-path) | first request after restart 190 s → < 3 s; app saves slot before stop, restores after start | 5 | 4 | 3 | open |
 | — | Stage experts in ascending use-count order in layer-major (Colibrì #1769 idea) | 2026-11-28: neutral (−0.4 % @4 GiB, +0.9 % @10 GiB on the first 256 tokens after the 39.5k prompt); the slowdown after a long prompt is not cache content (hit counters unchanged); code removed | | | | dropped |
 | 5.3 | Last layer computes attention/output only for the last token (qwen35moe.cpp) | first turn −2..4 s, lossless | 2 | 4 | 1.5 | open |
-| 4.5 | Decayed-frequency eviction (arXiv 2611.15842), offline trace replay first | 12–15 % fewer transfers than LRU-K | 3 | 3 | 2 | open |
+| — | Decayed-frequency eviction (arXiv 2611.15842), offline trace replay first | 2026-11-28: plain decayed counts are worse with lookahead (+23..+56 % demand misses); with lookahead-protect they win: replay −8..−13 % demand misses, A/B decode +3.5 % @4 GiB, +2.3 % @10 GiB, +11 % after a 39.5k prompt @4 GiB, identical output. Kept opt-in as `PGRN_EVICT=decay` (bench/RESULTS.md) | | | | done (opt-in) |
+| 6.0 | Make `PGRN_EVICT=decay` the default (+ app) | +2..+11 % decode, lossless; needs a reviewer pass and a 6/8/14 GiB check first | 3 | 4 | 1 | open |
+| 3.0 | Multi-token expert-use predictor for eviction (Belady headroom) | replay: Belady −30..−60 % reads vs ~−10 % for decay; the paper needs ~16 tokens of foresight for most of it | 4 | 1 | 4 | open |
 | 4.5 | Turbo: treat lookahead-predicted experts as resident (Colibrì; lossy opt-in) | decode +6–11 % for +0.2 % NLL | 3 | 3 | 2 | open |

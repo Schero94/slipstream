@@ -4019,3 +4019,73 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 - Zip (ditto from the mounted app): unpacks byte-identical to the DMG app (diff -r), codesign OK.
 - Tests: workspace 183/183, Tauri 107/107, Python 44/44 (after updating the stale string contract in
   test_llama_tool_choice_patch.py to the post-port tool_choice seam), UI contracts 7/7, headless assets PASS.
+
+## Eviction policy experiment (arXiv 2611.15842 / Colibrì review item #7) — 2026-11-28
+
+**Question.** Does a different victim choice in the per-layer expert cache (today CLOCK-LRU-K, K=4,
+`src/peregrine_cache.c`) cut SSD reads enough to matter? Lossless by construction: only which resident expert
+is dropped changes, never which experts are computed.
+
+**Step 1 — offline replay.** New opt-in trace `PGRN_TRACE=<path>` (engine, off by default; pure observation)
+logs every cache event per layer: slot counts, batch begins (pin release), demand accesses with hit/miss, pins,
+lookahead requests *before* the residency filter, and prefetch outcomes. `bench/fetchwall/trace_eviction.sh`
+recorded four traces in the app regime (run_arm_server.sh: llama-server, MTP draft 4, compact slots, io 8,
+lookahead on; Qwen3.6-35B-A3B UD-Q4_K_XL from ~/Modelle; greedy; 1000 decode tokens): `prompt_code.txt`
+and an agent-style continuation after `prompt_30k.txt` (39,515 tokens), each at 4 GiB (45–46 slots/layer)
+and 10 GiB (113–114 slots/layer). `bench/fetchwall/sim_eviction.py` replays them with exact engine semantics
+(pins until the layer's next batch begin; lookahead kick filtered for residency up front, as
+`pgr_runtime_prefetch_kick_list`; `pgr_stream_get_many` resolves the policy's own hits before publishing
+misses). Fidelity: the CLOCK-LRU-K replay reproduces every recorded demand hit/miss and every prefetch outcome
+of all four traces exactly (0 mismatches); replaying the baseline trace predicts the engine's lp run within 0.1 %
+(55,295 vs 55,245 demand misses) and its decay run exactly (54,473 vs 54,473).
+The paper (read via alphaxiv) gives no half-life; decayed counts recover 27 % of the LRU→Belady gap there and
+cut transfers 12–15 % vs LRU. Half-lives here are in ubatches (one MTP verify step ≈ 3.5 tokens).
+
+Decode-phase expert reads, summed over 41 layers, Δ vs current CLOCK-LRU-K (full tables incl. K sweep, LRU,
+ARC, LFU half-lives 4–256: `bench/fetchwall/results/eviction_replay_20261128.md`):
+
+| policy | code 4 GiB demand / total | agent 4 GiB demand / total | code 10 GiB demand / total | agent 10 GiB demand / total |
+|---|---:|---:|---:|---:|
+| clox-k4 (current), demand misses / total reads | 62,777 / 144,900 | 99,217 / 191,198 | 17,823 / 50,351 | 41,126 / 76,665 |
+| clox-k8 | −0.3 / −0.4 % | −0.1 / −0.4 % | −0.6 / −1.6 % | −0.4 / −0.8 % |
+| LRU | +1.3 / +2.2 % | +1.6 / +2.5 % | +3.9 / +4.6 % | +2.6 / +3.9 % |
+| ARC | +13.2 / +7.1 % | +7.5 / +5.7 % | +9.3 / +6.8 % | −1.9 / +6.0 % |
+| decayed-count LFU, half-life 16 (paper/Colibrì rule as is) | +46.6 / +17.9 % | +28.2 / +11.0 % | +56.0 / +22.2 % | +23.1 / +12.6 % |
+| **clox-k4 + lookahead-protect (lp)** | **−11.9 / −8.6 %** | **−9.1 / −8.2 %** | **−9.2 / −4.3 %** | **−4.4 / −3.4 %** |
+| **decayed LFU h16 + lp (decay)** | **−13.2 / −11.1 %** | **−10.5 / −11.1 %** | **−12.8 / −5.0 %** | **−8.0 / −5.6 %** |
+| decayed LFU h64 + lp | −13.0 / −11.4 % | −10.5 / −11.5 % | −7.7 / −3.7 % | −8.1 / −6.9 % |
+| ARC + lp | −11.2 / −7.6 % | −10.8 / −8.3 % | −10.2 / +0.2 % | −13.3 / +1.7 % |
+| Belady (clairvoyant, same prefetches, may bypass) | −36.9 / −40.7 % | −30.4 / −36.7 % | −60.5 / −59.9 % | −49.1 / −56.1 % |
+
+Findings: (1) The plain decayed-count rule is much *worse* here (+23..+56 % demand misses): with lookahead
+prefetch, a just-prefetched expert has the lowest count and is evicted by the next prefetch of the same kick
+before it is used. (2) The real loss is in our prefetch path: a lookahead kick could evict experts it itself
+predicts (resident ones, or ones it just loaded). "Lookahead-protect" pins them until the layer's next batch
+begin — that alone gives −4..−12 % demand misses, and makes decayed counts work (−8..−13 %). (3) K, LRU, ARC
+alone: nothing. (4) Belady shows ~30–60 % headroom; the paper's foresight result suggests it needs a multi-token
+predictor, not a better recency/frequency rule.
+
+**Step 2 — engine, env-gated** (`PGRN_EVICT`, default off = unchanged): `lp` = CLOCK-LRU-K + lookahead-protect
+(`pgr_runtime_prefetch_kick_list` pins resident predicted experts, `pgr_stream_prefetch_many` pins what it
+publishes; released by the next `pgr_stream_batch_begin`); `decay[:H]` = victim with the lowest exponentially
+decayed demand count (per-expert history kept across evictions, epoch = demand ubatch, ties → least recently
+used, default H = 16) plus lp. Engine traces with each mode match the replay (above). ctest -R peregrine 14/14,
+engine_sync --verify PASS.
+
+A/B, app regime (`bench/fetchwall/sweep_evict.sh` → run_arm_server.sh), one binary (05:13:20, newer than all
+sources), interleaved base/lp/decay, 25 s cooldown, greedy, decode tok/s:
+
+| regime | base | lp | decay | output hash | swap Δ |
+|---|---|---|---|---|---|
+| code, 4 GiB, 400 tok (2 reps) | 9.09, 9.14 (9.12) | 9.41, 9.33 (9.37, +2.7 %) | 9.40, 9.47 (9.44, +3.5 %) | 95b22dcdb531 all | 0 MB |
+| code, 10 GiB, 400 tok (4 reps) | 17.16, 17.69, 17.62, 17.18 (17.41) | 17.50, 17.65, 17.82, 17.66 (17.66, +1.4 %) | 17.95, 17.68, 17.86, 17.73 (17.81, +2.3 %) | 95b22dcdb531 all | 0 MB |
+| agent after 39.5k prompt, 4 GiB, 256 tok (2 reps) | 7.61, 6.72 (7.17) | — | 8.06, 7.92 (7.99, +11 %) | 3f09c079d9b5 all | 0 MB |
+
+Peak RSS unchanged (8.32 GB @4, 14.47 GB @10). TTFT unchanged (agent 251.0–251.9 s; prefill does not use
+lookahead). Paired per rep, decay beats base in 7 of 8 pairs and ties in one (10 GiB rep 2: 17.68 vs 17.69).
+Trace runs (1000 tokens, tracing on) agree: code 4 GiB base 8.75/8.77, lp 9.07, decay 9.21.
+
+**Verdict: keep `PGRN_EVICT=decay` (opt-in, default off).** Lossless (identical hashes), 0 MB swap, a consistent
+decode win of +3.5 % @4 GiB and +2.3 % @10 GiB on a short prompt and +11 % in the agent regime @4 GiB, with
+10–13 % fewer synchronous expert reads in replay. Proposed next step: make it the default (and add it to the
+app) after one review pass and a 6/8/14 GiB check; `lp` alone is a smaller, simpler fallback.

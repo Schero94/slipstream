@@ -95,6 +95,10 @@ int pgr_stream_prefetch_many(
 void pgr_stream_batch_begin(pgr_stream *s);
 /* 1 when `key` is resident right now (pure observation: no score/clock update). */
 int pgr_stream_is_resident(const pgr_stream *s, long key);
+/* Pin `key` if resident (no score/clock update) until the next batch begin; 1 if pinned. */
+int pgr_stream_pin_resident(pgr_stream *s, long key);
+/* 1 when PGRN_EVICT asks lookahead kicks to protect their predicted experts. */
+int pgr_evict_protect(void);
 pgr_stream_status pgr_stream_get_key_heat_slot(
         pgr_stream *s, long key, float heat,
         const void **data, size_t *data_size, int *hit,
@@ -113,6 +117,15 @@ size_t pgr_stream_warm_count(const pgr_stream *s);
 int pgr_stream_owns_slot_storage(const pgr_stream *s);
 const char *pgr_stream_error(const pgr_stream *s);
 void   pgr_stream_free(pgr_stream *s);
+
+/* Opt-in cache-event trace for offline eviction replay (PGRN_TRACE=<path>; off by
+ * default, one cached getenv). Lines: "C layer cap", "B layer" (pins released),
+ * "D layer expert hit" (demand access), "N layer expert path" (pinned; 1 = slot,
+ * 2 = batch), "P layer expert r" (prefetch request; r 0 resident, 1 published,
+ * 2 no evictable slot, 3 read failed), "L layer expert" (lookahead request before the
+ * residency filter). Pure observation: no policy change. */
+int  pgr_trace_on(void);
+void pgr_trace_emit(char tag, long layer, long a, long b, int flush);
 
 #ifdef __cplusplus
 }

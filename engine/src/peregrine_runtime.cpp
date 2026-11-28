@@ -418,6 +418,7 @@ pgr_runtime *pgr_runtime_new(
                 ? static_cast<unsigned char *>(pgr_arena_base(runtime->arena)) + arena_offset - partition_capacity * slot_bytes
                 : nullptr);
         runtime->partition_capacity.push_back(partition_capacity);
+        if (pgr_trace_on()) pgr_trace_emit('C', layer, (long) partition_capacity, -1, 1);
         runtime->high_water_bytes += pgr_stream_high_water_bytes(stream);
     }
     if (error && error_capacity) error[0] = '\0';
@@ -433,7 +434,10 @@ static size_t pgr_runtime_layer_index(const pgr_runtime * runtime, uint16_t laye
 
 void pgr_runtime_batch_begin(pgr_runtime * runtime, uint16_t layer) {
     const size_t index = pgr_runtime_layer_index(runtime, layer);
-    if (index != SIZE_MAX) pgr_stream_batch_begin(runtime->streams[index]);
+    if (index != SIZE_MAX) {
+        if (pgr_trace_on()) pgr_trace_emit('B', layer, -1, -1, 1);
+        pgr_stream_batch_begin(runtime->streams[index]);
+    }
 }
 
 pgr_stream_status pgr_runtime_get_slot(
@@ -772,11 +776,14 @@ void pgr_runtime_prefetch_kick_list(pgr_runtime * runtime, uint16_t layer,
     /* Only spawn a thread when something is actually cold: a fully-resident prediction
      * (the common case at high hit-rates) must cost nothing. */
     const size_t index = pgr_runtime_layer_index(runtime, layer);
+    if (pgr_trace_on()) for (int i = 0; i < n; ++i) pgr_trace_emit('L', layer, experts[i], -1, 0);
     std::vector<uint16_t> cold;
     cold.reserve((size_t) n);
+    const bool protect = pgr_evict_protect() != 0;   /* PGRN_EVICT (default off) */
     for (int i = 0; i < n; ++i) {
         const long key = static_cast<long>((static_cast<unsigned long>(layer) << 16) | experts[i]);
         if (!pgr_stream_is_resident(runtime->streams[index], key)) cold.push_back(experts[i]);
+        else if (protect) pgr_stream_pin_resident(runtime->streams[index], key);
     }
     if (cold.empty()) return;
     runtime->prefetch_pending = true;
