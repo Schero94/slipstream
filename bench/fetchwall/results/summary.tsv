@@ -254,3 +254,23 @@ e4 fresh peak_rss_mb=9775 swap_delta_mb=0
 lmprog lmprog peak_rss_mb=9452 swap_delta_mb=0
 20261128-001838	lmcancelpar	label=d1	cancel_snapshot_A={'total': 20489, 'cache': 0, 'processed': 9420, 'time_ms': 27195}	B_at_cancel={'total': 11892, 'cache': 0, 'processed': 0, 'time_ms': 0}	B_concurrent_s=72.6	B_concurrent_out=820381c85335	B_concurrent_err=None	B_alone_s=47.8	B_alone_out=820381c85335	same=True
 lmcancelpar d1 peak_rss_mb=9766 swap_delta_mb=0
+20261128-002759	srv	label=la-top8	cache=4	decode_tps=10.27	prompt_n=57	ttft_s=2.7	prefill_tps=21.4	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8237	lm_decodes=0	out=a5f293dad8d4	env=
+20261128-002953	srv	label=la-top6	cache=4	decode_tps=9.70	prompt_n=57	ttft_s=2.6	prefill_tps=21.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8233	lm_decodes=0	out=a5f293dad8d4	env=PGRN_LOOKAHEAD_TOPN=6
+20261128-003146	srv	label=la-top8	cache=4	decode_tps=10.32	prompt_n=57	ttft_s=2.6	prefill_tps=21.5	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8234	lm_decodes=0	out=a5f293dad8d4	env=
+20261128-003337	srv	label=la-top6	cache=4	decode_tps=9.62	prompt_n=57	ttft_s=2.6	prefill_tps=21.6	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8235	lm_decodes=0	out=a5f293dad8d4	env=PGRN_LOOKAHEAD_TOPN=6
+20261128-003529	srv	label=la-top8	cache=4	decode_tps=10.31	prompt_n=57	ttft_s=2.6	prefill_tps=21.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8236	lm_decodes=0	out=a5f293dad8d4	env=
+20261128-003720	srv	label=la-top6	cache=4	decode_tps=9.62	prompt_n=57	ttft_s=2.6	prefill_tps=21.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8236	lm_decodes=0	out=a5f293dad8d4	env=PGRN_LOOKAHEAD_TOPN=6
+20261128-003913	srv	label=la-top8	cache=10	decode_tps=18.78	prompt_n=57	ttft_s=0.8	prefill_tps=71.9	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14381	lm_decodes=0	out=a5f293dad8d4	env=
+20261128-004054	srv	label=la-top6	cache=10	decode_tps=16.99	prompt_n=57	ttft_s=0.9	prefill_tps=66.9	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=a5f293dad8d4	env=PGRN_LOOKAHEAD_TOPN=6
+20261128-004231	srv	label=la-top8	cache=10	decode_tps=18.13	prompt_n=57	ttft_s=0.8	prefill_tps=71.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14379	lm_decodes=0	out=a5f293dad8d4	env=
+20261128-004409	srv	label=la-top6	cache=10	decode_tps=17.00	prompt_n=57	ttft_s=0.8	prefill_tps=72.4	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14379	lm_decodes=0	out=a5f293dad8d4	env=PGRN_LOOKAHEAD_TOPN=6
+20261128-004546	srv	label=la-top8	cache=10	decode_tps=18.19	prompt_n=57	ttft_s=0.8	prefill_tps=72.2	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14379	lm_decodes=0	out=a5f293dad8d4	env=
+20261128-004723	srv	label=la-top6	cache=10	decode_tps=16.83	prompt_n=57	ttft_s=0.9	prefill_tps=66.1	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=14380	lm_decodes=0	out=a5f293dad8d4	env=PGRN_LOOKAHEAD_TOPN=6
+20261128-004901	srv	label=hot-off	cache=4	decode_tps=7.85	prompt_n=39515	ttft_s=134.5	prefill_tps=293.9	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=9452	lm_decodes=1	out=3f09c079d9b5	env=PGRN_LAYER_MAJOR=1
+20261128-005305	srv	label=hot-on	cache=4	decode_tps=7.76	prompt_n=39515	ttft_s=134.5	prefill_tps=293.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=9450	lm_decodes=1	out=3f09c079d9b5	env=PGRN_LAYER_MAJOR=1 PGRN_LM_HOT_ORDER=1
+20261128-005711	srv	label=hot-off	cache=4	decode_tps=7.70	prompt_n=39515	ttft_s=134.7	prefill_tps=293.4	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=9451	lm_decodes=1	out=3f09c079d9b5	env=PGRN_LAYER_MAJOR=1
+20261128-010118	srv	label=hot-on	cache=4	decode_tps=7.74	prompt_n=39515	ttft_s=134.6	prefill_tps=293.6	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=9450	lm_decodes=1	out=3f09c079d9b5	env=PGRN_LAYER_MAJOR=1 PGRN_LM_HOT_ORDER=1
+20261128-010524	srv	label=hot-off	cache=10	decode_tps=12.83	prompt_n=39515	ttft_s=133.6	prefill_tps=295.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=15595	lm_decodes=1	out=3f09c079d9b5	env=PGRN_LAYER_MAJOR=1
+20261128-010917	srv	label=hot-on	cache=10	decode_tps=12.97	prompt_n=39515	ttft_s=133.8	prefill_tps=295.4	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=15595	lm_decodes=1	out=3f09c079d9b5	env=PGRN_LAYER_MAJOR=1 PGRN_LM_HOT_ORDER=1
+20261128-011310	srv	label=hot-off	cache=10	decode_tps=12.75	prompt_n=39515	ttft_s=133.7	prefill_tps=295.6	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=15594	lm_decodes=1	out=3f09c079d9b5	env=PGRN_LAYER_MAJOR=1
+20261128-011703	srv	label=hot-on	cache=10	decode_tps=12.83	prompt_n=39515	ttft_s=134.1	prefill_tps=294.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=15596	lm_decodes=1	out=3f09c079d9b5	env=PGRN_LAYER_MAJOR=1 PGRN_LM_HOT_ORDER=1

@@ -3854,3 +3854,45 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   only. B then completed: 72.6 s, output 820381c85335, no error — B alone afterwards (cache_prompt false):
   47.8 s, output 820381c85335 → identical. (Before the fix the ret-2 branch released every processing slot,
   so B would have got "Decode aborted."; not re-run on the old binary.) Peak RSS 9766 MB, swap Δ 0 MB.
+
+## Decode experiments: hot-order staging (A) and lookahead top-6 (B) — both REJECTED, code removed — 2026-11-28
+
+- Binary built 00:27:17 (newer than every changed source, 00:27:16); ctest -R peregrine 14/14 with the flags
+  off and on. Both flags were env-gated and off by default; after the runs the code was reverted (tree rebuilt
+  01:21:38, ctest 14/14, engine_sync --verify PASS, engine/ + patch unchanged). Qwen3.6-35B-A3B Q4_K_XL, GGUF and
+  PGRN from ~/Modelle, M3 Pro 36 GB. App regime via `bench/fetchwall/run_arm_server.sh`: llama-server, -fa on,
+  compact slots, io 8, lookahead on (default m=0), MTP off (as the app does for streamed runs with lookahead),
+  greedy, interleaved arms, 25 s cooldown. Raw lines in bench/fetchwall/results/summary.tsv.
+- **A — `PGRN_LM_HOT_ORDER=1`** (`bench/fetchwall/sweep_hot_order.sh`). Change: when one stage call holds more
+  distinct experts than the layer's cache partition (a prefill ubatch), `pgr_stage_selected` fetched them in
+  ascending use-count order (stable, ties by first-seen) so the most-used were inserted last; in the layer-major
+  held path the repeats of newly queued ids were kept so the counts survived. Upload order does not change the
+  id-indexed scratch → lossless. Regime: prompt_30k.txt (39,515 tokens), PGRN_LAYER_MAJOR=1, -b 40960 -ub 2048,
+  -c 40960, --cache-ram 0, no warm-up, decode_tps = the first 256 tokens after the prompt. The server still splits
+  the last 2,048 + 4 tokens off as normal ubatches (checkpoints), so the last 2,048-token ubatch (the one whose
+  order sets the cache state) is a hot-order call when the flag is on.
+
+  | cache | off (rep 1, 2) | on (rep 1, 2) | mean off → on | TTFT | out |
+  |---|---|---|---|---|---|
+  | 4 GiB | 7.85, 7.70 | 7.76, 7.74 | 7.78 → 7.75 (−0.4 %) | 134.5–134.7 s | 3f09c079d9b5 all |
+  | 10 GiB | 12.83, 12.75 | 12.97, 12.83 | 12.79 → 12.90 (+0.9 %) | 133.6–134.1 s | 3f09c079d9b5 all |
+
+  Swap Δ 0 MB in every arm; peak RSS 9.45 GB (4 GiB) / 15.6 GB (10 GiB). Cumulative PGRN counters (prefill + decode,
+  4 GiB rep 1): off hits 72,663 / misses 56,779, on 72,505 / 56,912 — no residency gain visible.
+  Verdict: neutral, within noise → rejected. The gap between decode after a 40k prompt (7.8 / 12.8 tok/s) and after
+  a short prompt (10.3 / 18.4) is not explained by what the cache holds when decode starts — consistent with
+  E3 (long-context attention cost) and with the cache re-converging within a few tokens.
+- **B — `PGRN_LOOKAHEAD_TOPN=6`** (`bench/fetchwall/sweep_la_topn.sh`). Change: the lookahead graph node took
+  top-n (n=6) of the next layer's predicted routing instead of top-(k+m)=8. prompt_code.txt, NTOK 256, 3 reps.
+
+  | cache | top-8 (default) | top-6 | mean | out |
+  |---|---|---|---|---|
+  | 4 GiB | 10.27, 10.32, 10.31 | 9.70, 9.62, 9.62 | 10.30 → 9.65 (**−6.3 %**) | a5f293dad8d4 all |
+  | 10 GiB | 18.78, 18.13, 18.19 | 16.99, 17.00, 16.83 | 18.37 → 16.94 (**−7.8 %**) | a5f293dad8d4 all |
+
+  Swap Δ 0 MB; peak RSS 8.2 / 14.4 GB. Verdict: consistent loss at both caches → rejected. With top-8 routing all
+  eight predicted ranks are used every token; dropping ranks 7–8 from the prefetch only moves their misses onto
+  the critical path. Colibrì's +3–5 % came from a 512 MiB cache (303 slots) where the extra reads evict useful
+  experts; at 4–10 GiB that pressure does not exist.
+- Kept: `run_arm_server.sh` WARMUP=0 option (skips the 16-token warm-up request, e.g. for a 40k prompt) and the
+  two sweep scripts (they need the reverted flags to reproduce; the diffs are described above).

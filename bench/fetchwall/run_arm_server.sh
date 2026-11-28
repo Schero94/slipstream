@@ -28,7 +28,7 @@ sf=os.environ.get("SCHEMA_FILE")
 if sf: r["json_schema"]=json.load(open(sf))
 else: r["ignore_eos"]=True
 print(json.dumps(r))' "${PROMPT_FILE:-$HERE/prompt_code.txt}" "$1"; }
-curl -s "http://127.0.0.1:$PORT/completion" -d "$(req 16)" >/dev/null   # warm-up
+[ "${WARMUP:-1}" = 0 ] || curl -s "http://127.0.0.1:$PORT/completion" -d "$(req 16)" >/dev/null   # warm-up (WARMUP=0 skips it, e.g. for a 40k prompt)
 R=$(curl -s "http://127.0.0.1:$PORT/completion" -d "$(req "$NTOK")")
 kill $PID; wait $PID 2>/dev/null
 S1=$(swap_mb)

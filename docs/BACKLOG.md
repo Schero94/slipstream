@@ -20,7 +20,7 @@ open score. Add every new idea here with a one-line hypothesis.
 | — | Cold insertion of prefill reads (Colibrì #2912) | E3 2026-11-26: neutral, code removed | | | | dropped |
 | — | Whole-next-layer prefetch during prefill (Colibrì #2850) | moot: with layer-major, fetch is ~6 s of ~140 s | | | | dropped |
 | — | Cross-conversation prefix reuse (in RAM) | E4 2026-11-27: already works via llama-server user-start checkpoints + --cache-ram: new conversation 190 s → 2.1 s | | | | done |
-| 4.0 | Lookahead top-6 instead of top-8 (Colibrì #2300) | ranks 7–8 often wasted reads; decode +3–5 % on code | 2 | 4 | 2 | open |
+| — | Lookahead top-6 instead of top-8 (Colibrì #2300) | 2026-11-28: −6.3 % @4 GiB, −7.8 % @10 GiB (code prompt, app regime); ranks 7–8 are routed every token, so skipping them only moves their reads onto the critical path; code removed | | | | dropped |
 | 3.0 | MTP single draft, confidence ≥ 0.6 (Colibrì #2302) | narrow verify keeps MTP profitable while streaming; code +7–11 % | 3 | 3 | 3 | open |
 | 2.7 | Re-check OS page cache vs F_NOCACHE with bounded 10 GiB cache (Colibrì relies on page cache) | maybe faster without swap now; must stay 0 MB swap | 3 | 2 | 2.2 | open |
 | — | New MoE models scout | done 2026-11-25; see items above (LFM2.5, Qwen3-Coder, Mellum, type whitelist, generalization) | | | | done |
@@ -50,7 +50,7 @@ open score. Add every new idea here with a one-line hypothesis.
 | 10.0 | Op-level profile of layer-major prefill compute (~130 s) | know the DeltaNet / attention / expert split before any compute work | 5 | 4 | 2 | open |
 | 8.0 | Per-layer progress + cancel for layer-major prefill (Colibrì #2056) | progress moves during a 150 s prompt, cancel works; prerequisite for layer-major default-on | 4 | 4 | 2 | doing |
 | 6.7 | Prompt states survive app/server restart (Colibrì #2781/#3083; --slot-save-path) | first request after restart 190 s → < 3 s; app saves slot before stop, restores after start | 5 | 4 | 3 | open |
-| 6.0 | Stage experts in ascending use-count order in layer-major (Colibrì #1769 idea) | cache after a long prompt holds the hottest experts; decode right after prompt +10 %+, lossless | 3 | 4 | 2 | open |
+| — | Stage experts in ascending use-count order in layer-major (Colibrì #1769 idea) | 2026-11-28: neutral (−0.4 % @4 GiB, +0.9 % @10 GiB on the first 256 tokens after the 39.5k prompt); the slowdown after a long prompt is not cache content (hit counters unchanged); code removed | | | | dropped |
 | 5.3 | Last layer computes attention/output only for the last token (qwen35moe.cpp) | first turn −2..4 s, lossless | 2 | 4 | 1.5 | open |
 | 4.5 | Decayed-frequency eviction (arXiv 2611.15842), offline trace replay first | 12–15 % fewer transfers than LRU-K | 3 | 3 | 2 | open |
 | 4.5 | Turbo: treat lookahead-predicted experts as resident (Colibrì; lossy opt-in) | decode +6–11 % for +0.2 % NLL | 3 | 3 | 2 | open |
