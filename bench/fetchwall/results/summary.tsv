@@ -361,3 +361,5 @@ lmabort p2new peak_rss_mb=9334 swap_delta_mb=0
 20261128-041143	e6	label=gate051	C1_prompt_n=37407	C1_ttft_s=133.9	C2_prompt_n=26	C2_cache_n=4406	C2_ttft_s=1.6	C3_prompt_n=4432	C3_cache_n=0	C3_ttft_s=22.2	C1_out=fc14398b032c	C2_out=86b8ff31ee95	C3_out=86b8ff31ee95
 e6 gate051 swap_delta_mb=0
 20261128-041550	e5	label=gate051	S1_prompt_n=39517	S1_ttft_s=136.1	S1_out=a9f8c4863784	save_wall_s=0.60	save_ms=600	saved_tokens=39564	file_mb=1026	restore_wall_s=0.19	restored_tokens=39564	S2_prompt_n=33	S2_cache_n=39476	S2_ttft_s=2.2	S2_out=c4062b92a557	swap_delta_mb=0
+20261128-042420	srv	label=bundle051-default-layermajor	cache=4	decode_tps=10.40	prompt_n=57	ttft_s=2.6	prefill_tps=21.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8970	lm_decodes=0	out=38b5b06864f1	env=PGRN_LAYER_MAJOR=1
+20261128-042612	srv	label=bundle051-layermajor-off	cache=4	decode_tps=10.54	prompt_n=57	ttft_s=2.6	prefill_tps=21.8	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=8956	lm_decodes=0	out=38b5b06864f1	env=

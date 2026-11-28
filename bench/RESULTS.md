@@ -3996,3 +3996,26 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
 - E6: C1 37,407 tokens 133.9 s · C2 new conversation 26 tokens 1.6 s · C3 (date changed) 22.2 s ·
   outputs fc14398b032c / 86b8ff31ee95 (same as pre-port runs). E5: S1 136.1 s, save 0.60 s,
   restore 0.19 s, S2 2.2 s, hash c4062b92a557. Swap 0 MB. tool_choice smoke identical to 0.5.0.
+
+## 0.5.1 release artifacts — bundle verification — 2026-11-28
+
+- Engine: build-static llama-server 04:09:37 > newest source 04:09:32 (src/tools/common/include/ggml/src,
+  tools/server/server-common.cpp); pgrn-convert relinked 04:21:17 (was 04:02:05, older than that source;
+  object + binary removed and rebuilt, sha unchanged). Working tree = pin 8e23278c7c36 + engine/ +
+  slipstream-seams.patch (engine_sync --verify PASS, no diff in engine/ or patches/). llama-server sha256
+  583bf6be82c0…, pgrn-convert ed0223ee7aeb…; otool -L system frameworks/usr/lib only (CoreML/Metal/Accelerate/
+  Foundation, same set as 0.5.0). ctest -R peregrine 14/14 on this build. The 0.5.1 gate (04:11–04:15) ran on this
+  same llama-server file.
+- Bundled-engine smoke from the mounted DMG (run_arm_server.sh, BIN=/Volumes/Slipstream/…/llama-server,
+  SPEC_ARGS=" ", CTX=40960, --cache-ram 2048 -fa on --jinja --no-warmup --metrics, 4 GiB, prompt_code.txt,
+  160 tokens greedy, Qwen3.6-35B-A3B Q4 from ~/Modelle):
+  default (PGRN_LAYER_MAJOR=1, -b 40960 -ub 2048) 10.40 tok/s · layer-major off (-ub 4096) 10.54 tok/s ·
+  both out=38b5b06864f1 (= bundle050/bundle041) · swap Δ 0 MB · peak RSS 8.97 GB. lm_decodes 0 (57-token prompt).
+  Single rep per arm (smoke, not an A/B).
+- DMG: hdiutil verify VALID; mounted codesign --deep --strict OK (adhoc,runtime); 0.5.1; 476 resource files;
+  16/16 runtime components; 0 __pycache__/.pyc; 0 Ollama; 5 Mach-O all arm64. MLX parts staged from the
+  v0.5.0 release zip (sha afbcf10b… verified), overlays applied, pycache removed.
+- App launch from DMG + osascript quit: quit in 1 s, ports 8080/8081 free, no llama-server left.
+- Zip (ditto from the mounted app): unpacks byte-identical to the DMG app (diff -r), codesign OK.
+- Tests: workspace 183/183, Tauri 107/107, Python 44/44 (after updating the stale string contract in
+  test_llama_tool_choice_patch.py to the post-port tool_choice seam), UI contracts 7/7, headless assets PASS.

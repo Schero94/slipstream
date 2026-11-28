@@ -36,4 +36,39 @@ Answers are identical to before (same output hashes in every check).
 
 ## Validation
 
-VALIDATION_PLACEHOLDER
+- Engine: 14/14 peregrine tests on the shipped build. The shipped llama-server was built at
+  04:09:37, after the last source change (04:09:32), and pgrn-convert was relinked at 04:21:17;
+  both only use macOS system libraries. A fresh `apply.sh` reproduces the engine source exactly
+  (upstream `8e23278c7c36` + Slipstream files + patch). The release gate in `bench/RESULTS.md`
+  ran on this same llama-server: a new agent conversation after a side request starts in 1.6 s,
+  a restart restores the saved context in 0.19 s, and the answers match the earlier runs
+  (hashes `86b8ff31ee95` / `c4062b92a557`). Forced tool calls pick the requested tool again.
+- 183/183 Rust workspace tests, 107/107 Tauri tests, 44/44 Python tests, 7/7 UI contracts,
+  headless asset check PASS.
+- DMG checksum valid. The mounted app passes `codesign --verify --deep --strict` (ad-hoc
+  signature, not notarized) and reports 0.5.1. It contains 476 resource files, all 16 runtime
+  components, no Python bytecode cache and no Ollama payload. All five programs inside are
+  arm64 (Apple Silicon), and llama-server only uses macOS system libraries.
+- We started the bundled llama-server straight from the mounted DMG with the app's flags
+  (4 GiB cache) and gave it the short reference prompt. With Fast prompt reading (the default)
+  it writes 10.4 tokens/s, and 10.5 tokens/s with it switched off. Both give the reference
+  output (hash `38b5b06864f1`, the same as 0.5.0 and 0.4.1), with 0 MB swap. The app opens
+  from the DMG and quits cleanly: ports 8080/8081 stay free and no server process is left
+  running.
+- The zip unpacks to an app that is byte-identical to the one in the DMG, and its signature
+  checks out.
+
+## Release artifacts
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `Slipstream_0.5.1_aarch64.dmg` | 70,103,645 | `af907c5feffc9d3b835bea2d459aafd95efbfea0d19a3ffd4f00490f999de1a8` |
+| `Slipstream_0.5.1_aarch64.zip` | 68,563,585 | `cf9bc9bf00a2258a2c25580ce3a2d12900c377f54ca28b72374ec2259108c709` |
+| `slipstream-node_0.5.1_macos_aarch64.tar.gz` | 5,448,723 | `7dbf50fcb1f184d6a8b30631431ffd2383050e8a1a06315fedb7bcbff69af3f8` |
+
+The node archive reports 0.5.1. It contains the arm64 binary, launchd/systemd/Docker templates,
+the deploy README and the community mesh guide, laid out exactly like 0.5.0. The Docker image
+has not been rebuilt.
+
+The app is ad-hoc signed and **not notarized**. The first time you open it, right-click the app
+and choose Open, or run `xattr -dr com.apple.quarantine Slipstream.app`.
