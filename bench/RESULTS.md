@@ -3896,3 +3896,12 @@ headless-asset checks pass; browser click walk 0 failures against `app/dist`.
   experts; at 4–10 GiB that pressure does not exist.
 - Kept: `run_arm_server.sh` WARMUP=0 option (skips the 16-token warm-up request, e.g. for a 40k prompt) and the
   two sweep scripts (they need the reverted flags to reproduce; the diffs are described above).
+
+## 0.5.0 release gate — PASS — 2026-11-28
+
+- Final binary 01:21:38 (newer than all sources; after the decode-experiment revert), app default
+  regime incl. Fast prompt reading (PGRN_LAYER_MAJOR=1, -b 40960, ub 2048), 4 GiB, 0 MB swap.
+- E4: S1 39,517 tokens 137.1 s · new conversation S2 33 tokens read, 2.0 s · hashes a9f8c4863784 /
+  c4062b92a557 (same as every earlier arm and the fresh control). Peak RSS 10.5 GB.
+- E5: S1 136.3 s · save 0.93 s (39,564 tokens, 1,026 MB) · restart · restore 0.31 s · S2 2.3 s,
+  hash c4062b92a557.

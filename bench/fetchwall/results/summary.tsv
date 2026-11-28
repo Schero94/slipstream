@@ -274,3 +274,6 @@ lmcancelpar d1 peak_rss_mb=9766 swap_delta_mb=0
 20261128-010917	srv	label=hot-on	cache=10	decode_tps=12.97	prompt_n=39515	ttft_s=133.8	prefill_tps=295.4	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=15595	lm_decodes=1	out=3f09c079d9b5	env=PGRN_LAYER_MAJOR=1 PGRN_LM_HOT_ORDER=1
 20261128-011310	srv	label=hot-off	cache=10	decode_tps=12.75	prompt_n=39515	ttft_s=133.7	prefill_tps=295.6	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=15594	lm_decodes=1	out=3f09c079d9b5	env=PGRN_LAYER_MAJOR=1
 20261128-011703	srv	label=hot-on	cache=10	decode_tps=12.83	prompt_n=39515	ttft_s=134.1	prefill_tps=294.7	draft_acc=None/None	swap_delta_mb=0	peak_rss_mb=15596	lm_decodes=1	out=3f09c079d9b5	env=PGRN_LAYER_MAJOR=1 PGRN_LM_HOT_ORDER=1
+20261128-012308	e4	label=gate050	S1_prompt_n=39517	S1_ttft_s=137.1	B_prompt_n=23	S2_prompt_n=33	S2_cache_n=39476	S2_ttft_s=2.0	S1_out=a9f8c4863784	S2_out=c4062b92a557
+e4 gate050 peak_rss_mb=10470 swap_delta_mb=0
+20261128-012637	e5	label=gate050	S1_prompt_n=39517	S1_ttft_s=136.3	S1_out=a9f8c4863784	save_wall_s=0.93	save_ms=925	saved_tokens=39564	file_mb=1026	restore_wall_s=0.31	restored_tokens=39564	S2_prompt_n=33	S2_cache_n=39476	S2_ttft_s=2.3	S2_out=c4062b92a557	swap_delta_mb=0
