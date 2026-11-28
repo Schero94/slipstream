@@ -1,6 +1,7 @@
 // `p2p-node` — thin Slipstream P2P CLI (standalone; does not touch Tauri release paths).
 //
-// Commands: `keygen`, `serve`/`start`, `peers`, `send-job`/`job`, `credits`.
+// Commands: `keygen`, `serve`/`start`, `peers`, `send-job`/`job`, `credits`,
+// v0.6 "Use your other Mac": `share`, `use`, `peer-id` (NodeMode::Paired).
 //
 // Engine selection (default **mock**):
 // - `--engine mock|auto|mlx|llama` or env `SLIPSTREAM_P2P_ENGINE`
@@ -179,6 +180,62 @@ enum Commands {
         #[arg(long)]
         job_id: Option<String>,
     },
+    /// Share this Mac's running model with your own paired Macs (v0.6, headless).
+    ///
+    /// Forwards only the allowlisted OpenAI endpoints to the local llama-server (never
+    /// `POST /slots/*` or `POST /props`), over an encrypted QUIC connection, and only for
+    /// the peers named with --allow-peer (M1; pairing codes come in M2). Never spawns a
+    /// model and never donates capacity to the community mesh.
+    Share {
+        /// QUIC listen multiaddress.
+        #[arg(long, default_value = "/ip4/0.0.0.0/udp/9003/quic-v1")]
+        listen: Multiaddr,
+        /// The local llama-server to forward to (loopback only).
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
+        forward: String,
+        /// Node identity directory (node.key). Same default as the app.
+        #[arg(long, env = "SLIPSTREAM_P2P_DIR")]
+        data_dir: Option<PathBuf>,
+        /// PeerId allowed to use this Mac (repeat or comma-separate). Required.
+        #[arg(long = "allow-peer", value_delimiter = ',', required = true)]
+        allow_peer: Vec<libp2p::PeerId>,
+        /// Name shown to paired Macs (default: this Mac's ComputerName).
+        #[arg(long)]
+        name: Option<String>,
+        /// Write the pinned dial address (`.../p2p/<id>`) here once listening.
+        #[arg(long)]
+        addr_file: Option<PathBuf>,
+        /// QUIC idle timeout in ms (peer-loss detection; default 8000).
+        #[arg(long)]
+        idle_timeout_ms: Option<u64>,
+        #[arg(long, default_value_t = false)]
+        verbose: bool,
+    },
+    /// Use another Mac's model: serve it to editors on this Mac at --http (v0.6, headless).
+    Use {
+        /// Pinned share address printed by `share`: `/ip4/<ip>/udp/9003/quic-v1/p2p/<PeerId>`.
+        #[arg(long)]
+        peer: Multiaddr,
+        /// Local editor address (loopback). Editors keep `http://127.0.0.1:<port>/v1`.
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        http: SocketAddr,
+        /// Node identity directory (node.key). Same default as the app.
+        #[arg(long, env = "SLIPSTREAM_P2P_DIR")]
+        data_dir: Option<PathBuf>,
+        /// QUIC idle timeout in ms (peer-loss detection; default 8000).
+        #[arg(long)]
+        idle_timeout_ms: Option<u64>,
+        /// Measurement only: do not keep a pre-opened spare stream.
+        #[arg(long, default_value_t = false, hide = true)]
+        no_spare_stream: bool,
+        #[arg(long, default_value_t = false)]
+        verbose: bool,
+    },
+    /// Print this node's PeerId (give it to the sharing Mac's --allow-peer).
+    PeerId {
+        #[arg(long, env = "SLIPSTREAM_P2P_DIR")]
+        data_dir: Option<PathBuf>,
+    },
     /// Show credit balances from a ledger file.
     Credits {
         /// SQLite ledger path used by the worker.
@@ -216,6 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             dry_run_engine,
             spawn_engine,
         } => {
+            refuse_paired_for_job_api(mode)?;
             let choice = resolve_serve_engine(engine.as_deref(), real_engine, mock)?;
             if dry_run_engine {
                 cmd_dry_run_engine(choice)?;
@@ -244,6 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ledger,
             spawn_engine,
         } => {
+            refuse_paired_for_job_api(mode)?;
             let choice = EngineChoice::parse(&engine)?;
             cmd_mesh_serve(
                 listen,
@@ -307,6 +366,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             account,
             job_id,
         } => cmd_credits(ledger, account, job_id)?,
+        Commands::Share {
+            listen,
+            forward,
+            data_dir,
+            allow_peer,
+            name,
+            addr_file,
+            idle_timeout_ms,
+            verbose,
+        } => {
+            cmd_share(
+                listen,
+                forward,
+                data_dir,
+                allow_peer,
+                name,
+                addr_file,
+                idle_timeout_ms,
+                verbose,
+            )
+            .await?
+        }
+        Commands::Use {
+            peer,
+            http,
+            data_dir,
+            idle_timeout_ms,
+            no_spare_stream,
+            verbose,
+        } => cmd_use(peer, http, data_dir, idle_timeout_ms, !no_spare_stream, verbose).await?,
+        Commands::PeerId { data_dir } => {
+            let identity = p2p_forward::load_or_create_identity(&resolve_data_dir(data_dir))?;
+            println!("{}", identity.public().to_peer_id());
+        }
     }
     Ok(())
 }
@@ -606,5 +699,115 @@ fn cmd_credits(
     } else if job_id.is_none() {
         println!("pass --account <node_id_hex> and/or --job-id <id>");
     }
+    Ok(())
+}
+
+/// `--mode paired` belongs to `share` / `use` only (the job API has no allowlist).
+fn refuse_paired_for_job_api(mode: NodeMode) -> Result<(), Box<dyn std::error::Error>> {
+    if mode == NodeMode::Paired {
+        return Err("--mode paired is only for `slipstream-node share` / `use` (your own Macs)".into());
+    }
+    Ok(())
+}
+
+/// `--data-dir` / `SLIPSTREAM_P2P_DIR`, else the app's directory.
+fn resolve_data_dir(data_dir: Option<PathBuf>) -> PathBuf {
+    data_dir.unwrap_or_else(|| match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home).join("Library/Application Support/Slipstream/p2p"),
+        None => PathBuf::from("/tmp/slipstream-p2p"),
+    })
+}
+
+fn paired_config(idle_timeout_ms: Option<u64>) -> p2p_libp2p::paired::PairedConfig {
+    let mut cfg = p2p_libp2p::paired::PairedConfig::default();
+    if let Some(ms) = idle_timeout_ms {
+        cfg.idle_timeout = std::time::Duration::from_millis(ms.max(1000));
+    }
+    cfg
+}
+
+async fn wait_for_ctrl_c() {
+    // Runs until Ctrl-C / SIGTERM (default signal action ends the process).
+    std::future::pending::<()>().await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_share(
+    listen: Multiaddr,
+    forward: String,
+    data_dir: Option<PathBuf>,
+    allow_peer: Vec<libp2p::PeerId>,
+    name: Option<String>,
+    addr_file: Option<PathBuf>,
+    idle_timeout_ms: Option<u64>,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let policy = NodePolicy::for_mode(NodeMode::Paired);
+    policy.validate()?;
+    let upstream = p2p_forward::parse_upstream(&forward)?;
+    let dir = resolve_data_dir(data_dir);
+    let identity = p2p_forward::load_or_create_identity(&dir)?;
+    let handle = p2p_forward::start_share(
+        identity,
+        p2p_forward::ShareConfig {
+            listen,
+            upstream,
+            allow: allow_peer,
+            paired: paired_config(idle_timeout_ms),
+            admission: p2p_forward::admission::AdmissionLimits::default(),
+            name: name.unwrap_or_else(p2p_forward::status::default_name),
+            verbose,
+        },
+    )
+    .await?;
+    let dial = handle.dial_addr();
+    println!("sharing mode={} peer_id={} dial={dial}", policy.mode, handle.peer_id);
+    println!("on the other Mac: slipstream-node use --peer {dial}");
+    if let Some(path) = addr_file {
+        std::fs::write(&path, format!("{dial}\n"))?;
+    }
+    wait_for_ctrl_c().await;
+    Ok(())
+}
+
+async fn cmd_use(
+    peer: Multiaddr,
+    http: SocketAddr,
+    data_dir: Option<PathBuf>,
+    idle_timeout_ms: Option<u64>,
+    spare_stream: bool,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let policy = NodePolicy::for_mode(NodeMode::Paired);
+    policy.validate()?;
+    let dir = resolve_data_dir(data_dir);
+    let identity = p2p_forward::load_or_create_identity(&dir)?;
+    let handle = p2p_forward::start_use(
+        identity,
+        p2p_forward::UseConfig {
+            peer,
+            bind: http,
+            paired: paired_config(idle_timeout_ms),
+            spare_stream,
+            verbose,
+        },
+    )
+    .await?;
+    match handle.status().await {
+        Ok(p2p_forward::status::StatusReply::Status(s)) => println!(
+            "using \"{}\" (Slipstream {}) model={} running={} n_ctx={} busy={} on_battery={}",
+            s.name,
+            s.app_version,
+            s.model_id.as_deref().unwrap_or("-"),
+            s.model_running,
+            s.n_ctx.map(|n| n.to_string()).unwrap_or_else(|| "-".into()),
+            s.busy,
+            s.on_battery
+        ),
+        Ok(other) => println!("status: {other:?}"),
+        Err(e) => eprintln!("status unavailable: {e}"),
+    }
+    println!("editors: http://{}/v1", handle.bind);
+    wait_for_ctrl_c().await;
     Ok(())
 }

@@ -1,0 +1,85 @@
+# M1 forwarder 20261128-133844  host=Mac15,6 27.0.1  commit=71435c2+dirty  RTT_MS=8
+## AEAD per chunk (SealedStream framing on ring 0.17, release)
+aead chunk=64B seal_ns=186 open_ns=187 sum_ns=373 (0.34 GB/s seal)
+aead chunk=200B seal_ns=218 open_ns=324 sum_ns=542 (0.92 GB/s seal)
+aead chunk=512B seal_ns=399 open_ns=499 sum_ns=898 (1.28 GB/s seal)
+aead chunk=1024B seal_ns=680 open_ns=840 sum_ns=1520 (1.51 GB/s seal)
+aead chunk=4096B seal_ns=2240 open_ns=2437 sum_ns=4678 (1.83 GB/s seal)
+aead chunk=16384B seal_ns=8024 open_ns=8712 sum_ns=16736 (2.04 GB/s seal)
+raw ring 0.17 ChaCha20-Poly1305 (SealedStream's backend since M1; the lines above include its framing)
+ring chunk=64B seal_ns=176 open_ns=172 sum_ns=348 (0.36 GB/s seal)
+ring chunk=200B seal_ns=206 open_ns=295 sum_ns=501 (0.97 GB/s seal)
+ring chunk=512B seal_ns=368 open_ns=439 sum_ns=806 (1.39 GB/s seal)
+ring chunk=1024B seal_ns=633 open_ns=692 sum_ns=1325 (1.62 GB/s seal)
+ring chunk=4096B seal_ns=2167 open_ns=2126 sum_ns=4293 (1.89 GB/s seal)
+ring chunk=16384B seal_ns=8016 open_ns=8111 sum_ns=16127 (2.04 GB/s seal)
+## Mock upstream (forward-spike mock-llama), shaped RTT 8 ms
+### TTFT back-to-back: 32-token SSE, N=300/arm (request start incl. TCP connect -> first body byte)
+arm=direct n=300 ttft_us p50=781 p95=1204 p99=1301 | total_ms p50=1.04 | event_rate mean=131476.5/s median=126649.2/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+arm=fwd n=300 ttft_us p50=13031 p95=14551 p99=15008 | total_ms p50=13.37 | event_rate mean=356493.7/s median=181212.5/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +12250 us, p95 +13347 us (difference of percentiles); paired per-iteration delta p50 +12200 us, p95 +13627 us; event_rate +171.15 %
+arm=fwd_nospare n=300 ttft_us p50=25654 p95=27926 p99=28868 | total_ms p50=26.53 | event_rate mean=175360.8/s median=122082.6/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +24873 us, p95 +26722 us (difference of percentiles); paired per-iteration delta p50 +25013 us, p95 +27139 us; event_rate +33.38 %
+### TTFT after 1 s idle (editor think time), N=60/arm
+arm=direct n=60 ttft_us p50=1447 p95=1700 p99=1736 | total_ms p50=1.97 | event_rate mean=80234.3/s median=73639.6/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+arm=fwd n=60 ttft_us p50=14601 p95=16234 p99=16847 | total_ms p50=15.27 | event_rate mean=222290.3/s median=94302.7/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +13154 us, p95 +14534 us (difference of percentiles); paired per-iteration delta p50 +13452 us, p95 +15021 us; event_rate +177.05 %
+arm=fwd_nospare n=60 ttft_us p50=28704 p95=31091 p99=31328 | total_ms p50=29.53 | event_rate mean=262636.4/s median=128971.1/s | events=35 body_len=7553 body_sha={"d3a535d7b631d7b2"} content_sha={"4be21484ddece3e0"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +27256 us, p95 +29391 us (difference of percentiles); paired per-iteration delta p50 +27639 us, p95 +29615 us; event_rate +227.34 %
+### Paced decode: 512 tokens every 25 ms, N=6/arm
+arm=direct n=6 ttft_us p50=2819 p95=3018 p99=3018 | total_ms p50=14219.56 | event_rate mean=36.2/s median=36.2/s | events=515 body_len=114939 body_sha={"36a61f614abd9d63"} content_sha={"df5d9eb7fecb389e"} status={"HTTP/1.1 200 OK"}
+arm=fwd n=6 ttft_us p50=15068 p95=16332 p99=16332 | total_ms p50=14243.72 | event_rate mean=36.1/s median=36.1/s | events=515 body_len=114939 body_sha={"36a61f614abd9d63"} content_sha={"df5d9eb7fecb389e"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +12248 us, p95 +13314 us (difference of percentiles); paired per-iteration delta p50 +12049 us, p95 +14248 us; event_rate -0.07 %
+arm=fwd_nospare n=6 ttft_us p50=28650 p95=29613 p99=29613 | total_ms p50=14248.78 | event_rate mean=36.1/s median=36.1/s | events=515 body_len=114939 body_sha={"36a61f614abd9d63"} content_sha={"df5d9eb7fecb389e"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +25831 us, p95 +26595 us (difference of percentiles); paired per-iteration delta p50 +25834 us, p95 +27253 us; event_rate -0.05 %
+spare:    stream_open_us n=373 p50=12594 p95=14089 | shaped ping_rtt_us n=246 p50=12860 p95=13967
+nospare:  stream_open_us n=372 p50=12383 p95=14756 | shaped ping_rtt_us n=246 p50=12691 p95=14279
+## Real llama-server: Groot-19B-A3B-261023-Q4_K_M.gguf cache=4 GiB ctx=16384, app streamed regime: PGRN_EVICT=decay, PGRN_LAYER_MAJOR=1 (-b 16384 -ub 2048), lookahead default, no MTP, --slot-save-path; shaped RTT 8 ms
+binary Nov 28 10:57:24 2026  newest engine src newer than binary: /Volumes/Crucial X10/SLipstream clone/slipstream/engine/tools/pgrn-convert/pgrn-convert.cpp
+### Fidelity (plain / strict JSON / forced tool), greedy seed 1, 2 reps per arm: per-event choices (all but id/created/timings) must match
+fidelity case=plain identical=True events=97 choices_sha=fe79d90a249f1851 finish=['stop'] text="```python\ndef is_palindrome(s: str) -> bool:\n    \"\"\"Check whether a string is a " tool_calls=[]
+  direct: fe79d90a249f fe79d90a249f
+  fwd: fe79d90a249f fe79d90a249f
+fidelity case=json identical=True events=63 choices_sha=5690849efb442987 finish=['stop'] text="{\n  \"title\": \"The Great Escape\",\n  \"author\": \"Sarah M. Reed\",\n  \"year\": 2018,\n  " tool_calls=[]
+  direct: 5690849efb44 5690849efb44
+  fwd: 5690849efb44 5690849efb44
+fidelity case=tool identical=False events=10 choices_sha=ce4d507272e6f925 finish=['tool_calls'] text="" tool_calls=[{"name": "add", "arguments": "{\"a\":19,\"b\":23}"}]
+  direct: ce4d507272e6 a945f09e7fa2
+  fwd: aa122d1d82fc a8bf8c560274
+FIDELITY MISMATCH
+### First-token overhead: cached prompt, 4 tokens, N=30/arm, 1 s pause between requests
+arm=direct n=30 ttft_us p50=203944 p95=235978 p99=236398 | total_ms p50=317.56 | event_rate mean=51.0/s median=52.0/s | events=7 body_len=1781 body_sha={"01f1cbd5c66f6075", "02e032c65d79f06a", "06b547bfaea1940c", "0f2d59444b086e9d", "2330494197070ecf", "27e03452bc5382a8", "2b669e05b426a772", "3b2f48b8822f60ba", "49dc1b225607e83c", "57f2364efa05c61f", "5884f4aff58a15bd", "5a00534d7f1c4669", "65711d47cc5a7efa", "6586df127154838c", "6a643dcae6d000ec", "7ae5299239218587", "822b5e11266e4043", "832aba5391c9ee10", "a253397c5612ba9a", "a5f8906c0bf363b2", "bc16feb30f3bec05", "c23e9cf9a310f3d1", "c61b164dc1701d12", "d3f81d2c4ab2afd3", "df5ca616cc4af095", "e2ba125ec4284a13", "e4683cc77ef1d7e1", "e8833119c923b3ff", "e8a3594f400554d5", "fa4b687a52feedb6"} content_sha={"b569c61ee1d09be0"} status={"HTTP/1.1 200 OK"}
+arm=fwd n=30 ttft_us p50=203371 p95=235806 p99=236913 | total_ms p50=318.35 | event_rate mean=51.0/s median=53.0/s | events=7 body_len=1782 body_sha={"13788274b5766fea", "206e0add976790f2", "20dc8e7724a7cab1", "24be6308d37eaf69", "2a62a7f1901dd541", "2ef51aa0999f9c5c", "380e2f040c55bbf2", "3ad9a0de449f759e", "3f1e42d07c9e2160", "5f9c2fcbcb023411", "6693baf4e2a73159", "6ccb2db660c0ecfc", "7cb0c73bb5188bcd", "7d8b6bfc59fcc019", "806ebf43ca22e149", "9408074d0e596aef", "9a1c6088cba65bd4", "9d11e933aac02ad4", "a4af4b57bd4ef5a9", "abcf5ca14fa9eb23", "af73e28090c7b183", "b0633dec29394d67", "b16db38f70a264e4", "cdbb685b1c3e6c9d", "cdf75b22a9e00352", "cf944d35b45599a8", "d4328060d3bd9d15", "d79931c1b4a22ccf", "da379fb00493a1a0", "e42a8e0f5cf64e01"} content_sha={"b569c61ee1d09be0"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 -573 us, p95 -172 us (difference of percentiles); paired per-iteration delta p50 +14212 us, p95 +140540 us; event_rate -0.04 %
+stats field=ttft_us n_pairs=30 direct_mean=182827.240 fwd_mean=195329.223 paired_delta_mean=+12.502ms 95%CI=[-9.642,+34.646]ms sd=59.164 p95_delta=+140.540ms per_pair=[153.246, -9.383, 21.727, -80.644, 17.012, -19.938, 16.129, 2.715, -35.386, 93.75, 140.54, -67.058, -26.823, -64.204, 2.862, 21.886, 57.389, 51.215, 92.206, 2.792, 22.708, 14.212, 8.946, -91.529, 28.967, 1.611, -60.777, 79.788, 17.491, -16.389]
+### Decode throughput: 256 tokens ignore_eos, cached prompt, N=20/arm interleaved, cooldown 25 s
+arm=direct n=20 ttft_us p50=258821 p95=284010 p99=287094 | total_ms p50=17294.64 | event_rate mean=15.0/s median=15.2/s | events=259 body_len=64942 body_sha={"00e633f775981fd8", "077a2f20244d8953", "07be7301f56e0523", "0dfa9552a02d0aa8", "101efb2d9993e757", "1216bf77fab0884f", "12ebfb388e5b38dc", "17d1e77be05dbb8f", "1ca8aa30b5afff25", "322d9cdf5ce0f7a6", "4bb6100ad8cbc5ae", "4cd456b8521be8a4", "5ddae86662872c92", "5ddeb963b45be268", "5faa774cfbff882b", "99d7eb4e2e886bbd", "a041865e7a12d96a", "c5c8aa5426e98db3", "f33b8a846650786a", "f53e17d8202465b8"} content_sha={"374f0ca92ccd61b9"} status={"HTTP/1.1 200 OK"}
+arm=fwd n=20 ttft_us p50=281091 p95=289809 p99=307006 | total_ms p50=17329.97 | event_rate mean=15.1/s median=15.1/s | events=259 body_len=64942 body_sha={"05078eb1bc476cac", "0a8374d1e36d1c6f", "1904bcea05cd9f64", "2447a7348287e158", "31a951768b25242c", "3f026aa71aa89cab", "42368cf6ae47ff3f", "54ecb690f92f7d1f", "839aaa087fb46ed4", "89a9cad33ba3872f", "8e3874ae89bf3bdb", "a3d10af148fe8e08", "aabd5f852674c7b9", "b6f2c8cd1bc9b0f3", "c24bd7c6d508fcff", "c3e8953cb6d925f6", "cc7de0f1a444bada", "d76af21c6f0cef37", "d783b80e925b8f9d", "ee254aff75d30919"} content_sha={"374f0ca92ccd61b9"} status={"HTTP/1.1 200 OK"}
+  overhead vs baseline: ttft p50 +22270 us, p95 +5799 us (difference of percentiles); paired per-iteration delta p50 +31319 us, p95 +73283 us; event_rate +0.75 %
+stats field=event_rate n_pairs=20 direct_mean=15.019 fwd_mean=15.131 paired_delta_mean=+0.776% 95%CI=[-0.224,+1.777]% sd=2.141 p95_delta=+3.832% per_pair=[0.819, 0.356, 0.479, 1.826, 5.521, 1.763, -0.619, 2.305, 1.19, -0.907, -0.02, -0.675, -1.114, 3.832, -3.354, 3.543, -2.024, -1.053, 2.605, 1.053]
+### Cancel during a long prompt (layer-major prefill) through the forwarder
+cancel rep=0 engine_abort_after_cancel_s=0.040 close_to_log_s=0.16 where=layer-major prefill aborted at layer 7/40, ubatch 3 (7 layer passes done) | slot prompt_abort: id  0 | task 11923 | n_prompt = 15525, t = 6093 ms | slots_via_forwarder=[{"id":0,"is_processing":true,"n_ctx":16384,"phase":"prompt","prompt_progress":{"cache":0,"processed":2460,"time_ms":5963,"total":15525}}]
+cancel rep=1 engine_abort_after_cancel_s=0.021 close_to_log_s=0.11 where=layer-major prefill aborted at layer 7/40, ubatch 4 (7 layer passes done) | slot prompt_abort: id  0 | task 11927 | n_prompt = 15525, t = 6053 ms | slots_via_forwarder=[{"id":0,"is_processing":true,"n_ctx":16384,"phase":"prompt","prompt_progress":{"cache":0,"processed":2511,"time_ms":5980,"total":15525}}]
+cancel rep=2 engine_abort_after_cancel_s=0.043 close_to_log_s=0.11 where=layer-major prefill aborted at layer 7/40, ubatch 4 (7 layer passes done) | slot prompt_abort: id  0 | task 11931 | n_prompt = 15525, t = 6089 ms | slots_via_forwarder=[{"id":0,"is_processing":true,"n_ctx":16384,"phase":"prompt","prompt_progress":{"cache":0,"processed":2511,"time_ms":5980,"total":15525}}]
+share event=cancelled path=/v1/chat/completions after_ms=6021.0 upstream_dropped_after_cancel_ms=0.02 unix_ms=1795871981082
+share event=cancelled path=/v1/chat/completions after_ms=6024.1 upstream_dropped_after_cancel_ms=0.01 unix_ms=1795871997282
+share event=cancelled path=/v1/chat/completions after_ms=6022.4 upstream_dropped_after_cancel_ms=0.01 unix_ms=1795872013425
+### app/scripts/qualify_openai_stream.py against the forwarder
+        "chunk_gap_max_seconds": 0.800646,
+        "decode_tps_mean": 16.370593,
+        "deterministic": true,
+        "output_sha256": "a58ee95fcbdf0ad05b00cfaea24efb1a15f4c1c223d23a9e364d701d01545ff0",
+        "passed": true,
+        "ttft_median_seconds": 4.129783
+      }
+    },
+    "passed": true
+  },
+  "thresholds": {
+    "max_chunk_gap_seconds": 5.0,
+    "max_ttft_seconds": 180.0
+  }
+}
+stream_open_us n=72 p50=13237 p95=15000 | shaped ping_rtt_us n=978 p50=12922 p95=14145
+llama rss_end_mb=8163 swap_delta_mb=0
+log: /Volumes/Crucial X10/SLipstream clone/slipstream/bench/forward/results/20261128-133844-m1.txt

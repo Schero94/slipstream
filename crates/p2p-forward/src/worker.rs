@@ -1,0 +1,595 @@
+//! Share side ("big Mac", plan §3 `worker.rs`): accepts `/slipstream/openai/1` and
+//! `/slipstream/status/1` streams from allowed peers only, re-checks the allowlist,
+//! applies per-peer admission, forwards to the local llama-server and pipes the raw
+//! response bytes back. A `Cancel` frame, a stream reset or peer loss drops the upstream
+//! connection at once, which is how llama-server learns that the client went away
+//! (it then cancels the task, including a layer-major prefill).
+
+use std::collections::HashSet;
+use std::io;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use futures::StreamExt;
+use libp2p::multiaddr::Protocol;
+use libp2p::swarm::SwarmEvent;
+use libp2p::{Multiaddr, PeerId};
+use p2p_crypto::StreamRole;
+use p2p_libp2p::paired::{build_paired_swarm, handle_ping, PairedConfig, PairedEvent};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
+use crate::admission::{Admission, AdmissionLimits, Busy};
+use crate::allowlist::{self, Route};
+use crate::http;
+use crate::proto::{
+    channel_context, open_channel, BodyKind, ChannelReader, ChannelWriter, FrameType, ReqHead,
+    BODY_CHUNK, OPENAI_PROTOCOL_V1, STATUS_PROTOCOL_V1,
+};
+use crate::status::{self, StatusRequest};
+use crate::unix_ms;
+
+pub const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Hard cap per forwarded request (plan §3 timeouts: no first-byte timeout, total 2 h).
+pub const REQUEST_TOTAL_CAP: Duration = Duration::from_secs(2 * 60 * 60);
+/// Largest `/slots` response buffered for sanitizing.
+const SLOTS_MAX: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct ShareConfig {
+    pub listen: Multiaddr,
+    /// The local llama-server (loopback only).
+    pub upstream: SocketAddr,
+    /// M1 trust: PeerIds allowed to connect (M2 replaces this with the trust store).
+    pub allow: Vec<PeerId>,
+    pub paired: PairedConfig,
+    pub admission: AdmissionLimits,
+    pub name: String,
+    pub verbose: bool,
+}
+
+/// Parse `--forward`: `http://127.0.0.1:8080` or `127.0.0.1:8080`. Loopback only, so
+/// a shared Mac can never be used as a relay into its own network.
+pub fn parse_upstream(s: &str) -> Result<SocketAddr, String> {
+    let rest = s.strip_prefix("http://").unwrap_or(s);
+    let rest = rest.trim_end_matches('/');
+    let rest = rest.replace("localhost", "127.0.0.1");
+    let addr: SocketAddr = rest
+        .parse()
+        .map_err(|_| format!("--forward must look like http://127.0.0.1:8080, got {s}"))?;
+    if !addr.ip().is_loopback() {
+        return Err(format!(
+            "--forward must point at this Mac's own llama-server (loopback), got {s}"
+        ));
+    }
+    Ok(addr)
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ShareStats {
+    pub connections_established: u64,
+    pub connections_rejected: u64,
+    pub connections_closed: u64,
+    pub streams_rejected: u64,
+    pub requests: u64,
+    pub forbidden: u64,
+    pub busy: u64,
+    pub completed: u64,
+    pub cancelled: u64,
+    pub upstream_errors: u64,
+    pub status_requests: u64,
+}
+
+pub type SharedShareStats = Arc<Mutex<ShareStats>>;
+
+pub struct ShareHandle {
+    pub peer_id: PeerId,
+    pub listen_addr: Multiaddr,
+    pub stats: SharedShareStats,
+    pub admission: Admission,
+    tasks: Vec<JoinHandle<()>>,
+}
+
+impl ShareHandle {
+    /// Full pinned address for the use side: `<listen>/p2p/<peer_id>`.
+    pub fn dial_addr(&self) -> Multiaddr {
+        self.listen_addr.clone().with(Protocol::P2p(self.peer_id))
+    }
+}
+
+impl Drop for ShareHandle {
+    fn drop(&mut self) {
+        for t in &self.tasks {
+            t.abort();
+        }
+    }
+}
+
+fn other<E: std::fmt::Display>(e: E) -> io::Error {
+    io::Error::other(e.to_string())
+}
+
+struct Ctx {
+    local: PeerId,
+    upstream: SocketAddr,
+    name: String,
+    admission: Admission,
+    stats: SharedShareStats,
+    verbose: bool,
+}
+
+pub async fn start_share(
+    identity: libp2p::identity::Keypair,
+    cfg: ShareConfig,
+) -> io::Result<ShareHandle> {
+    if cfg.allow.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "share needs at least one --allow-peer (no open sharing)",
+        ));
+    }
+    if !cfg.upstream.ip().is_loopback() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "upstream must be a loopback address",
+        ));
+    }
+    let allow: Arc<HashSet<PeerId>> = Arc::new(cfg.allow.iter().copied().collect());
+    let mut swarm = build_paired_swarm(identity, &cfg.paired);
+    let local = *swarm.local_peer_id();
+    swarm.listen_on(cfg.listen.clone()).map_err(other)?;
+    let listen_addr = loop {
+        if let SwarmEvent::NewListenAddr { address, .. } = swarm.select_next_some().await {
+            break address;
+        }
+    };
+    let mut control = swarm.behaviour().stream.new_control();
+    let mut openai = control.accept(OPENAI_PROTOCOL_V1).map_err(other)?;
+    let mut status_in = control.accept(STATUS_PROTOCOL_V1).map_err(other)?;
+    let stats = SharedShareStats::default();
+    let admission = Admission::new(cfg.admission);
+    let ctx = Arc::new(Ctx {
+        local,
+        upstream: cfg.upstream,
+        name: cfg.name.clone(),
+        admission: admission.clone(),
+        stats: stats.clone(),
+        verbose: cfg.verbose,
+    });
+
+    let swarm_stats = stats.clone();
+    let swarm_allow = allow.clone();
+    let verbose = cfg.verbose;
+    let swarm_task = tokio::spawn(async move {
+        loop {
+            match swarm.select_next_some().await {
+                SwarmEvent::Behaviour(PairedEvent::Ping(event)) => {
+                    if let Some(rtt) = handle_ping(&mut swarm, &event) {
+                        if verbose {
+                            eprintln!("share ping peer={} rtt_us={}", event.peer, rtt.as_micros());
+                        }
+                    }
+                }
+                SwarmEvent::ConnectionEstablished {
+                    peer_id,
+                    connection_id,
+                    ..
+                } => {
+                    // Trust gate (M1: --allow-peer list): unknown peers are disconnected
+                    // before any stream of theirs is read.
+                    if !swarm_allow.contains(&peer_id) {
+                        swarm_stats.lock().unwrap().connections_rejected += 1;
+                        eprintln!(
+                            "share event=rejected_peer peer={peer_id} unix_ms={}",
+                            unix_ms()
+                        );
+                        swarm.close_connection(connection_id);
+                    } else {
+                        swarm_stats.lock().unwrap().connections_established += 1;
+                        eprintln!("share event=connected peer={peer_id} unix_ms={}", unix_ms());
+                    }
+                }
+                SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                    if swarm_allow.contains(&peer_id) {
+                        swarm_stats.lock().unwrap().connections_closed += 1;
+                        eprintln!(
+                            "share event=closed peer={peer_id} cause={cause:?} unix_ms={}",
+                            unix_ms()
+                        );
+                    }
+                }
+                SwarmEvent::IncomingConnectionError { error, .. } => {
+                    if verbose {
+                        eprintln!("share event=incoming_error error={error}");
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let openai_ctx = ctx.clone();
+    let openai_allow = allow.clone();
+    let openai_task = tokio::spawn(async move {
+        // Spawn per stream immediately: libp2p-stream drops inbound streams silently if
+        // the acceptor is not polling (M0 finding).
+        while let Some((peer, stream)) = openai.next().await {
+            if !openai_allow.contains(&peer) {
+                openai_ctx.stats.lock().unwrap().streams_rejected += 1;
+                drop(stream);
+                continue;
+            }
+            let ctx = openai_ctx.clone();
+            tokio::spawn(async move {
+                if let Err(e) = handle_openai(&ctx, peer, stream).await {
+                    if ctx.verbose {
+                        eprintln!("share event=stream_error peer={peer} error={e}");
+                    }
+                }
+            });
+        }
+    });
+
+    let status_ctx = ctx.clone();
+    let status_allow = allow;
+    let status_task = tokio::spawn(async move {
+        while let Some((peer, stream)) = status_in.next().await {
+            if !status_allow.contains(&peer) {
+                status_ctx.stats.lock().unwrap().streams_rejected += 1;
+                continue;
+            }
+            let ctx = status_ctx.clone();
+            tokio::spawn(async move {
+                let _ = handle_status(&ctx, peer, stream).await;
+            });
+        }
+    });
+
+    eprintln!(
+        "share event=listening addr={} upstream={} allowed_peers={}",
+        listen_addr.clone().with(Protocol::P2p(local)),
+        cfg.upstream,
+        cfg.allow.len()
+    );
+    Ok(ShareHandle {
+        peer_id: local,
+        listen_addr,
+        stats,
+        admission,
+        tasks: vec![swarm_task, openai_task, status_task],
+    })
+}
+
+async fn handle_status(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::Result<()> {
+    let context = channel_context(&peer, &ctx.local, &STATUS_PROTOCOL_V1);
+    let (mut reader, mut writer) = open_channel(stream, StreamRole::Responder, &context).await?;
+    let frame = tokio::time::timeout(Duration::from_secs(10), reader.next())
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "status request timed out"))??;
+    let Some(frame) = frame.filter(|f| f.kind == FrameType::StatusReq) else {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "expected StatusReq"));
+    };
+    let req: StatusRequest = serde_json::from_slice(&frame.payload)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    ctx.stats.lock().unwrap().status_requests += 1;
+    let reply = status::answer(req, &ctx.name, ctx.upstream, ctx.admission.load()).await;
+    writer.send_json(FrameType::StatusResp, &reply).await?;
+    writer.finish().await
+}
+
+/// Send a complete synthetic HTTP response as RespHead + RespBody + end + FIN.
+async fn send_response(writer: &mut ChannelWriter, bytes: &[u8]) -> io::Result<()> {
+    let end = http::find_head_end(bytes).unwrap_or(bytes.len());
+    writer.send(FrameType::RespHead, &bytes[..end]).await?;
+    writer.send_body(FrameType::RespBody, &bytes[end..]).await?;
+    writer.send(FrameType::RespBody, &[]).await?;
+    writer.finish().await
+}
+
+enum Outcome {
+    Completed,
+    Cancelled,
+    UpstreamError,
+}
+
+async fn handle_openai(ctx: &Ctx, peer: PeerId, stream: libp2p::Stream) -> io::Result<()> {
+    let context = channel_context(&peer, &ctx.local, &OPENAI_PROTOCOL_V1);
+    let (mut reader, mut writer) = open_channel(stream, StreamRole::Responder, &context).await?;
+    // No timeout here: the use side keeps one pre-opened spare stream that may sit idle
+    // for hours; connection liveness comes from QUIC keep-alive.
+    let Some(first) = reader.next().await? else {
+        return Ok(());
+    };
+    if first.kind != FrameType::ReqHead {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "expected ReqHead"));
+    }
+    let head: ReqHead = serde_json::from_slice(&first.payload)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    ctx.stats.lock().unwrap().requests += 1;
+    let path = allowlist::path_of(&head.target).to_string();
+    // Allowlist, second time (the use side already checked).
+    let Some(route) = allowlist::route(&head.method, &head.target) else {
+        ctx.stats.lock().unwrap().forbidden += 1;
+        eprintln!(
+            "share event=forbidden peer={peer} method={} path={}",
+            head.method,
+            sanitize_log(&path)
+        );
+        return send_response(&mut writer, &http::forbidden()).await;
+    };
+
+    // Request-direction reader: body chunks → channel, Cancel / reset / FIN → cancel.
+    let cancel = CancellationToken::new();
+    let cancel_at: Arc<Mutex<Option<Instant>>> = Arc::default();
+    let (body_tx, body_rx) = mpsc::channel::<Vec<u8>>(8);
+    let reader_task = tokio::spawn(read_request_side(
+        reader,
+        body_tx,
+        cancel.clone(),
+        cancel_at.clone(),
+    ));
+
+    let t0 = Instant::now();
+    let _permit = if route == Route::Inference {
+        tokio::select! {
+            p = ctx.admission.acquire(peer) => match p {
+                Ok(p) => Some(p),
+                Err(Busy) => {
+                    ctx.stats.lock().unwrap().busy += 1;
+                    eprintln!("share event=busy peer={peer} path={path}");
+                    reader_task.abort();
+                    return send_response(&mut writer, &http::error_response(
+                        503,
+                        "busy",
+                        "The shared Mac is busy with other requests from this Mac. Try again in a few seconds.",
+                    )).await;
+                }
+            },
+            _ = cancel.cancelled() => {
+                ctx.stats.lock().unwrap().cancelled += 1;
+                reader_task.abort();
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
+
+    let outcome = tokio::select! {
+        r = tokio::time::timeout(REQUEST_TOTAL_CAP, forward(ctx, &head, route, body_rx, &mut writer)) => match r {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => {
+                if ctx.verbose { eprintln!("share event=forward_error peer={peer} error={e}"); }
+                Outcome::Cancelled
+            }
+            Err(_) => Outcome::Cancelled,
+        },
+        // Dropping `forward` drops the upstream TcpStream → llama-server sees the client
+        // disconnect and cancels the task.
+        _ = cancel.cancelled() => Outcome::Cancelled,
+    };
+    reader_task.abort();
+    let mut s = ctx.stats.lock().unwrap();
+    match outcome {
+        Outcome::Completed => s.completed += 1,
+        Outcome::Cancelled => {
+            s.cancelled += 1;
+            let lag = cancel_at
+                .lock()
+                .unwrap()
+                .map(|t| t.elapsed().as_secs_f64() * 1e3);
+            eprintln!(
+                "share event=cancelled peer={peer} path={path} after_ms={:.1} upstream_dropped_after_cancel_ms={} unix_ms={}",
+                t0.elapsed().as_secs_f64() * 1e3,
+                lag.map(|l| format!("{l:.2}")).unwrap_or_else(|| "na".into()),
+                unix_ms()
+            );
+        }
+        Outcome::UpstreamError => s.upstream_errors += 1,
+    }
+    Ok(())
+}
+
+/// Keep logs free of prompt content: paths only, bounded, printable.
+fn sanitize_log(path: &str) -> String {
+    path.chars()
+        .take(64)
+        .map(|c| if c.is_ascii_graphic() { c } else { '?' })
+        .collect()
+}
+
+async fn read_request_side(
+    mut reader: ChannelReader,
+    body_tx: mpsc::Sender<Vec<u8>>,
+    cancel: CancellationToken,
+    cancel_at: Arc<Mutex<Option<Instant>>>,
+) {
+    let mut body_tx = Some(body_tx);
+    loop {
+        match reader.next().await {
+            Ok(Some(frame)) => match frame.kind {
+                FrameType::ReqBody if frame.payload.is_empty() => {
+                    body_tx = None;
+                }
+                FrameType::ReqBody => {
+                    if let Some(tx) = &body_tx {
+                        if tx.send(frame.payload).await.is_err() {
+                            body_tx = None;
+                        }
+                    }
+                }
+                _ => break, // Cancel or anything unexpected
+            },
+            // FIN before the response ended, reset, or peer loss.
+            Ok(None) | Err(_) => break,
+        }
+    }
+    *cancel_at.lock().unwrap() = Some(Instant::now());
+    cancel.cancel();
+}
+
+fn upstream_request(head: &ReqHead, upstream: SocketAddr) -> Vec<u8> {
+    let mut out = format!("{} {} HTTP/1.1\r\nHost: {upstream}\r\n", head.method, head.target);
+    for (k, v) in allowlist::filter_request_headers(&head.headers) {
+        out.push_str(&format!("{k}: {v}\r\n"));
+    }
+    match head.body {
+        BodyKind::None => {
+            if head.method == "POST" {
+                out.push_str("Content-Length: 0\r\n");
+            }
+        }
+        BodyKind::Length(n) => out.push_str(&format!("Content-Length: {n}\r\n")),
+        BodyKind::Chunked => out.push_str("Transfer-Encoding: chunked\r\n"),
+    }
+    // One request per upstream connection: the response ends when llama-server closes,
+    // and closing it is how a cancel reaches the engine.
+    out.push_str("Connection: close\r\n\r\n");
+    out.into_bytes()
+}
+
+async fn pump_body(
+    mut up_w: tokio::net::tcp::OwnedWriteHalf,
+    mut body_rx: mpsc::Receiver<Vec<u8>>,
+    kind: BodyKind,
+) -> io::Result<()> {
+    let mut sent: u64 = 0;
+    while let Some(chunk) = body_rx.recv().await {
+        sent += chunk.len() as u64;
+        match kind {
+            BodyKind::Length(n) if sent > n => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "body longer than declared"));
+            }
+            BodyKind::None => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected body"));
+            }
+            BodyKind::Chunked => {
+                up_w.write_all(format!("{:x}\r\n", chunk.len()).as_bytes()).await?;
+                up_w.write_all(&chunk).await?;
+                up_w.write_all(b"\r\n").await?;
+            }
+            BodyKind::Length(_) => up_w.write_all(&chunk).await?,
+        }
+    }
+    if kind == BodyKind::Chunked {
+        up_w.write_all(b"0\r\n\r\n").await?;
+    }
+    up_w.flush().await?;
+    // Keep the write half open (no shutdown): a half-close could be read as a client
+    // disconnect by the server. It is dropped together with the read half.
+    std::future::pending::<()>().await;
+    Ok(())
+}
+
+async fn forward(
+    ctx: &Ctx,
+    head: &ReqHead,
+    route: Route,
+    body_rx: mpsc::Receiver<Vec<u8>>,
+    writer: &mut ChannelWriter,
+) -> io::Result<Outcome> {
+    let upstream = match tokio::time::timeout(
+        UPSTREAM_CONNECT_TIMEOUT,
+        TcpStream::connect(ctx.upstream),
+    )
+    .await
+    {
+        Ok(Ok(s)) => s,
+        _ => {
+            send_response(
+                writer,
+                &http::error_response(
+                    503,
+                    "model_not_running",
+                    "The model is not running on the shared Mac.",
+                ),
+            )
+            .await?;
+            return Ok(Outcome::UpstreamError);
+        }
+    };
+    upstream.set_nodelay(true)?;
+    let (mut up_r, mut up_w) = upstream.into_split();
+    up_w.write_all(&upstream_request(head, ctx.upstream)).await?;
+    let body = pump_body(up_w, body_rx, head.body);
+    tokio::pin!(body);
+    let resp = async {
+        if route == Route::SlotsSanitized {
+            return pump_slots(&mut up_r, writer).await;
+        }
+        pump_response(&mut up_r, writer).await
+    };
+    tokio::pin!(resp);
+    loop {
+        tokio::select! {
+            r = &mut body => {
+                if let Err(e) = r {
+                    if ctx.verbose { eprintln!("share event=body_error error={e}"); }
+                    return Ok(Outcome::Cancelled);
+                }
+            }
+            r = &mut resp => return r,
+        }
+    }
+}
+
+/// Raw byte pipe: upstream head → RespHead, every upstream read → one RespBody frame.
+async fn pump_response(
+    up_r: &mut tokio::net::tcp::OwnedReadHalf,
+    writer: &mut ChannelWriter,
+) -> io::Result<Outcome> {
+    let Some((head, rest)) = http::read_head(up_r).await? else {
+        send_response(
+            writer,
+            &http::error_response(502, "upstream_closed", "The shared Mac's model server closed the connection."),
+        )
+        .await?;
+        return Ok(Outcome::UpstreamError);
+    };
+    writer.send(FrameType::RespHead, &head).await?;
+    writer.send_body(FrameType::RespBody, &rest).await?;
+    let mut buf = vec![0u8; BODY_CHUNK];
+    loop {
+        let n = up_r.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        writer.send(FrameType::RespBody, &buf[..n]).await?;
+    }
+    writer.send(FrameType::RespBody, &[]).await?;
+    writer.finish().await?;
+    Ok(Outcome::Completed)
+}
+
+/// `GET /slots`: buffer, reduce to non-sensitive fields, answer with Content-Length.
+async fn pump_slots(
+    up_r: &mut tokio::net::tcp::OwnedReadHalf,
+    writer: &mut ChannelWriter,
+) -> io::Result<Outcome> {
+    let mut raw = Vec::new();
+    up_r.take(SLOTS_MAX as u64 + 1).read_to_end(&mut raw).await?;
+    let parsed = http::find_head_end(&raw).and_then(|end| {
+        let head = http::parse_response_head(&raw[..end]).ok()?;
+        let body = if head.is_chunked() {
+            http::dechunk_strict(&raw[end..], SLOTS_MAX)?
+        } else {
+            raw[end..].to_vec()
+        };
+        Some((head.status, body))
+    });
+    let Some((status, body)) = parsed.filter(|_| raw.len() <= SLOTS_MAX) else {
+        send_response(
+            writer,
+            &http::error_response(502, "bad_upstream", "Unexpected answer from the shared Mac's model server."),
+        )
+        .await?;
+        return Ok(Outcome::UpstreamError);
+    };
+    send_response(writer, &http::json_response(status, &[], &allowlist::sanitize_slots(&body)))
+        .await?;
+    Ok(Outcome::Completed)
+}

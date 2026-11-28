@@ -1,17 +1,41 @@
 //! `p2p-forward` — v0.6 "Use your other Mac" forwarder (docs/plans/2026-11-28-use-your-other-mac.md).
 //!
-//! **M0 transport spike only.** This crate currently contains a *raw* byte pipe
-//! (local TCP ⇄ one libp2p QUIC stream ⇄ upstream TCP), optionally wrapped in
-//! [`p2p_crypto::SealedStream`], plus the measurement helpers used by
-//! `bench/forward/`. The raw pipe has no allowlist and no trust gate and must never be
-//! exposed beyond loopback; M1 replaces it with the allowlisted L7 forwarder.
+//! M1: the allowlisted L7 forwarder over an authenticated, persistent QUIC connection.
+//!
+//! - [`proto`]: `/slipstream/openai/1` + `/slipstream/status/1`, SealedStream + framing
+//! - [`allowlist`]: method/path allowlist (both ends), header stripping, `/slots` sanitizing
+//! - [`client`]: use side (editor on `127.0.0.1:<port>`), [`worker`]: share side
+//! - [`admission`]: per-peer 1 in flight + 2 queued, [`status`]: status RPC
+//! - [`mock_llama`]: deterministic llama-server mock for tests and `bench/forward/run_m1.sh`
+//!
+//! [`node`] / [`pipe`] are the M0 raw byte pipe, kept only to reproduce the M0 numbers
+//! (`forward-spike`, `bench/forward/run_m0.sh`); it has no allowlist and is never used
+//! by `slipstream-node share|use`.
 
 #![forbid(unsafe_code)]
 
+pub mod admission;
+pub mod allowlist;
 pub mod bench;
+pub mod client;
+pub mod http;
 pub mod mock;
+pub mod mock_llama;
 pub mod node;
 pub mod pipe;
+pub mod proto;
+pub mod status;
+pub mod worker;
+
+pub use client::{start_use, UseConfig, UseHandle};
+pub use worker::{parse_upstream, start_share, ShareConfig, ShareHandle};
+
+pub(crate) fn unix_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
 
 use std::path::Path;
 

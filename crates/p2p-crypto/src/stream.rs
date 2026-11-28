@@ -21,10 +21,14 @@
 //! reused; the sealer refuses to wrap). Frames must be opened in order: a replayed,
 //! dropped or reordered frame fails authentication. `FLAG_FIN` marks the last frame so
 //! truncation is detectable ([`FrameOpener::finish`]).
+//!
+//! # Backend
+//! ChaCha20-Poly1305 (RFC 8439) from `ring` 0.17 (ARMv8 assembly, already in the tree via
+//! rustls/libp2p-quic): 4–5.5× faster than the portable RustCrypto backend on Apple
+//! silicon (bench/RESULTS.md "v0.6 M0"). Switching backends does not change the frame format.
 
-use chacha20poly1305::aead::{AeadInPlace, KeyInit};
-use chacha20poly1305::{ChaCha20Poly1305, Nonce, Tag};
 use hkdf::Hkdf;
+use ring::aead::{Aad, LessSafeKey, Nonce, Tag, UnboundKey, CHACHA20_POLY1305};
 use rand::rngs::OsRng;
 use sha2::Sha256;
 use x25519_dalek::{EphemeralSecret, PublicKey};
@@ -99,8 +103,8 @@ impl StreamHandshake {
         let hk = Hkdf::<Sha256>::new(Some(&salt), shared.as_bytes());
         let mut okm = [0u8; 64];
         hk.expand(&info, &mut okm).map_err(|_| CryptoError::Hkdf)?;
-        let i2r = ChaCha20Poly1305::new_from_slice(&okm[..32]).map_err(|_| CryptoError::Hkdf)?;
-        let r2i = ChaCha20Poly1305::new_from_slice(&okm[32..]).map_err(|_| CryptoError::Hkdf)?;
+        let i2r = aead_key(&okm[..32])?;
+        let r2i = aead_key(&okm[32..])?;
         okm.zeroize();
         let (tx, rx) = match role {
             StreamRole::Initiator => (i2r, r2i),
@@ -119,22 +123,30 @@ pub struct SealedStream {
     pub rx: FrameOpener,
 }
 
-fn nonce_for(counter: u128) -> Nonce {
+fn aead_key(bytes: &[u8]) -> Result<LessSafeKey, CryptoError> {
+    UnboundKey::new(&CHACHA20_POLY1305, bytes)
+        .map(LessSafeKey::new)
+        .map_err(|_| CryptoError::Hkdf)
+}
+
+fn nonce_for(counter: u128) -> [u8; 12] {
     let bytes = counter.to_be_bytes(); // 16 bytes, use the low 12 (96 bits)
-    *Nonce::from_slice(&bytes[4..])
+    let mut nonce = [0u8; 12];
+    nonce.copy_from_slice(&bytes[4..]);
+    nonce
 }
 
 const NONCE_LIMIT: u128 = 1u128 << 96;
 
 /// Seals outgoing frames with a strictly increasing 96-bit counter nonce.
 pub struct FrameSealer {
-    cipher: ChaCha20Poly1305,
+    cipher: LessSafeKey,
     counter: u128,
     finished: bool,
 }
 
 impl FrameSealer {
-    fn new(cipher: ChaCha20Poly1305) -> Self {
+    fn new(cipher: LessSafeKey) -> Self {
         Self {
             cipher,
             counter: 0,
@@ -164,15 +176,19 @@ impl FrameSealer {
         let start = out.len();
         out.extend_from_slice(&header);
         out.extend_from_slice(plaintext);
-        let nonce = nonce_for(self.counter);
-        let tag = self
+        let nonce = Nonce::assume_unique_for_key(nonce_for(self.counter));
+        let tag: Tag = self
             .cipher
-            .encrypt_in_place_detached(&nonce, &header, &mut out[start + FRAME_HEADER_LEN..])
+            .seal_in_place_separate_tag(
+                nonce,
+                Aad::from(header),
+                &mut out[start + FRAME_HEADER_LEN..],
+            )
             .map_err(|_| {
                 out.truncate(start);
                 CryptoError::Encrypt
             })?;
-        out.extend_from_slice(&tag);
+        out.extend_from_slice(tag.as_ref());
         self.counter += 1;
         self.finished = fin;
         Ok(())
@@ -220,14 +236,14 @@ impl FrameHeader {
 
 /// Opens incoming frames in order; any tamper, replay, reorder or drop fails.
 pub struct FrameOpener {
-    cipher: ChaCha20Poly1305,
+    cipher: LessSafeKey,
     counter: u128,
     finished: bool,
     poisoned: bool,
 }
 
 impl FrameOpener {
-    fn new(cipher: ChaCha20Poly1305) -> Self {
+    fn new(cipher: LessSafeKey) -> Self {
         Self {
             cipher,
             counter: 0,
@@ -263,13 +279,13 @@ impl FrameOpener {
         if body.len() != parsed.ciphertext_len {
             return Err(CryptoError::Decrypt);
         }
-        let split = body.len() - TAG_LEN;
-        let tag = Tag::clone_from_slice(&body[split..]);
-        body.truncate(split);
-        let nonce = nonce_for(self.counter);
-        self.cipher
-            .decrypt_in_place_detached(&nonce, header, body, &tag)
-            .map_err(|_| CryptoError::Decrypt)?;
+        let nonce = Nonce::assume_unique_for_key(nonce_for(self.counter));
+        let plain_len = self
+            .cipher
+            .open_in_place(nonce, Aad::from(*header), body.as_mut_slice())
+            .map_err(|_| CryptoError::Decrypt)?
+            .len();
+        body.truncate(plain_len);
         self.counter += 1;
         self.finished = parsed.fin();
         Ok(self.finished)

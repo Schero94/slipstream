@@ -4,8 +4,8 @@
 //! - `libp2p-stream` gives raw bidirectional QUIC streams per protocol
 //!   (`Control::open_stream` / `Control::accept`), one stream per forwarded request;
 //! - `ping` every 2 s measures RTT; a failed ping closes the connection;
-//! - QUIC keep-alive 2 s and QUIC idle timeout 10 s → a sleeping / vanished peer is
-//!   detected in ≤ 10 s;
+//! - QUIC keep-alive 2 s and QUIC idle timeout 8 s → a sleeping / vanished peer is
+//!   detected in ≤ 10 s (M0 measured idle + ~1.04 s; M1 decision: 8 s);
 //! - the swarm keeps an idle connection (no open streams) for a long time, so the
 //!   pinned peer connection stays up between editor requests (no handshake per request);
 //! - connection limits: 4 per peer, 32 total, 8 pending inbound.
@@ -19,8 +19,12 @@ use libp2p::{connection_limits, ping, StreamProtocol, Swarm, SwarmBuilder};
 
 pub use libp2p_stream::{Control, IncomingStreams, OpenStreamError};
 
-/// M0 raw byte pipe protocol (spike only; M1 replaces it with `/slipstream/openai/1`).
+/// M0 raw byte pipe protocol (spike / bench reproduction only; never offered by `share`).
 pub const PIPE_PROTOCOL_V0: StreamProtocol = StreamProtocol::new("/slipstream/pipe/0");
+/// M1 allowlisted OpenAI forwarder: one stream per HTTP request.
+pub const OPENAI_PROTOCOL_V1: StreamProtocol = StreamProtocol::new("/slipstream/openai/1");
+/// M1 status RPC (`Status`, `StartModel`, `StopModel`).
+pub const STATUS_PROTOCOL_V1: StreamProtocol = StreamProtocol::new("/slipstream/status/1");
 
 /// Transport tuning for paired connections.
 #[derive(Debug, Clone)]
@@ -42,7 +46,7 @@ impl Default for PairedConfig {
     fn default() -> Self {
         Self {
             keep_alive: Duration::from_secs(2),
-            idle_timeout: Duration::from_secs(10),
+            idle_timeout: Duration::from_secs(8),
             ping_timeout: Duration::from_secs(5),
             idle_connection_keep: Duration::from_secs(24 * 60 * 60),
             max_established_per_peer: 4,

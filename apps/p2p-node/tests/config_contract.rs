@@ -53,3 +53,16 @@ fn non_community_mode_cannot_donate_publicly() {
     let error = policy.validate().unwrap_err();
     assert!(error.to_string().contains("community"), "{error}");
 }
+
+#[test]
+fn paired_mode_parses_and_never_donates() {
+    assert_eq!(NodeMode::from_str("paired").unwrap(), NodeMode::Paired);
+    assert_eq!(NodeMode::Paired.to_string(), "paired");
+    let mut policy = NodePolicy::for_mode(NodeMode::Paired);
+    assert!(!policy.donate_capacity);
+    policy.validate().unwrap();
+    policy.donate_capacity = true;
+    let error = policy.validate().unwrap_err();
+    assert_eq!(error, p2p_node::PolicyError::PairedNeverDonates);
+    assert!(error.to_string().contains("never donates"), "{error}");
+}

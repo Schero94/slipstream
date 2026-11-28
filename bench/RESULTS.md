@@ -4458,3 +4458,57 @@ mesh.rs), persistent per `--key-dir`.
   5 tests (raw + sealed byte-identical incl. 8 concurrent streams over one persistent connection, idle > 2× QUIC
   idle timeout keeps the connection, peer loss detected, sealed share never answers a raw client in plaintext,
   unpinned dial rejected, identity persistent per key dir). Workspace 183 → 195 green, Tauri 108/108.
+
+## v0.6 M1 forwarder — allowlisted OpenAI forwarder + `share`/`use` CLI — all M1 acceptance targets met — 2026-11-28
+
+Plan: docs/plans/2026-11-28-use-your-other-mac.md §3/§4/§9 M1. Code: `crates/p2p-forward/src/{proto,allowlist,client,worker,
+admission,status,http,mock_llama}.rs`, `apps/p2p-node` (`slipstream-node share|use|peer-id`, `NodeMode::Paired`),
+`crates/p2p-libp2p/src/paired.rs` (QUIC idle 8 s, protocol ids), `crates/p2p-crypto/src/stream.rs` (SealedStream on ring),
+harness `bench/forward/run_m1.sh` + `bench/forward/m1_real.py`, UDP shaper `crates/p2p-forward/tests/support/udp_shaper.rs`.
+Host M3 Pro 36 GB (Mac15,6), macOS 27.0.1, base 71435c2 + this change, release build. All parts are separate processes on one
+Mac with their own data dirs: upstream (mock or llama-server) · `slipstream-node share` (big Mac) · userspace UDP shaper ·
+`slipstream-node use` (MacBook). Arms: **direct** (client → upstream) vs **fwd** (client → use → shaped QUIC → share →
+upstream); the mock phase adds **fwd_nospare** (a second `use` without the pre-opened spare stream). Arm order rotates per
+iteration. Raw logs: `bench/forward/results/20261128-133844-m1*` (mock + real engine; `20261128-133006-m1*` = an earlier
+mock-only run of the same code, consistent).
+
+**Shaper calibration (read this before the latency numbers):** the shaper's per-direction delay line rides tokio's 1 ms
+timer, so the *effective* round trip is longer than configured: configured 8 ms → measured libp2p ping RTT p50 12.7–12.9 ms,
+p95 14.0–14.3 ms; configured 5 ms (cancel tests) → 6.4–9.8 ms. All "@8 ms" / "@5 ms" numbers below were therefore taken at a
+*harsher* RTT than the target names.
+
+M0 decisions applied: QUIC idle timeout 8 s (`PairedConfig::default`), SealedStream AEAD on ring 0.17 (frame format unchanged,
+7 unit tests green; framing+AEAD per 200 B chunk 218 ns seal + 324 ns open, was 942 + 982 ns with RustCrypto; 16 KiB 2.0 GB/s),
+one pre-opened + handshaken spare stream per paired connection, libp2p-stream `=0.5.0-alpha`.
+
+| Acceptance (plan §9 M1) | Result | Verdict |
+|---|---|---|
+| SSE byte-identical, mock (plain / strict JSON / forced tool, 200 events, 3 reps each) | forwarded raw response (head + chunk framing + body) == direct == expected bytes, every sample; also `/v1/models`, `/health`, `/props`, `/metrics`, tokenize/detokenize/apply-template, non-streamed completions | PASS (`tests/loopback_forward.rs`) |
+| SSE identical, real engine (Groot, greedy seed 1, 160 tok, 2 reps × 2 arms per case) | per-event `choices` (everything but `id`/`created`/timings and the per-request random tool-call `id`) identical in all 4 runs of each case: plain `fe79d90a249f`, strict JSON `5690849efb44`, forced tool `d75a05f199e8` (`add {"a":19,"b":23}`, finish `tool_calls`). Decode runs: 40/40 identical content SHA `374f0ca92ccd61b9` | PASS (first harness pass flagged "tool" because llama-server draws a random tool-call id per request — direct vs direct differed too; `m1_real.py recheck` on the saved `.sse` files in `results/20261128-133844-m1-fidelity/`) |
+| cancel < 250 ms p95 @5 ms RTT (editor close → mock llama-server sees its connection close), N=20 per phase | prefill p50 5.39 / p95 5.50 / max 5.54 ms · decode p50 4.21 / p95 5.51 / max 5.59 ms | PASS (`tests/cancel.rs`) |
+| layer-major abort logged (real engine, 15,525-token prompt, editor closes after 6 s), 3 reps | every rep: `layer-major prefill aborted at layer 7/40, ubatch 3–4` + `slot prompt_abort … n_prompt = 15525, t ≈ 6.05–6.09 s`; engine abort 0.040 / 0.021 / 0.043 s after the server saw the cancel; share side dropped llama-server 0.01–0.02 ms after the Cancel frame; `/slots` read through the forwarder during prefill returned only `{id,is_processing,n_ctx,phase:"prompt",prompt_progress{cache,processed,time_ms,total}}` | PASS |
+| first-token overhead < 50 ms p95 @8 ms RTT | mock (clean): back-to-back p95 **+13.3 ms** (paired p95 +13.6), after 1 s idle p95 **+14.5 ms** (paired +15.0), paced runs +13.3 ms — ≈ one effective RTT (12.9 ms). Real engine (cached prompt, 4 tokens, N=30/arm): difference of p95s −0.2 ms, paired mean +12.5 ms (95 % CI −9.6…+34.6 ms); engine TTFT jitter (sd 59 ms per pair) hides the transport cost, so the per-pair p95 (+141 ms) is engine noise, not transport | PASS |
+| decode throughput within 2 % (real engine, 256 tok ignore_eos, N=20/arm interleaved, 25 s cooldown) | direct 15.02 tok/s, fwd 15.13 tok/s; paired delta **+0.78 %, 95 % CI −0.22…+1.78 %** (sd 2.1 % per pair) → resolved inside ±2 %. Mock paced 512×25 ms: +0.02 / −0.07 % | PASS |
+| 403s | use side: `POST /slots/0?action=save|restore|erase`, `POST /props`, `GET /slots/0`, `/`, `/infill`, `/completion`, encoded paths, other methods, bad/missing Host, wrong port, non-null Origin, same-host Origin, `Origin: null` + `Sec-Fetch-Site: cross-site` → 403 "Not available through a shared Mac", nothing reached llama-server; share side refuses the same requests from a client that skips its own allowlist | PASS |
+| peer death ≤ 10 s (UDP blackhole mid-stream, production config) | use side ended the editor's stream with an SSE error event after **8.95–8.97 s**; share side dropped llama-server after 8.00 s; new requests 502 within 3 s; re-dial after the peer returned (11.0 s after loss) | PASS (`tests/peer_death.rs`) |
+
+- Pre-opened spare stream (M0 follow-up): without it a request pays stream negotiation + SealedStream handshake on the
+  request path: back-to-back p95 +26.7 ms vs +13.3 ms with the spare, after 1 s idle +29.4 vs +14.5 ms → the spare halves the
+  forwarding overhead (≈ 2 RTT → 1 RTT). Background stream open p50 12.2–13.2 ms (= 1 RTT, off the request path).
+- `app/scripts/qualify_openai_stream.py --base-url http://127.0.0.1:18191` (through the forwarder, real engine, 1 rep): **passed**,
+  plain/json/tool deterministic, decode 15.1 / 13.8 / 16.4 tok/s, max chunk gap 0.10 / 0.10 / 0.80 s.
+  `test_forced_tool_choice_overlay.py` is an offline unit test of the oMLX overlay (no base URL) — not applicable.
+- Real engine regime: Groot-19B-A3B Q4_K_M from ~/Modelle, cache 4 GiB, ctx 16384, app streamed regime `PGRN_EVICT=decay`,
+  `PGRN_LAYER_MAJOR=1` (`-b 16384 -ub 2048`, as the app sets for streamed + layer-major), lookahead default, no MTP,
+  `--slot-save-path` (live, as in the app — the forwarder keeps it unreachable), `--pgrn-io-threads 8 --pgrn-compact-slots
+  --gpu-layers 99 --parallel 1 -fa on --jinja --no-warmup --cache-ram 2048 --metrics --reasoning off --temp 0`, inside
+  scripts/heavy.sh, one model process. Binary 10:57:24; the 48 engine files with a newer mtime are byte-identical to the built
+  tree's sources (checked with `cmp`). RSS at end 8.2 GB, **swap Δ 0 MB**.
+- Tests: workspace 195 → **223** green (`p2p-forward` lib 13: proto roundtrip/strict decode/garbage fuzz, allowlist exact list,
+  header filter, Host/Origin, `/slots` sanitizer, admission, chunked decoder, body framing; `loopback_forward.rs` 8; `cancel.rs`
+  3 incl. cancel-while-queued; `peer_death.rs` 1; `p2p-node` `paired_cli.rs` 2 (separate `share`/`use` processes) + config
+  contract `NodeMode::Paired`), Tauri 108/108.
+- Implementation notes: hyper was not needed — the client side parses heads with `httparse` and pipes raw bytes, so the
+  response bytes are exactly llama-server's (chunk framing included); every upstream request is `Connection: close` (the end of
+  the response = upstream close; closing it = cancel). Admission per peer 1 running + 2 queued for `POST /v1/chat/completions`
+  and `/v1/completions` only (light GETs are never queued behind a generation), then 503 + `Retry-After: 5`.

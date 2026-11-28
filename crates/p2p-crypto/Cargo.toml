@@ -12,6 +12,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 x25519-dalek = { version = "2", features = ["static_secrets", "reusable_secrets"] }
 chacha20poly1305 = "0.10"
+# SealedStream AEAD backend (v0.6 M1 decision; ARMv8 assembly, already in the tree via rustls).
+ring = "0.17"
 hkdf = "0.12"
 sha2 = "0.10"
 rand = "0.8"

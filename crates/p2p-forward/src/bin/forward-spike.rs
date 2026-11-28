@@ -5,6 +5,8 @@
 //!   forward-spike mock  --bind 127.0.0.1:18090
 //!   forward-spike bench --arm direct=127.0.0.1:18090 --arm raw=127.0.0.1:18091 --n 200 --path '/mock?n=512'
 //!   forward-spike aead
+//!   forward-spike mock-llama --bind 127.0.0.1:18190          (M1 llama-server mock)
+//!   forward-spike shaper --bind 127.0.0.1:19003 --target 127.0.0.1:9003 --rtt-ms 8   (M1 UDP shaper)
 //!
 //! Loopback only: the raw pipe has no allowlist / trust gate (M1/M2).
 
@@ -21,10 +23,13 @@ use p2p_forward::pipe::PipeMode;
 use p2p_forward::{load_or_create_identity, mock};
 use p2p_libp2p::paired::PairedConfig;
 
+#[path = "../../tests/support/udp_shaper.rs"]
+mod udp_shaper;
+
 #[derive(Parser)]
 #[command(about = "Slipstream v0.6 M0 transport spike")]
 struct Cli {
-    /// QUIC max idle timeout in ms (peer-loss detection); default 10000.
+    /// QUIC max idle timeout in ms (peer-loss detection); default 8000.
     #[arg(long, global = true)]
     idle_timeout_ms: Option<u64>,
     #[command(subcommand)]
@@ -87,6 +92,24 @@ enum Cmd {
         /// Per-sample TSV output.
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// M1 llama-server mock (SSE variants, tool calls, /slots with a secret prompt).
+    MockLlama {
+        #[arg(long)]
+        bind: SocketAddr,
+    },
+    /// Userspace UDP shaper: fixed RTT (+ optional jitter / loss) in front of a QUIC port.
+    Shaper {
+        #[arg(long)]
+        bind: SocketAddr,
+        #[arg(long)]
+        target: SocketAddr,
+        #[arg(long, default_value_t = 8.0)]
+        rtt_ms: f64,
+        #[arg(long, default_value_t = 0.0)]
+        jitter_ms: f64,
+        #[arg(long, default_value_t = 0.0)]
+        loss: f64,
     },
     /// AEAD cost per chunk (seal + open).
     Aead {
@@ -295,6 +318,26 @@ async fn main() -> std::io::Result<()> {
             }
             Ok(())
         }
+        Cmd::MockLlama { bind } => {
+            let m = p2p_forward::mock_llama::start(bind).await?;
+            println!("mock-llama listening {}", m.addr);
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+        Cmd::Shaper {
+            bind,
+            target,
+            rtt_ms,
+            jitter_ms,
+            loss,
+        } => {
+            let s = udp_shaper::start_on(bind, target, Duration::from_secs_f64(rtt_ms / 1e3)).await?;
+            s.control.set_jitter(Duration::from_secs_f64(jitter_ms / 1e3));
+            s.control.set_loss(loss);
+            println!("shaper {} -> {target} rtt_ms={rtt_ms} jitter_ms={jitter_ms} loss={loss}", s.addr);
+            std::future::pending::<()>().await;
+            Ok(())
+        }
         Cmd::Aead { iters } => {
             for size in [64usize, 200, 512, 1024, 4096, 16 * 1024] {
                 let r = aead_bench(size, iters);
@@ -307,7 +350,7 @@ async fn main() -> std::io::Result<()> {
                     r.chunk_bytes as f64 / r.seal_ns.max(1e-9)
                 );
             }
-            println!("comparison (not used by SealedStream yet): ring 0.17 ARMv8 assembly ChaCha20-Poly1305");
+            println!("raw ring 0.17 ChaCha20-Poly1305 (SealedStream's backend since M1; the lines above include its framing)");
             for size in [64usize, 200, 512, 1024, 4096, 16 * 1024] {
                 let r = ring_aead_bench(size, iters);
                 println!(

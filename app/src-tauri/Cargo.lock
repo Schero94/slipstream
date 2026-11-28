@@ -3837,6 +3837,7 @@ dependencies = [
  "hkdf 0.12.4",
  "p2p-core",
  "rand 0.8.8",
+ "ring",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3852,6 +3853,26 @@ dependencies = [
  "p2p-core",
  "serde_json",
  "ureq",
+]
+
+[[package]]
+name = "p2p-forward"
+version = "0.5.3"
+dependencies = [
+ "clap",
+ "futures",
+ "hex",
+ "httparse",
+ "libp2p",
+ "p2p-crypto",
+ "p2p-libp2p",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3896,6 +3917,7 @@ dependencies = [
  "p2p-core",
  "p2p-crypto",
  "p2p-engine",
+ "p2p-forward",
  "p2p-ledger",
  "p2p-libp2p",
  "p2p-net",
@@ -5946,6 +5968,7 @@ checksum = "e464cf451ba96ebfc6f9b6542f17ee8b8956e33f1e40d9690624e59d7a7f8a4b"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "libc",
  "pin-project-lite",

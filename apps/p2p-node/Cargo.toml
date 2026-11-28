@@ -32,6 +32,7 @@ p2p-engine = { workspace = true }
 p2p-ledger = { workspace = true }
 p2p-net = { workspace = true }
 p2p-libp2p = { workspace = true }
+p2p-forward = { workspace = true }
 p2p-router = { workspace = true }
 p2p-security = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }

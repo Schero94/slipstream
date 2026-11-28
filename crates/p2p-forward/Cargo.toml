@@ -3,7 +3,7 @@ name = "p2p-forward"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Slipstream v0.6 'Use your other Mac': byte pipe / forwarder over a persistent paired QUIC stream (M0 spike)"
+description = "Slipstream v0.6 'Use your other Mac': byte pipe / forwarder over a persistent paired QUIC stream (M1: allowlisted forwarder, share/use)"
 
 [dependencies]
 p2p-crypto = { workspace = true }
@@ -11,12 +11,15 @@ p2p-libp2p = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 hex = "0.4"
+httparse = "1"
 libp2p = { version = "0.57", default-features = false, features = ["tokio", "quic", "macros", "ed25519", "ping"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["compat"] }
+
 
 # Comparison only (`forward-spike aead`): ring's ARMv8 assembly ChaCha20-Poly1305 vs the
 # portable RustCrypto backend used by SealedStream. Already in the tree via rustls/libp2p-quic.

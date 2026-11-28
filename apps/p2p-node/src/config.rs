@@ -17,6 +17,9 @@ pub enum NodeMode {
     Private,
     /// Permissionless public mesh. Donating capacity still requires opt-in.
     Community,
+    /// v0.6 "Use your other Mac": own, paired Macs only (allowlisted OpenAI forwarder
+    /// over a pinned QUIC connection). Never donates capacity to the community mesh.
+    Paired,
 }
 
 impl Default for NodeMode {
@@ -31,6 +34,7 @@ impl fmt::Display for NodeMode {
             Self::Local => "local",
             Self::Private => "private",
             Self::Community => "community",
+            Self::Paired => "paired",
         })
     }
 }
@@ -43,6 +47,7 @@ impl FromStr for NodeMode {
             "local" => Ok(Self::Local),
             "private" => Ok(Self::Private),
             "community" => Ok(Self::Community),
+            "paired" => Ok(Self::Paired),
             other => Err(PolicyError::UnknownMode(other.to_string())),
         }
     }
@@ -88,6 +93,9 @@ impl NodePolicy {
     }
 
     pub fn validate(&self) -> Result<(), PolicyError> {
+        if self.donate_capacity && self.mode == NodeMode::Paired {
+            return Err(PolicyError::PairedNeverDonates);
+        }
         if self.donate_capacity && self.mode != NodeMode::Community {
             return Err(PolicyError::DonationRequiresCommunity);
         }
@@ -111,12 +119,14 @@ impl NodePolicy {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PolicyError {
-    #[error("unknown node mode '{0}' (expected local, private, or community)")]
+    #[error("unknown node mode '{0}' (expected local, private, community, or paired)")]
     UnknownMode(String),
     #[error("local mode requires a loopback listen address, got {0}")]
     LocalRequiresLoopback(SocketAddr),
     #[error("public capacity donation requires community mode")]
     DonationRequiresCommunity,
+    #[error("paired mode (your own Macs) never donates capacity to the community mesh")]
+    PairedNeverDonates,
     #[error("{0} must be greater than zero")]
     ZeroLimit(&'static str),
 }
