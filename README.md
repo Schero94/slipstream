@@ -12,7 +12,11 @@ Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that 
 
 It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
-**New in v0.5.2:** the first long prompt is read about 5 seconds faster (39k-token agent prompt in the app: 136 s →
+**New in v0.5.3:** the app offers **Groot-19B-A3B**, a newer slimmed-down Qwen3.6 for coding
+agents — about 60 % faster on small caches (~17.6 tok/s at 4 GiB) and half the disk space.
+Details in [`docs/RELEASE_0.5.3.md`](docs/RELEASE_0.5.3.md).
+
+**v0.5.2:** the first long prompt is read about 5 seconds faster (39k-token agent prompt in the app: 136 s →
 131 s) and Macs with a small expert cache (up to ~8 GiB) write 2–3.5 % faster, both with
 bit-for-bit identical answers. Details in [`docs/RELEASE_0.5.2.md`](docs/RELEASE_0.5.2.md).
 
