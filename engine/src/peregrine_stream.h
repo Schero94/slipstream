@@ -99,6 +99,10 @@ int pgr_stream_is_resident(const pgr_stream *s, long key);
 int pgr_stream_pin_resident(pgr_stream *s, long key);
 /* 1 when PGRN_EVICT asks lookahead kicks to protect their predicted experts. */
 int pgr_evict_protect(void);
+/* 1 when PGRN_EVICT=decay[:H] (inert with a HOT tier). */
+int pgr_evict_is_decay(void);
+/* Pure parser behind PGRN_EVICT (tests): 0 ok, 1 accepted with correction, -1 unknown. */
+int pgr_evict_parse(const char *value, int *mode, double *half);
 pgr_stream_status pgr_stream_get_key_heat_slot(
         pgr_stream *s, long key, float heat,
         const void **data, size_t *data_size, int *hit,

@@ -58,8 +58,10 @@ Never edit files while a build is compiling them (it produces mixed binaries).
   sync, so it adds no GPU sync point.
 - `PGRN_EVICT=lp|decay[:H]` — cache eviction experiment (opt-in): `lp` pins experts a lookahead
   kick requested until the layer's next batch; `decay` = lowest decayed use count (half-life H
-  ubatches, default 16) + lp. Lossless. `PGRN_TRACE=<path>` writes a cache trace for
-  `bench/fetchwall/sim_eviction.py`.
+  ubatches, default 16, finite, clamped ≥ 1e-3) + lp. Lossless. Values matched exactly
+  (case-insensitive); unknown → WARN + default; decay is inert with --pgrn-hot-percent > 0 (WARN).
+  The app sets `decay` for streamed runs with cache < 0.45 × PGRN size. `PGRN_TRACE=<path>` writes a
+  cache trace for `bench/fetchwall/sim_eviction.py` (`--engine-summary` = per-arm outcomes incl. wasted reads).
 - `PGRN_STEER=<bonus>` — cache-steered routing (Cache-Prior arXiv 2412.00099 / CECAR
   2611.20119 / PSR 2610.34721): bonus on resident experts' *selection* probability,
   mask snapshotted at ubatch start (deterministic); mixing weights stay unbiased. Lossy.

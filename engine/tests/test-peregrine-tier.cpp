@@ -13,6 +13,7 @@ extern "C" pgr_clox * pgr_clox_new(int capacity, int k);
 extern "C" void pgr_clox_free(pgr_clox * cache);
 extern "C" int pgr_clox_lookup(pgr_clox * cache, long key, int * slot);
 extern "C" int pgr_clox_insert(pgr_clox * cache, long key, int * slot);
+extern "C" int pgr_evict_parse(const char * value, int * mode, double * half);
 
 #define CHECK(c) do { if (!(c)) { std::printf("FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -52,6 +53,32 @@ static int check_clox_compatibility() {
     }
     pgr_clox_free(clox);
     pgr_tier_free(tier);
+    return 0;
+}
+
+static int check_evict_parse() {
+    int mode = -1;
+    double half = 0.0;
+    CHECK(pgr_evict_parse(nullptr, &mode, &half) == 0 && mode == 0 && half == 16.0);
+    CHECK(pgr_evict_parse("", &mode, &half) == 0 && mode == 0);
+    CHECK(pgr_evict_parse("OFF", &mode, &half) == 0 && mode == 0);
+    CHECK(pgr_evict_parse("clox", &mode, &half) == 0 && mode == 0);
+    CHECK(pgr_evict_parse("LP", &mode, &half) == 0 && mode == 1);
+    CHECK(pgr_evict_parse("Decay", &mode, &half) == 0 && mode == 2 && half == 16.0);
+    CHECK(pgr_evict_parse("decay:64", &mode, &half) == 0 && mode == 2 && half == 64.0);
+    CHECK(pgr_evict_parse("decay:0.5", &mode, &half) == 0 && half == 0.5);
+    // clamped / rejected half-lives keep decay mode and report a correction
+    CHECK(pgr_evict_parse("decay:1e-9", &mode, &half) == 1 && mode == 2 && half == 1e-3);
+    CHECK(pgr_evict_parse("decay:0", &mode, &half) == 1 && mode == 2 && half == 16.0);
+    CHECK(pgr_evict_parse("decay:-4", &mode, &half) == 1 && half == 16.0);
+    CHECK(pgr_evict_parse("decay:inf", &mode, &half) == 1 && half == 16.0);
+    CHECK(pgr_evict_parse("decay:nan", &mode, &half) == 1 && half == 16.0);
+    CHECK(pgr_evict_parse("decay:16x", &mode, &half) == 1 && half == 16.0);
+    CHECK(pgr_evict_parse("decay:", &mode, &half) == 1 && half == 16.0);
+    // prefixes are no longer accepted (old strncmp matched "lpx", "decayed", ...)
+    CHECK(pgr_evict_parse("lpx", &mode, &half) == -1 && mode == 0);
+    CHECK(pgr_evict_parse("decayed", &mode, &half) == -1 && mode == 0);
+    CHECK(pgr_evict_parse("lru", &mode, &half) == -1 && mode == 0);
     return 0;
 }
 
@@ -127,6 +154,7 @@ static int replay_main(int argc, char ** argv) {
 
 int main(int argc, char ** argv) {
     if (argc > 1) return replay_main(argc, argv);
+    if (check_evict_parse() != 0) return 1;
     CHECK(pgr_tier_new(nullptr) == nullptr);
     auto bad = params(2);
     bad.hot_capacity = 9;

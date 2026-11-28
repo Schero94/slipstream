@@ -23,12 +23,23 @@ Policies:
               needed sooner); clairvoyant upper bound with the same prefetch stream.
   belady-nopf demand-only Belady (the paper's bound; prefetch ignored).
   <p>-nopf    the same policy with lookahead prefetch ignored (demand only).
+  <p>+kf      kick-free (PGRN_KICKFREE=1): a lookahead kick first releases the layer's pins
+              of the previous ubatch (they no longer block its prefetches); combinable,
+              e.g. lfu-h16+lp+kf.
   <p>+lp      lookahead-protect: during a lookahead kick, the predicted experts that are
               already resident, and the ones it has just loaded, are pinned until the layer's
               next batch begin (engine semantics), so the kick's own prefetches cannot
               evict them.
 
-usage: sim_eviction.py TRACE [TRACE ...]  [--policies a,b,...] [--validate]
+Reads: a prefetch whose publish fails (no evictable slot) has already been read from SSD;
+the engine logs it as 'P layer expert 2' (3 = the read itself failed). The replay counts these
+as "wasted prefetch reads" and includes them in total reads.
+
+--engine-summary prints, per trace (= per arm), the engine's own recorded outcomes: demand
+misses, prefetch reads published / wasted on a failed publish (P 2) / failed reads (P 3), and
+the wasted rate, for the decode phase and the whole run.
+
+usage: sim_eviction.py TRACE [TRACE ...]  [--policies a,b,...] [--validate] [--engine-summary]
 """
 import argparse
 import collections
@@ -404,14 +415,17 @@ def make_next_use(events):
     return next_use
 
 
-def replay(events, pol, dstart, use_prefetch=True, validate=False, protect=False):
-    """Returns dict of counts (all / decode): demand misses, prefetch reads."""
-    c = dict(dm_all=0, pf_all=0, dm_dec=0, pf_dec=0, acc_dec=0, mism=0, fail=0)
+def replay(events, pol, dstart, use_prefetch=True, validate=False, protect=False, kickfree=False):
+    """Returns dict of counts (all / decode): demand misses, prefetch reads (published),
+    prefetch reads wasted on a failed publish."""
+    c = dict(dm_all=0, pf_all=0, dm_dec=0, pf_dec=0, acc_dec=0, mism=0, fail=0, pw_all=0, pw_dec=0)
     t = 0
     new_group = False
     kick = []   # one lookahead kick = a run of L lines; residency filtered up front (as kick_list)
 
     def flush_kick(dec):
+        if kickfree:
+            pol.unpin_all()   # PGRN_KICKFREE: batch_begin(layer) before the kick
         cold = [x for x in kick if not pol.resident(x)]
         if protect:
             # lookahead-protect: the predicted experts that are already resident may not be
@@ -430,6 +444,10 @@ def replay(events, pol, dstart, use_prefetch=True, validate=False, protect=False
                     c["pf_dec"] += 1
                 if protect:
                     pol.pin_key(x)   # nor may a later prefetch of the same kick evict it
+            else:
+                c["pw_all"] += 1     # read from SSD, then dropped: no evictable slot
+                if dec:
+                    c["pw_dec"] += 1
     def demand(e, flag, dec, hit):
         if not hit:
             if not pol.insert(e, t):
@@ -519,16 +537,41 @@ def validate_prefetch(events, cap):
     return want == got, len(want), len(got)
 
 
+def engine_summary(path, ev):
+    """The engine's recorded outcomes ('D' hit flag, 'P' result) of one trace."""
+    tot = {"dec": collections.Counter(), "all": collections.Counter()}
+    for l, events in ev.items():
+        ds = decode_start_index(events)
+        for i, (t, _, f) in enumerate(events):
+            keys = ("all", "dec") if i >= ds else ("all",)
+            for k in keys:
+                if t == "D":
+                    tot[k]["acc"] += 1
+                    tot[k]["dmiss"] += f == 0
+                elif t == "P":
+                    tot[k][f"p{f}"] += 1
+    print(f"\n## engine outcomes: {path}")
+    print("| phase | demand accesses | demand misses | prefetch published (P1) | wasted: no slot (P2) | read failed (P3) "
+          "| wasted rate (P2+P3)/(P1+P2+P3) | total SSD reads (miss+P1+P2+P3) |")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|")
+    for k in ("dec", "all"):
+        r = tot[k]
+        pr = r["p1"] + r["p2"] + r["p3"]
+        rate = f"{100.0 * (r['p2'] + r['p3']) / pr:.2f} %" if pr else "-"
+        print(f"| {'decode' if k == 'dec' else 'all'} | {r['acc']} | {r['dmiss']} | {r['p1']} | {r['p2']} | {r['p3']} | {rate} "
+              f"| {r['dmiss'] + pr} |")
+
+
 ALL = ["clox-k4", "clox-k4-nopf", "clox-k1", "clox-k2", "clox-k8", "lru", "lfu-h4", "lfu-h8", "lfu-h16",
        "lfu-h32", "lfu-h64", "lfu-h256", "arc", "clox-k4+lp", "clox-k8+lp", "lru+lp", "lfu-h4+lp", "lfu-h16+lp", "lfu-h64+lp",
-       "lfu-h256+lp", "arc+lp",
+       "lfu-h256+lp", "arc+lp", "clox-k4+kf", "clox-k4+lp+kf", "lfu-h16+lp+kf",
        "belady", "belady-nopf"]
 
 
 def build(name, cap, events):
     if name.endswith("-nopf") and name != "belady-nopf":
         return build(name[:-5], cap, events)[0], False
-    if name.endswith("+lp"):
+    if name.endswith("+lp") or name.endswith("+kf"):
         pol, pf = build(name[:-3], cap, events)
         return pol, pf
     if name.startswith("clox-k"):
@@ -551,10 +594,14 @@ def main():
     ap.add_argument("traces", nargs="+")
     ap.add_argument("--policies", default=",".join(ALL))
     ap.add_argument("--validate", action="store_true")
+    ap.add_argument("--engine-summary", action="store_true")
     a = ap.parse_args()
     pols = a.policies.split(",")
     for path in a.traces:
         caps, ev = parse(path)
+        if a.engine_summary:
+            engine_summary(path, ev)
+            continue
         layers = sorted(l for l in ev if l in caps)
         tot = {p: collections.Counter() for p in pols}
         val_ok = True
@@ -570,7 +617,7 @@ def main():
             for p in pols:
                 pol, pf = build(p, caps[l], events)
                 r = replay(events, pol, ds, use_prefetch=pf, validate=(a.validate and p == "clox-k4"),
-                           protect=p.endswith("+lp"))
+                           protect="+lp" in p, kickfree="+kf" in p)
                 tot[p].update(r)
                 if p == "clox-k4":
                     mism += r["mism"]
@@ -582,18 +629,21 @@ def main():
         base = tot["clox-k4"] if "clox-k4" in tot else None
         acc = next(iter(tot.values()))["acc_dec"]
         print(f"decode demand accesses: {acc}")
-        print("| policy | decode demand misses | decode prefetch reads | decode total reads | Δ demand vs clox-k4 | Δ total vs clox-k4 | all-phase reads | fails |")
-        print("|---|---:|---:|---:|---:|---:|---:|---:|")
+        print("| policy | decode demand misses | decode prefetch reads | decode wasted prefetch reads (rate) "
+              "| decode total reads | Δ demand vs clox-k4 | Δ total vs clox-k4 | all-phase reads | fails |")
+        print("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
         for p in pols:
             r = tot[p]
-            dm, pf = r["dm_dec"], r["pf_dec"]
+            dm, pw = r["dm_dec"], r["pw_dec"]
+            pf = r["pf_dec"] + pw   # wasted reads are SSD reads too
+            wr = f"{pw} ({100.0 * pw / pf:.2f} %)" if pf else "0"
             if base:
-                bd, bt = base["dm_dec"], base["dm_dec"] + base["pf_dec"]
+                bd, bt = base["dm_dec"], base["dm_dec"] + base["pf_dec"] + base["pw_dec"]
                 d1 = f"{100.0 * (dm - bd) / bd:+.1f} %" if bd else "-"
                 d2 = f"{100.0 * (dm + pf - bt) / bt:+.1f} %" if bt else "-"
             else:
                 d1 = d2 = "-"
-            print(f"| {p} | {dm} | {pf} | {dm + pf} | {d1} | {d2} | {r['dm_all'] + r['pf_all']} | {r['fail']} |")
+            print(f"| {p} | {dm} | {r['pf_dec']} | {wr} | {dm + pf} | {d1} | {d2} | {r['dm_all'] + r['pf_all'] + r['pw_all']} | {r['fail']} |")
 
 
 if __name__ == "__main__":

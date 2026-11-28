@@ -378,6 +378,11 @@ pgr_runtime *pgr_runtime_new(
             pgr_runtime_free(runtime);
             return nullptr;
         }
+        if (index == 0 && params->hot_percent > 0 && pgr_evict_is_decay()) {
+            fprintf(stderr, "[peregrine] WARN: PGRN_EVICT=decay is inert with --pgrn-hot-percent %u "
+                    "(the HOT/WARM tier picks victims itself); only lookahead-protect applies\n",
+                    (unsigned) params->hot_percent);
+        }
         size_t hot_capacity = partition_capacity * params->hot_percent / 100U;
         if (params->hot_percent > 0 && partition_capacity > 1 && hot_capacity == 0) hot_capacity = 1;
         if (partition_capacity > 1 && hot_capacity >= partition_capacity) hot_capacity = partition_capacity - 1;

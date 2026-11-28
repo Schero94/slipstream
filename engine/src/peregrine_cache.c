@@ -10,7 +10,10 @@
  * Standalone C (no llama.cpp headers yet) so it compiles + self-tests in isolation
  * before being wired into the expert-residency path. */
 #include <math.h>
+#include <pthread.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,26 +24,59 @@
  *   decay[:H]    evict the lowest exponentially decayed demand count (arXiv 2611.15842
  *                App. C; Colibri qwen36_expected_policy.h), half-life H ubatches
  *                (default 16), per-expert history kept across evictions, ties -> least
- *                recently used; implies lookahead-protect.
+ *                recently used; implies lookahead-protect. Only the HOT-less cache
+ *                (--pgrn-hot-percent 0, the default) uses this file's victim choice;
+ *                with a HOT tier decay is inert (the runtime warns).
  * Lossless: only the choice of victim changes, never which experts are computed. */
 enum { PGR_EVICT_CLOX = 0, PGR_EVICT_LP = 1, PGR_EVICT_DECAY = 2 };
 #define PGR_DECAY_IDS 1024   /* expert ids tracked for decayed history (>= n_expert) */
-static int    pgr_evict_mode_v = -1;
+#define PGR_DECAY_HALF_DEFAULT 16.0
+#define PGR_DECAY_HALF_MIN 1e-3  /* below this exp() underflows every count to 0 at once */
+static int    pgr_evict_mode_v = PGR_EVICT_CLOX;
 static double pgr_evict_lambda = 0.0;
+static pthread_once_t pgr_evict_once = PTHREAD_ONCE_INIT;
+
+/* Case-insensitive exact parse of a PGRN_EVICT value. Accepted: unset/"" / "off" / "clox"
+ * (default CLOCK-LRU-K), "lp", "decay", "decay:<H>" (H half-life in ubatches, finite,
+ * > 0; values below 1e-3 are clamped to 1e-3). Returns 0 when the value was accepted as
+ * written, 1 when it was accepted with a correction (H clamped, or H rejected -> default 16),
+ * -1 for an unknown value (mode = clox). */
+int pgr_evict_parse(const char *e, int *mode, double *half);
+int pgr_evict_parse(const char *e, int *mode, double *half) {
+    *mode = PGR_EVICT_CLOX;
+    *half = PGR_DECAY_HALF_DEFAULT;
+    if (!e || !e[0] || strcasecmp(e, "off") == 0 || strcasecmp(e, "clox") == 0) return 0;
+    if (strcasecmp(e, "lp") == 0) { *mode = PGR_EVICT_LP; return 0; }
+    if (strcasecmp(e, "decay") == 0) { *mode = PGR_EVICT_DECAY; return 0; }
+    if (strncasecmp(e, "decay:", 6) == 0) {
+        *mode = PGR_EVICT_DECAY;
+        char *end = NULL;
+        const double h = strtod(e + 6, &end);
+        if (end == e + 6 || *end != '\0' || !isfinite(h) || h <= 0.0) return 1;   /* default H */
+        if (h < PGR_DECAY_HALF_MIN) { *half = PGR_DECAY_HALF_MIN; return 1; }
+        *half = h;
+        return 0;
+    }
+    return -1;
+}
+
+static void pgr_evict_init(void) {
+    const char *e = getenv("PGRN_EVICT");
+    int mode = PGR_EVICT_CLOX;
+    double half = PGR_DECAY_HALF_DEFAULT;
+    const int rc = pgr_evict_parse(e, &mode, &half);
+    if (rc < 0) {
+        fprintf(stderr, "[peregrine] WARN: unknown PGRN_EVICT='%s' (expected off|lp|decay|decay:<H>) - using the default CLOCK-LRU-K\n", e);
+    } else if (rc > 0) {
+        fprintf(stderr, "[peregrine] WARN: PGRN_EVICT='%s': half-life must be a finite number > 0 (min %g) - using H=%g\n",
+                e, PGR_DECAY_HALF_MIN, half);
+    }
+    pgr_evict_lambda = log(2.0) / half;
+    pgr_evict_mode_v = mode;
+}
 
 static int pgr_evict_mode(void) {
-    if (pgr_evict_mode_v < 0) {
-        const char *e = getenv("PGRN_EVICT");
-        int mode = PGR_EVICT_CLOX;
-        double half = 16.0;
-        if (e && strncmp(e, "lp", 2) == 0) mode = PGR_EVICT_LP;
-        else if (e && strncmp(e, "decay", 5) == 0) {
-            mode = PGR_EVICT_DECAY;
-            if (e[5] == ':') { const double h = atof(e + 6); if (h > 0.0) half = h; }
-        }
-        pgr_evict_lambda = log(2.0) / half;
-        pgr_evict_mode_v = mode;   /* benign race: every thread computes the same value */
-    }
+    pthread_once(&pgr_evict_once, pgr_evict_init);
     return pgr_evict_mode_v;
 }
 
@@ -72,8 +108,10 @@ int       pgr_clox_insert(pgr_clox *c, long key, int *out_slot);
 int       pgr_clox_pin(pgr_clox *c, int slot);
 void      pgr_clox_unpin_all(pgr_clox *c);
 int       pgr_evict_protect(void);
+int       pgr_evict_is_decay(void);
 
 int pgr_evict_protect(void) { return pgr_evict_mode() != PGR_EVICT_CLOX; }
+int pgr_evict_is_decay(void) { return pgr_evict_mode() == PGR_EVICT_DECAY; }
 
 static double pgr_decay_val(const pgr_clox *c, long key) {
     const long id = key & 0xFFFF;
