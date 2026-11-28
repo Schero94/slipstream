@@ -54,7 +54,12 @@ reading the same prompt twice.
 
 ## Tried and rejected
 
-DECODE_EXPERIMENTS_PLACEHOLDER
+- Loading the prompt's most-used experts last, so they stay in the cache for the answer: no
+  effect (−0.4 % / +0.9 % at 4 / 10 GiB). The slower words right after a long prompt come from
+  attention over the long context, not from what is cached.
+- Prefetching only the top 6 of the 8 predicted experts (Colibrì #2300): 6–8 % slower here — all
+  8 are needed, and at 4–10 GiB the extra reads do not push out useful experts.
+- Details and raw numbers in `bench/RESULTS.md`.
 
 ## Validation
 
