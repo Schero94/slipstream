@@ -318,6 +318,15 @@ before 0.5.1 the new conversation read 2,745 tokens (18.3 s), now 26 tokens (**1
 answer. The server now restores a copy of a large saved prompt instead of skipping it. When the
 date in the system prompt changes (once a day) the first new conversation costs 22 s instead of 12 s.
 
+### v0.5.2: last-layer crop and cache policy
+
+- The last attention layer now computes attention only for the rows whose output is needed
+  (padded to 64 rows so the same kernel runs): 39k-token first prompt 132.2 → 127.3 s, last-token
+  logits bit-identical (0 of 248,320 differ). An unpadded first version was not bitwise at real
+  shapes (max 3e-4) — caught by review, fixed before release.
+- Cache policy for small caches (app sets `PGRN_EVICT=decay` below 0.45 × sidecar size): decode
+  4 GiB 9.71 → 9.93 tok/s, 6 GiB 12.14 → 12.57, 8 GiB +1 %, 10–14 GiB neutral; same output.
+
 ## What did *not* work (recorded honestly)
 
 - **OS page-cache instead of our bounded arena** — ~75 % faster, but 1000+ swapouts: it breaks "the Mac stays usable." Rejected.

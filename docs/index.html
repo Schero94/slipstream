@@ -32,7 +32,7 @@
   "@type": "SoftwareApplication",
   "name": "Slipstream",
   "url": "https://schero94.github.io/slipstream/",
-  "softwareVersion": "0.5.1",
+  "softwareVersion": "0.5.2",
   "downloadUrl": "https://github.com/Schero94/slipstream/releases/latest",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS 11+ (Apple Silicon), Linux (headless node)",
@@ -241,7 +241,9 @@
 
 <section style="padding-top:44px;padding-bottom:44px">
   <div class="wrap rv" style="padding:24px;border:1px solid var(--line2);border-radius:16px;background:linear-gradient(135deg,rgba(57,192,255,.08),rgba(255,157,47,.05))">
-    <div class="eyebrow">New in v0.5.1</div>
+    <div class="eyebrow">New in v0.5.2</div>
+    <p class="muted" style="margin:10px 0 18px;max-width:72ch"><b>0.5.2:</b> the first long prompt is read about 5 seconds faster (136 s → 131 s for a 39k-token agent prompt), and Macs with a small expert cache write 2–3.5 % faster — with bit-for-bit identical answers. <a href="https://github.com/Schero94/slipstream/blob/main/docs/RELEASE_0.5.2.md" target="_blank" rel="noopener" style="color:var(--cyan)">0.5.2 notes →</a></p>
+    <div class="eyebrow">Since v0.5.1</div>
     <p class="muted" style="margin:10px 0 18px;max-width:72ch"><b>0.5.1:</b> with the requests real coding agents send (tool lists, the date in the system prompt), a new conversation now starts in 1.6 s instead of 18 s, the engine runs on the newest llama.cpp (+4.7 % speed at a 10 GiB cache), and forcing one specific tool works again. <a href="https://github.com/Schero94/slipstream/blob/main/docs/RELEASE_0.5.1.md" target="_blank" rel="noopener" style="color:var(--cyan)">0.5.1 notes →</a></p>
     <div class="eyebrow">Since v0.5.0</div>
     <h2 style="font-size:clamp(24px,3vw,34px);margin-top:10px">Your coding agent never waits for the same prompt twice.</h2>
@@ -314,11 +316,11 @@
     </div>
 
     <div class="rv">
-      <h3 style="margin-top:52px;font-size:19px">How long until the first word, v0.5.0 (~40k-token coding-agent prompt, 4 GiB cache)</h3>
+      <h3 style="margin-top:52px;font-size:19px">How long until the first word, v0.5.2 (~40k-token coding-agent prompt, 4 GiB cache)</h3>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Situation</th><th class="num">v0.4.0</th><th class="num">v0.4.1</th><th class="num">v0.5.0</th></tr></thead>
         <tbody>
-          <tr><td>First prompt ever (cold)</td><td class="num">235 s</td><td class="num">183–190 s</td><td class="num win">137 s</td></tr>
+          <tr><td>First prompt ever (cold)</td><td class="num">235 s</td><td class="num">183–190 s</td><td class="num win">131 s</td></tr>
           <tr><td>New conversation, same agent setup</td><td class="num">235 s</td><td class="num">187 s</td><td class="num win">2.1 s</td></tr>
           <tr><td>First request after restarting the app</td><td class="num">235 s</td><td class="num">187 s</td><td class="num win">2.2 s</td></tr>
           <tr><td>Next turn in the same conversation</td><td class="num">229 s</td><td class="num win">0.8 s</td><td class="num win">0.8 s</td></tr>

@@ -12,7 +12,11 @@ Slipstream is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that 
 
 It ships as a Mac app with the engine bundled inside. Download the `.dmg`, drag it to Applications, open it. Nothing to compile, no dependencies to install. Point your AI coding assistant (Kilo Code, Cline, Cursor, OpenCode, anything OpenAI-compatible) at `http://127.0.0.1:8080/v1` and go.
 
-**New in v0.5.1:** real coding agents (OpenCode, Kilo Code) now start a new conversation in
+**New in v0.5.2:** the first long prompt is read about 5 seconds faster (39k-token agent prompt in the app: 136 s →
+131 s) and Macs with a small expert cache (up to ~8 GiB) write 2–3.5 % faster, both with
+bit-for-bit identical answers. Details in [`docs/RELEASE_0.5.2.md`](docs/RELEASE_0.5.2.md).
+
+**v0.5.1:** real coding agents (OpenCode, Kilo Code) now start a new conversation in
 1.6 s instead of 18 s, even after a side request such as a title; the engine runs on the newest
 llama.cpp (decode +4.7 % at a 10 GiB cache); and forcing one specific tool works again. Details in
 [`docs/RELEASE_0.5.1.md`](docs/RELEASE_0.5.1.md).
@@ -114,7 +118,7 @@ tools and source files), 4 GiB expert cache:
 
 | Situation | v0.4.1 | v0.5.0 |
 |---|---:|---:|
-| First prompt ever (cold) | 183–190 s | **137 s** |
+| First prompt ever (cold) | 183–190 s | **137 s** (131 s in v0.5.2) |
 | New conversation, same agent setup | 187 s | **2.1 s** |
 | First request after restarting the app or server | 187 s | **2.2 s** |
 | Next turn in the same conversation | 0.8 s | 0.8 s |

@@ -4271,3 +4271,13 @@ and not negative.
   disturbance. The crop-file tool's own timings agree (LM 125.9 → 121.2 s, normal 180.5 → 175.5 s).
 - Verdict: KEEP, default on — now bitwise at real shapes on Metal and CPU (fixture) and on the real model (both
   app paths). The −4.5 s claim stands; the earlier "bitwise" claim for fe9d174 was wrong at real shapes.
+
+## 0.5.2 release gate — PASS — 2026-11-28
+
+- build-static rebuilt 10:57:24 with the final engine (padded crop-Q 54dc517, decay policy),
+  ctest -R peregrine 14/14; app regime incl. PGRN_EVICT=decay at 4 GiB and Fast prompt reading.
+- E4: S1 39,517 tokens 131.5 s (0.5.1 gate 135.9 s) · S2 1.7 s · hashes a9f8c4863784 / c4062b92a557.
+- E6: C1 130.0 s · C2 1.4 s · C3 21.5 s · fc14398b032c / 86b8ff31ee95. E5: save 0.21 s, restore
+  0.19 s, S2 2.2 s, c4062b92a557. tool_choice smoke unchanged. Swap 0 MB everywhere.
+- An earlier gate (gate052, binary 08:47 with the unpadded crop) also passed on text hashes; the
+  unpadded version was not bitwise at real shapes (see crop-Q entry) and is not shipped.
