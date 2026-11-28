@@ -4305,3 +4305,47 @@ and not negative.
 - Zip (ditto -c -k --sequesterRsrc --keepParent from the mounted app): unpacks byte-identical to the DMG app (diff -r),
   codesign OK. Node tarball: slipstream-node 0.5.2 arm64, same layout as 0.5.1.
 - Tests: workspace 183/183, Tauri 108/108, Python 44/44 (+2 subtests), UI contracts 7/7, headless assets PASS.
+
+## New model: Groot-19B-A3B-261023 (GrootTeam, 2026-10-23) — KEEP (verified, fast) — 2026-11-28
+
+- Scout (HF API + web, 2026-11-28), constraint: GGUF + PGRN must fit ~24 GB of the internal SSD (41 GB free,
+  converter keeps 16 GiB) → GGUF ≲ 12 GB, expert types in the pgrn-convert whitelist, arch in pin 8e23278c7c36.
+  Considered and rejected: Inkling-2-Mini (thinkingmachines, 2026-11-17, the most-downloaded new MoE; Q4 16.6 GB too
+  big, and inkling2/inkling2_loop always use merged `ffn_gate_up_exps` → needs the open gate_up backlog item; same for
+  its pruned coder PocketCoder-13B-A3B, Q4_0 7.9 GB); North-Mini-Code-1.0 (Cohere, 30B, Q4 ≥ 18 GB); Nemotron-3.5-
+  Lightning-30B-A3B (Q4 ≥ 24 GB); Muse-Glimmer-30B, Raon-1-mini, Micius-Flash, Hy-MT3-30B-A3B (all ≥ 16 GB at Q4);
+  Clef-Flash / vllm-d3 / Kev / Nemotron-3.5-Bolt-E4B (dense); Ling-3.0-tiny 8B-A1B (2026-08, bailingmoe3, fits but
+  general-purpose and small); LFM2.5-8B-A1B (2026-05, family already verified); Mellum2.1-Thinking (family verified).
+- Choice: **GrootTeam/Groot-19B-A3B-261023-GGUF, Q4_K_M** (11,657,618,560 B, sha256 0716cae1f19a…, = HF etag;
+  Apache-2.0). Expert-pruned post-train of Qwen3.6-35B-A3B (128 routed + 1 shared experts, top-8, 40 layers, 1 MTP
+  layer), arch `qwen35moe` = our most-optimized path; model card claims Terminal-Bench 2.1 52.1 / NL2Repo 35.7
+  (vs Qwen3.6-35B-A3B 43.8 / 28.8) — vendor numbers, not verified here. Expert tensors: gate/up Q4_K (41 each),
+  down Q6_K ×21 + Q4_K ×20 (incl. the MTP layer).
+- Convert (build-static llama-pgrn-convert 04:21:17, --io-threads 4): 5,248 experts, 10,035,025,152 B (9.35 GiB) in
+  39.6 s, 0.3 GB RSS. Disk after: 21 GiB free (GGUF + PGRN = 21.7 GB).
+- App regime (run_arm_server.sh: llama-server build-static 10:57:24 = 0.5.2 bundle, compact slots, io 8, NO MTP,
+  ctx 4096, prompt_code.txt, 160 tokens greedy; interleaved, 25 s cooldown), GGUF + PGRN from ~/Modelle:
+
+  | cache | lookahead on (r1 / r2) | lookahead off (PGRN_LOOKAHEAD=-1) | Δ | + PGRN_EVICT=decay (app < 4.2 GiB) | peak RSS |
+  |---:|---:|---:|---:|---:|---:|
+  | 2 GiB | 7.10 / 6.96 (6.95 / 6.94) | 7.03 / 7.06 | ±0 (guard: 26 slots/layer < 4×8) | 7.07 / 7.02 (+1.4 %) | 4.8 GB |
+  | 4 GiB | 15.29 / 14.96 (15.46 / 15.81) | 9.73 / 9.77 | **+55 %** | **17.73 / 17.49 (+13 %)** | 6.9 GB |
+  | 8 GiB | 29.25 / 29.37 | 28.78 / 28.93 | +1.6 % | — (app: no decay) | 11.0 GB |
+  | 12 GiB (all experts) | 29.45 | 29.92 | single rep | — | 12.3 GB |
+
+  Lookahead/decay pairs in parentheses are the second session (decay A/B). **Output hash 3a83d0323170 in all 22 no-MTP
+  runs** (2/4/8 GiB streamed = 12 GiB fully cached, lookahead on = off, decay on = off) → lossless. Swap Δ 0 MB in
+  every run (335.56 MB used throughout). Hit-rate 61.8 % / 77–78 % / 92–93 % / 93.5 % (cold start included).
+- MTP regime (`--spec-type draft-mtp --spec-draft-n-max 4`, 12 GiB): MTP loads, 22.71 / 22.38 tok/s, accepted 99/230
+  (43 %) → **−24 % vs no MTP**; out 96a630a9dd18 (differs from the no-MTP hash; MTP verify batches change numerics).
+  → offer this model with MTP off.
+- Tool calls (toolchoice_smoke.sh, now with GGUF/PGRN overrides, 4 GiB, --jinja --reasoning off): null / auto /
+  required → list_dir {"path":"src"}; named read_file → read_file; none → no tool call — same as Qwen3.6.
+- Coding sanity (chat, 4 GiB, temp 0, reasoning off): finds the two_sum bug (insert-before-check returns [i, i] when
+  n = target/2) with a correct fix and example; a correctly typed TypeScript debounce (Parameters<T>,
+  ReturnType<typeof setTimeout>). The 160-token raw completion starts a sensible thread-safe LRU/TTL module.
+  12.1 / 14.8 tok/s in chat at 4 GiB without decay.
+- vs Qwen3.6-35B-A3B on the same Mac: half the disk (21.7 vs ~40 GB GGUF+PGRN) and at 4 GiB ~17.6 vs 10.9 tok/s (0.5.2
+  bundle smoke, decay, single rep — not an interleaved A/B); 8 GiB already holds 85 % of Groot's experts (~29 tok/s).
+- Verdict: KEEP. Works out of the box (no engine change), lossless, 0 swap, fastest model tested so far at small caches.
+  Script: bench/fetchwall/newmodel_groot.sh. Files stay in ~/Modelle/groot-19b-a3b-q4/.

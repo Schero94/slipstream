@@ -191,6 +191,7 @@ Interactive tier, small active parameter counts, the daily drivers:
 | Laguna S 2.1 | 118B / 8B | DFlash speculative decoding |
 | LFM2.5-24B-A2B | 24B / 2B | verified v0.4.1, lookahead +20 % at 8 GiB |
 | JetBrains Mellum2.1-12B-A2.5B | 12B / 2.5B | verified v0.4.1, small code model, ~23 tok/s at 8 GiB |
+| Groot-19B-A3B-261023 | 19B / 3B | verified v0.5.2. A slimmed-down Qwen3.6 tuned for coding agents and tool use. Needs only ~22 GB of disk (model + sidecar), about half of Qwen3.6-35B. Answers at ~17 tok/s with a 4 GiB cache and ~29 tok/s with 8 GiB. Leave MTP off for this one |
 
 XL streaming tier, verified against mainline llama.cpp. These are 240-466 GB at Q4 and need a big fast SSD:
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Forced tool choice smoke on llama-server (app flags): tool_choice "required", named function, auto.
+# GGUF=/path.gguf [PGRN=/path.pgrn] override the model (default Qwen3.6-35B-A3B).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 BIN=${BIN:-"$HERE/../../llama.cpp-slipstream/build-static/bin/llama-server"}
-G="$HOME/Modelle/qwen3.6-35b-a3b-q4/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"; P=${G%.gguf}.pgrn; PORT=18088
+G=${GGUF:-"$HOME/Modelle/qwen3.6-35b-a3b-q4/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"}; P=${PGRN:-${G%.gguf}.pgrn}; PORT=18088
 "$BIN" -m "$G" --pgrn "$P" --pgrn-cache-gb 4 --pgrn-compact-slots --gpu-layers 99 -c 8192 --parallel 1 -fa on --jinja \
   --reasoning off --temp 0 --host 127.0.0.1 --port $PORT > "$HERE/results/toolchoice.log" 2>&1 &
 PID=$!; trap 'kill $PID 2>/dev/null' EXIT
