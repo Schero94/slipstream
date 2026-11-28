@@ -117,6 +117,10 @@ pub struct RemoteConfig {
     pub app_origin: Option<String>,
     /// Keep the Mac awake while sharing (off in tests).
     pub caffeinate: bool,
+    /// Wake-on-LAN targets (tests: a loopback socket, never the LAN).
+    pub wake: p2p_node::wake::WakeTargets,
+    /// Shorter waking phase (tests); `None` = 20 s.
+    pub wake_window: Option<Duration>,
 }
 
 impl RemoteConfig {
@@ -134,6 +138,8 @@ impl RemoteConfig {
             discovery: true,
             app_origin: Some(APP_ORIGIN.into()),
             caffeinate: true,
+            wake: p2p_node::wake::WakeTargets::Broadcast,
+            wake_window: None,
         }
     }
 }
@@ -151,6 +157,28 @@ struct Inner {
     use_status: Option<Status>,
     use_activity: Option<SlotActivity>,
     monitors: Vec<tokio::task::JoinHandle<()>>,
+    /// M5 (item 8): interface / power info for remote_status, refreshed at most every
+    /// [`NET_CACHE_TTL`] or when the use state changes (a network change shows up there).
+    net: Option<NetInfo>,
+    /// Use state the cache was taken in.
+    net_state: Option<String>,
+}
+
+/// Cached interface / power facts (ifconfig + pmset are not run per poll).
+#[derive(Debug, Clone)]
+struct NetInfo {
+    at: std::time::Instant,
+    lan_ips: Vec<String>,
+    on_battery: bool,
+}
+
+pub const NET_CACHE_TTL: Duration = Duration::from_secs(10);
+
+/// Keep the Mac awake? (M5 battery rules, plan §4): while sharing on AC power always; on
+/// battery only while a paired Mac's request is in flight or queued (sharing on battery is
+/// allowed — the window shows a warning — but the Mac may sleep when idle).
+pub fn want_awake(on_battery: bool, active_requests: usize) -> bool {
+    !on_battery || active_requests > 0
 }
 
 pub struct Core {
@@ -276,9 +304,12 @@ impl RemoteState {
                     None => "verbunden".into(),
                 },
             },
-            UseState::Connecting => "verbindet…".into(),
-            UseState::Reconnecting | UseState::Unreachable { .. } => "nicht erreichbar".into(),
+            UseState::Connecting | UseState::Reconnecting => "verbindet…".into(),
+            UseState::Waking { .. } => "wird geweckt…".into(),
+            UseState::Asleep { .. } => "schläft oder ist aus".into(),
+            UseState::Unreachable { .. } => "nicht erreichbar".into(),
             UseState::PortBusy { .. } => "Port 8080 belegt".into(),
+            UseState::VersionMismatch { .. } => "andere Slipstream-Version".into(),
             UseState::Removed => "hat diesen Mac entfernt".into(),
         };
         Some(format!("Nutzt {} · {what}", u.name))
@@ -358,8 +389,11 @@ fn use_state_view(s: &UseState) -> (&'static str, Option<String>) {
         UseState::Connecting => ("connecting", None),
         UseState::Connected => ("connected", None),
         UseState::Reconnecting => ("reconnecting", None),
+        UseState::Waking { .. } => ("waking", None),
+        UseState::Asleep { error } => ("asleep", Some(error.clone())),
         UseState::Unreachable { error } => ("unreachable", Some(error.clone())),
         UseState::PortBusy { error } => ("port_busy", Some(error.clone())),
+        UseState::VersionMismatch { .. } => ("version_mismatch", None),
         UseState::Removed => ("removed", None),
     }
 }
@@ -382,6 +416,32 @@ fn lan_ipv4() -> Vec<String> {
 }
 
 impl Core {
+    /// Interface / power facts, from the cache unless it is older than [`NET_CACHE_TTL`]
+    /// or the use state changed since (re-read after a network change).
+    async fn net_info(&self) -> NetInfo {
+        let state_key = self.inner.lock().unwrap().use_.as_ref().map(|u| use_state_view(&u.state()).0.to_string());
+        {
+            let inner = self.inner.lock().unwrap();
+            if let Some(n) = &inner.net {
+                if n.at.elapsed() < NET_CACHE_TTL && inner.net_state == state_key {
+                    return n.clone();
+                }
+            }
+        }
+        let (lan_ips, on_battery) = tokio::task::spawn_blocking(|| (lan_ipv4(), on_battery()))
+            .await
+            .unwrap_or_default();
+        let n = NetInfo {
+            at: std::time::Instant::now(),
+            lan_ips,
+            on_battery,
+        };
+        let mut inner = self.inner.lock().unwrap();
+        inner.net = Some(n.clone());
+        inner.net_state = state_key;
+        n
+    }
+
     fn node(&self) -> Result<Arc<Node>, String> {
         let mut inner = self.inner.lock().unwrap();
         if let Some(n) = &inner.node {
@@ -409,14 +469,25 @@ impl Core {
     pub async fn status(self: &Arc<Self>) -> Result<Value, String> {
         let node = self.node().ok();
         let settings = self.settings.lock().unwrap().clone();
+        let net = self.net_info().await;
         let inner = self.inner.lock().unwrap();
         let paired: Vec<Value> = node
             .as_ref()
             .map(|n| n.store.list().iter().map(peer_view).collect())
             .unwrap_or_default();
         let use_v = inner.use_.as_ref().map(|u| {
-            let (state, error) = use_state_view(&u.state());
+            let ustate = u.state();
+            let (state, error) = use_state_view(&ustate);
             let st = inner.use_status.as_ref();
+            let entry = node.as_ref().and_then(|n| n.store.get(&u.peer));
+            let (wake_remaining_s, wol_sent) = match &ustate {
+                UseState::Waking { remaining_s, wol_sent } => (Some(*remaining_s), *wol_sent),
+                _ => (None, false),
+            };
+            let (mismatch_side, mismatch_version) = match &ustate {
+                UseState::VersionMismatch { side, version } => (Some(side.clone()), Some(version.clone())),
+                _ => (None, None),
+            };
             json!({
                 "peer_id": u.peer.to_string(),
                 "name": u.name,
@@ -430,8 +501,17 @@ impl Core {
                 "queue_len": st.map(|s| s.queue_len).unwrap_or(0),
                 "on_battery": st.map(|s| s.on_battery).unwrap_or(false),
                 "can_start_model": st.map(|s| s.can_start_model).unwrap_or(false),
-                "remote_version": st.map(|s| s.app_version.clone()),
+                "remote_version": st.map(|s| s.app_version.clone())
+                    .or_else(|| entry.as_ref().map(|e| e.app_version.clone())),
+                "local_busy": st.map(|s| s.local_busy).unwrap_or(false),
                 "activity": inner.use_activity,
+                // M5
+                "wake_remaining_s": wake_remaining_s,
+                "wol_sent": wol_sent,
+                "wake_known": entry.as_ref().is_some_and(|e| !e.wake_macs.is_empty()),
+                "mismatch_side": mismatch_side,
+                "mismatch_version": mismatch_version,
+                "min_version": p2p_forward::proto::PROTO_FIRST_APP,
             })
         });
         let share_v = inner.share.as_ref().map(|s| {
@@ -444,7 +524,8 @@ impl Core {
                 "queued": q,
                 "port": s.port(),
                 "dial": s.dial_addr(),
-                "lan_ips": lan_ipv4(),
+                "lan_ips": net.lan_ips,
+                "on_battery": net.on_battery,
                 "caffeinate": inner.caffeinate.is_some(),
                 "remote_started": self.remote_started.load(Ordering::SeqCst),
             })
@@ -465,6 +546,8 @@ impl Core {
             "removed_by": inner.removed_by,
             "pairings_reset": node.as_ref().map(|n| n.store.pairings_reset()).unwrap_or(false),
             "lan_started": inner.browser.is_some(),
+            // this Mac on battery (M5: a MacBook using another Mac gets a battery-saving hint)
+            "on_battery": net.on_battery,
             "fp": node.as_ref().map(|n| n.fingerprint()),
         }))
     }
@@ -485,17 +568,12 @@ impl Core {
             let ctl: Arc<dyn ModelControl> = Arc::new(Control {
                 core: Arc::downgrade(self),
             });
-            let session = ShareSession::start(
-                node,
-                ShareOpts {
-                    listen: self.cfg.share_listen.clone(),
-                    upstream: self.cfg.upstream,
-                    name: None,
-                    may_start_model: may,
-                    announce: self.cfg.announce,
-                    model: Some(ctl),
-                },
-            )
+            let mut opts = ShareOpts::new(self.cfg.upstream);
+            opts.listen = self.cfg.share_listen.clone();
+            opts.may_start_model = may;
+            opts.announce = self.cfg.announce;
+            opts.model = Some(ctl);
+            let session = ShareSession::start(node, opts)
             .await
             .map_err(|e| ui_err("share_failed", &[], format!("Sharing could not start: {e}")))?;
             let session = Arc::new(session);
@@ -639,16 +717,16 @@ impl Core {
         let old = self.inner.lock().unwrap().use_.take();
         drop(old);
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let session = UseSession::start(
-            node,
-            UseOpts {
-                peer: peer.clone(),
-                bind: self.cfg.use_bind,
-                token: self.token()?,
-                app_origin: self.cfg.app_origin.clone(),
-                discovery: self.cfg.discovery,
-            },
-        )
+        let mut opts = UseOpts::new(peer.clone(), self.cfg.use_bind);
+        opts.token = Some(self.token()?);
+        opts.app_origin = self.cfg.app_origin.clone();
+        opts.discovery = self.cfg.discovery;
+        opts.wake = self.cfg.wake.clone();
+        if let Some(w) = self.cfg.wake_window {
+            opts.wake_window = w;
+            opts.wake_grace = Duration::from_millis(300);
+        }
+        let session = UseSession::start(node, opts)
         .map_err(|e| ui_err("not_paired", &[], e))?;
         {
             let mut inner = self.inner.lock().unwrap();
@@ -796,7 +874,7 @@ async fn awake_monitor(core: std::sync::Weak<Core>) {
         };
         let (n, q) = share.load();
         let battery = tokio::task::spawn_blocking(on_battery).await.unwrap_or(false);
-        let want = !battery || n + q > 0;
+        let want = want_awake(battery, n + q);
         {
             let mut inner = c.inner.lock().unwrap();
             if let Some(ch) = inner.caffeinate.as_mut() {
@@ -923,10 +1001,11 @@ impl ModelControl for Control {
                     "The model was started on that Mac itself; only it can stop it.",
                 );
             }
-            let in_flight = c.inner.lock().unwrap().share.as_ref().map(|s| s.load().0).unwrap_or(0);
-            // A busy slot with no paired request in flight = a request from this Mac itself.
-            let busy = local_slot_busy(c.cfg.upstream).await;
-            if busy && in_flight == 0 {
+            // M5 busy accounting: llama-server's requests (processing + deferred from
+            // /metrics, else busy /slots) beyond the forwarded requests that hold an upstream
+            // connection are this Mac's own — never stop the model under them.
+            let forwarded = c.inner.lock().unwrap().share.as_ref().map(|s| s.forwarded()).unwrap_or(0);
+            if local_requests_in_flight(c.cfg.upstream, forwarded).await {
                 return refused("local_request", "That Mac is busy with its own work right now.");
             }
             let Some(model) = c.model.lock().unwrap().clone() else {
@@ -939,13 +1018,12 @@ impl ModelControl for Control {
     }
 }
 
-/// The local llama-server is reading a prompt or writing an answer.
-async fn local_slot_busy(upstream: SocketAddr) -> bool {
-    match p2p_forward::status::upstream_get(upstream, "/slots").await {
-        Ok((200, body)) => slotactivity::parse_slots(&String::from_utf8_lossy(&body))
-            .is_some_and(|a| matches!(a.phase.as_str(), "prompt" | "generating")),
-        _ => false,
-    }
+/// A request that did not come through the forwarder is in flight on the local
+/// llama-server (`forwarded` = paired requests holding an upstream connection).
+async fn local_requests_in_flight(upstream: SocketAddr, forwarded: usize) -> bool {
+    p2p_forward::status::local_requests(upstream, forwarded)
+        .await
+        .is_some_and(|n| n > 0)
 }
 
 // ------------------------------------------------------------ commands
@@ -1104,6 +1182,8 @@ mod tests {
             discovery: false,
             app_origin: Some(APP_ORIGIN.into()),
             caffeinate: false,
+            wake: p2p_node::wake::WakeTargets::Off,
+            wake_window: None,
         }
     }
 
@@ -1194,7 +1274,7 @@ mod tests {
         })
         .unwrap();
         assert!(!book_model.running(), "local model stopped after confirm");
-        assert!(using());
+        assert!(book.core.inner.lock().unwrap().use_.is_some()); // (USE_ACTIVE is process-wide)
         wait_for("connected", 15, || {
             book.block(|c| async move { c.status().await }).unwrap()["use"]["state"] == "connected"
         });
@@ -1218,7 +1298,7 @@ mod tests {
         );
         assert!(no_key.starts_with("HTTP/1.1 401"), "{no_key}");
         // A local Start is refused while using another Mac (start_server checks USE_ACTIVE).
-        assert!(using());
+        assert!(book.core.inner.lock().unwrap().use_.is_some()); // (USE_ACTIVE is process-wide)
 
         // Remote model control: start through the big Mac's app, stop only that one.
         let s = book
@@ -1252,7 +1332,7 @@ mod tests {
             let st = book.block(|c| async move { c.status().await }).unwrap();
             st["removed_by"].is_string() && st["mode"] == "off"
         });
-        assert!(!using());
+        assert!(book.core.inner.lock().unwrap().use_.is_none());
         assert!(std::net::TcpListener::bind(bind).is_ok(), "editor port released");
         let st = book.block(|c| async move { c.status().await }).unwrap();
         assert_eq!(st["paired"].as_array().unwrap().len(), 0);
@@ -1304,6 +1384,114 @@ mod tests {
         let r = rs.rt.block_on(ctl.start(peer));
         assert!(matches!(r, StatusReply::Status(ref s) if s.model_running), "{r:?}");
         assert!(!rs.core.remote_started.load(Ordering::SeqCst));
+    }
+
+    /// Pair a fresh big Mac (sharing, upstream = `upstream`) with a fresh MacBook.
+    fn pair_two(tmp: &std::path::Path, upstream: SocketAddr, book_cfg: impl FnOnce(&mut RemoteConfig)) -> (RemoteState, RemoteState, String) {
+        let big = RemoteState::new(cfg(&tmp.join("a"), upstream, free_port()));
+        let mut bc = cfg(&tmp.join("b"), SocketAddr::from(([127, 0, 0, 1], free_port())), free_port());
+        book_cfg(&mut bc);
+        let book = RemoteState::new(bc);
+        let code = big.block(|c| async move { c.pair_code().await }).unwrap()["code"].as_str().unwrap().to_string();
+        let dial = big.block(|c| async move { c.status().await }).unwrap()["share"]["dial"].as_str().unwrap().to_string();
+        let p = book.block(|c| async move { c.pair(dial, vec![], code).await }).unwrap();
+        let peer = p["peer_id"].as_str().unwrap().to_string();
+        (big, book, peer)
+    }
+
+    /// M5 battery rules: awake on AC while sharing; on battery only during a remote request.
+    #[test]
+    fn battery_rules_for_the_power_assertion() {
+        assert!(want_awake(false, 0), "AC, idle: stay awake while sharing");
+        assert!(want_awake(false, 2));
+        assert!(!want_awake(true, 0), "battery, idle: may sleep (sharing allowed, with a warning)");
+        assert!(want_awake(true, 1), "battery, a remote request runs: stay awake for it");
+    }
+
+    /// M5 waking: the big Mac stops sharing (asleep) → the MacBook keeps 8080 bound, shows
+    /// waking, then asleep, and editors get the 503 answers; the big Mac comes back → connected.
+    #[test]
+    fn waking_then_asleep_then_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mock_rt = tokio::runtime::Runtime::new().unwrap();
+        let mock = mock_rt.block_on(p2p_forward::mock_llama::start("127.0.0.1:0".parse().unwrap())).unwrap();
+        let (big, book, big_peer) = pair_two(tmp.path(), mock.addr, |c| c.wake_window = Some(Duration::from_secs(1)));
+        let port = big.block(|c| async move { c.status().await }).unwrap()["share"]["port"].as_u64().unwrap();
+        big.block(|c| async move { c.share_stop().await }).unwrap();
+        book.block(|c| {
+            let p = big_peer.clone();
+            async move { c.use_start(p, true).await }
+        })
+        .unwrap();
+        let bind = book.core.cfg.use_bind;
+        wait_for("waking", 10, || book.block(|c| async move { c.status().await }).unwrap()["use"]["state"] == "waking");
+        let token = api_key_in(&tmp.path().join("b")).unwrap();
+        let req = format!("GET /v1/models HTTP/1.1\r\nHost: {bind}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n");
+        let r = http(bind, &req);
+        assert!(r.starts_with("HTTP/1.1 503") && (r.contains("peer_waking") || r.contains("peer_asleep")), "{r}");
+        wait_for("asleep", 10, || book.block(|c| async move { c.status().await }).unwrap()["use"]["state"] == "asleep");
+        let r = http(bind, &req);
+        assert!(r.starts_with("HTTP/1.1 503") && r.contains("peer_asleep"), "{r}");
+        assert!(book.tray_line().unwrap().contains("schläft"), "{:?}", book.tray_line());
+        // the editor port stays with the forwarder while the big Mac sleeps (USE_ACTIVE is a
+        // process-wide flag shared with the other tests, so check the port itself)
+        assert!(std::net::TcpListener::bind(bind).is_err(), "editor port still bound");
+        // the big Mac wakes and shares again on the same port
+        let mut c2 = cfg(&tmp.path().join("a"), mock.addr, free_port());
+        c2.share_listen = Some(format!("/ip4/127.0.0.1/udp/{port}/quic-v1"));
+        drop(big);
+        let big = RemoteState::new(c2);
+        big.block(|c| async move { c.share_start().await }).unwrap();
+        wait_for("connected", 15, || book.block(|c| async move { c.status().await }).unwrap()["use"]["state"] == "connected");
+        assert!(http(bind, &req).starts_with("HTTP/1.1 200"));
+        book.block(|c| async move { c.use_stop().await }).unwrap();
+        drop(book);
+        drop(big);
+        drop(mock_rt);
+    }
+
+    /// M5 busy accounting: StopModel is refused while llama-server holds a request that did
+    /// not come through the forwarder (live /metrics), allowed when it holds none.
+    #[test]
+    fn stop_model_uses_metrics_minus_forwarded_requests() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mock_rt = tokio::runtime::Runtime::new().unwrap();
+        let mock = mock_rt.block_on(p2p_forward::mock_llama::start("127.0.0.1:0".parse().unwrap())).unwrap();
+        mock.set_local_requests(1);
+        let rs = RemoteState::new(cfg(tmp.path(), mock.addr, free_port()));
+        let model = Arc::new(FakeModel::default());
+        rs.set_model(model.clone());
+        rs.block(|c| async move { c.share_start().await }).unwrap();
+        let ctl = Control { core: Arc::downgrade(&rs.core) };
+        let peer = PeerId::random();
+        assert!(matches!(rs.rt.block_on(ctl.start(peer)), StatusReply::Status(_)));
+        let r = rs.rt.block_on(ctl.stop(peer));
+        assert!(matches!(&r, StatusReply::Refused { code, .. } if code == "local_request"), "{r:?}");
+        assert_eq!(model.stops.load(Ordering::SeqCst), 0);
+        mock.set_local_requests(0);
+        let r = rs.rt.block_on(ctl.stop(peer));
+        assert!(matches!(r, StatusReply::Status(_)), "{r:?}");
+        assert_eq!(model.stops.load(Ordering::SeqCst), 1);
+        drop(rs);
+        drop(mock_rt);
+    }
+
+    /// M5 item 8: interface / power info is cached (no ifconfig per poll).
+    #[test]
+    fn status_caches_interface_info() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rs = RemoteState::new(cfg(tmp.path(), SocketAddr::from(([127, 0, 0, 1], free_port())), free_port()));
+        rs.block(|c| async move { c.status().await }).unwrap();
+        let at = rs.core.inner.lock().unwrap().net.as_ref().unwrap().at;
+        for _ in 0..5 {
+            let st = rs.block(|c| async move { c.status().await }).unwrap();
+            assert!(st["on_battery"].is_boolean());
+        }
+        assert_eq!(rs.core.inner.lock().unwrap().net.as_ref().unwrap().at, at, "re-read within the TTL");
+        // a state change (e.g. after a network change) forces a re-read
+        rs.core.inner.lock().unwrap().net_state = Some("other".into());
+        rs.block(|c| async move { c.status().await }).unwrap();
+        assert_ne!(rs.core.inner.lock().unwrap().net.as_ref().unwrap().at, at);
     }
 
     #[test]

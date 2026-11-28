@@ -108,6 +108,21 @@ pub struct PairInfo {
     /// Server: "you may start/stop my model". Client: always false (a MacBook that uses
     /// a model does not offer one through this pairing).
     pub may_start_model: bool,
+    /// v0.6 M5: the Ethernet / Wi-Fi hardware (MAC) addresses of the sharing Mac, so the
+    /// other Mac can send it a Wake-on-LAN packet when it sleeps. Sent only encrypted and
+    /// bound into the confirmation tag; empty for the Mac that uses a model. Absent in
+    /// pre-M5 messages (the transcript is then the pre-M5 one).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub macs: Vec<String>,
+}
+
+/// At most this many MAC addresses are accepted from a peer.
+pub const MAX_MACS: usize = 8;
+
+/// `aa:bb:cc:dd:ee:ff` (lowercase hex, colons).
+pub fn valid_mac(s: &str) -> bool {
+    let parts: Vec<&str> = s.split(':').collect();
+    parts.len() == 6 && parts.iter().all(|p| p.len() == 2 && p.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// Public inputs both sides must agree on.
@@ -185,6 +200,10 @@ impl SessionKey {
         put_lp(&mut mac, info.name.as_bytes());
         put_lp(&mut mac, info.app_version.as_bytes());
         mac.update(&[info.may_start_model as u8]);
+        if !info.macs.is_empty() {
+            mac.update(b"macs");
+            put_lp(&mut mac, info.macs.join(",").as_bytes());
+        }
         put_lp(&mut mac, prev);
         mac
     }
@@ -232,7 +251,11 @@ impl SessionKey {
             .decrypt(Nonce::from_slice(&[0u8; 12]), Payload { msg: ciphertext, aad: PAIR_TRANSCRIPT_LABEL })
             .map_err(|_| PakeError::Confirmation)?;
         let info: PairInfo = serde_json::from_slice(&plain).map_err(|_| PakeError::BadMessage)?;
-        if info.name.len() > MAX_CLAIM_LEN || info.app_version.len() > MAX_CLAIM_LEN {
+        if info.name.len() > MAX_CLAIM_LEN
+            || info.app_version.len() > MAX_CLAIM_LEN
+            || info.macs.len() > MAX_MACS
+            || !info.macs.iter().all(|m| valid_mac(m))
+        {
             return Err(PakeError::BadMessage);
         }
         Ok(info)
@@ -272,7 +295,7 @@ mod tests {
     }
 
     fn info(name: &str) -> PairInfo {
-        PairInfo { name: name.into(), app_version: "0.6.0".into(), may_start_model: true }
+        PairInfo { name: name.into(), app_version: "0.6.0".into(), may_start_model: true, macs: vec![] }
     }
 
     fn keys(code_a: &str, code_b: &str, ids_a: (&[u8], &[u8]), ids_b: (&[u8], &[u8])) -> (SessionKey, SessionKey) {
@@ -360,14 +383,31 @@ mod tests {
         variants.push((t(), info("Mac Studi0")));
         variants.push((t(), PairInfo { app_version: "0.6.1".into(), ..ib.clone() }));
         variants.push((t(), PairInfo { may_start_model: false, ..ib.clone() }));
+        // M5: the MAC addresses are bound too (a relay cannot swap the wake target)
+        variants.push((t(), PairInfo { macs: vec!["aa:bb:cc:dd:ee:ff".into()], ..ib.clone() }));
         for (tt, ii) in variants {
             assert!(ka.verify_peer(&tt, &ii, &[], &tag).is_err());
         }
         assert!(ka.verify_peer(&t(), &ib, b"x", &tag).is_err());
         // length prefixes: moving bytes between fields changes the tag
-        let i1 = PairInfo { name: "ab".into(), app_version: "c".into(), may_start_model: true };
-        let i2 = PairInfo { name: "a".into(), app_version: "bc".into(), may_start_model: true };
+        let i1 = PairInfo { name: "ab".into(), app_version: "c".into(), may_start_model: true, macs: vec![] };
+        let i2 = PairInfo { name: "a".into(), app_version: "bc".into(), may_start_model: true, macs: vec![] };
         assert_ne!(kb.confirm(&t(), &i1, &[]), kb.confirm(&t(), &i2, &[]));
+    }
+
+    #[test]
+    fn wake_macs_travel_sealed_and_are_validated() {
+        let (ka, kb) = keys("424242", "424242", (A, B), (A, B));
+        let ib = PairInfo { macs: vec!["a4:83:e7:01:02:03".into(), "a4:83:e7:01:02:04".into()], ..info("Mac Studio") };
+        let opened = ka.open_info(&kb.seal_info(&ib)).unwrap();
+        assert_eq!(opened, ib);
+        ka.verify_peer(&t(), &opened, &[], &kb.confirm(&t(), &ib, &[])).unwrap();
+        let bad = PairInfo { macs: vec!["not-a-mac".into()], ..info("Mac Studio") };
+        assert_eq!(ka.open_info(&kb.seal_info(&bad)), Err(PakeError::BadMessage));
+        let many = PairInfo { macs: vec!["a4:83:e7:01:02:03".into(); MAX_MACS + 1], ..info("Mac Studio") };
+        assert_eq!(ka.open_info(&kb.seal_info(&many)), Err(PakeError::BadMessage));
+        // no MACs → the JSON has no "macs" key (pre-M5 shape)
+        assert!(!String::from_utf8(serde_json::to_vec(&info("x")).unwrap()).unwrap().contains("macs"));
     }
 
     #[test]

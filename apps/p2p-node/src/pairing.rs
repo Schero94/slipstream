@@ -541,6 +541,7 @@ async fn handle_pair_stream(ctx: &PairCtx, peer: PeerId, stream: libp2p::Stream)
                 app_version: clean_name(&info_a.app_version),
                 // we decide what a paired Mac may do with our model
                 may_start_model: ctx.info.may_start_model,
+                wake_macs: vec![],
             };
             ctx.trust.store.add(entry.clone())?;
             write_msg(&mut io, &PairMsg::Done { ack: hex::encode(key.seal_ack()) }).await?;
@@ -828,6 +829,7 @@ pub async fn pair_with_checked(
         last_seen: Some(unix_now()),
         app_version: clean_name(&info_b.app_version),
         may_start_model: info_b.may_start_model,
+        wake_macs: info_b.macs.clone(),
     };
     store.add(entry.clone())?;
     Ok(entry)
@@ -844,6 +846,16 @@ pub fn local_info(name: Option<String>, may_start_model: bool) -> PairInfo {
         name: clean_name(&name.unwrap_or_else(p2p_forward::status::default_name)),
         app_version: env!("CARGO_PKG_VERSION").into(),
         may_start_model,
+        macs: Vec::new(),
+    }
+}
+
+/// The sharing Mac's claims: [`local_info`] + its Ethernet / Wi-Fi MAC addresses, so the
+/// other Mac can wake it (M5; sent encrypted and bound into the confirmation tag).
+pub fn share_info(name: Option<String>, may_start_model: bool) -> PairInfo {
+    PairInfo {
+        macs: crate::wake::local_macs(),
+        ..local_info(name, may_start_model)
     }
 }
 
@@ -895,6 +907,7 @@ mod tests {
             last_seen: None,
             app_version: "0".into(),
             may_start_model: true,
+            wake_macs: vec![],
         });
         assert_eq!(w.state(), WindowState::Paired);
         assert_eq!(w.failed_attempts(), 0);

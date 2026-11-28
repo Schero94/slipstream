@@ -75,7 +75,8 @@ async fn refused_requests_never_reach_llama_server() {
         (request("GET", "/slots/0", &host, &[], b""), "slot detail"),
         (request("GET", "/", &host, &[], b""), "web ui"),
         (request("POST", "/infill", &host, &[], b"{}"), "unknown path"),
-        (request("POST", "/completion", &host, &[], b"{}"), "non-OpenAI completion"),
+        (request("POST", "/completions", &host, &[], b"{}"), "completions without /v1"),
+        (request("POST", "/completion/x", &host, &[], b"{}"), "completion sub-path"),
         (request("POST", "/v1/chat%2Fcompletions", &host, &[], b"{}"), "encoded path"),
         (request("DELETE", "/slots", &host, &[], b""), "method"),
         (request("POST", "/v1/chat/completions", "evil.example:8080", &[], &chat_body("plain")), "bad Host"),
@@ -166,7 +167,7 @@ async fn raw_request(
     target: String,
     headers: Vec<(String, String)>,
 ) -> String {
-    let head = ReqHead { method, target, headers, body: BodyKind::None };
+    let head = ReqHead { method, target, headers, body: BodyKind::None, proto: None };
     let stream = control.open_stream(peer, OPENAI_PROTOCOL_V1).await.unwrap();
     let ctx = channel_context(&local, &peer, &OPENAI_PROTOCOL_V1);
     let (mut rd, mut wr) = open_channel(stream, StreamRole::Initiator, &ctx, &keys.0, &keys.1).await.unwrap();
@@ -297,6 +298,10 @@ async fn untrusted_peer_is_disconnected() {
             local: Default::default(),
             discovery: None,
             app_origin: None,
+            persistent: false,
+            connect_wait: p2p_forward::client::CONNECT_WAIT,
+            versions: Default::default(),
+            before_dial: None,
             verbose: false,
         },
     )

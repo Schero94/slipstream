@@ -40,7 +40,7 @@ use crate::allowlist::{self, Canonical, Route};
 use crate::http;
 use crate::proto::{
     channel_context, open_channel, BodyKind, ChannelReader, ChannelWriter, FrameType, ReqHead,
-    BODY_CHUNK, MAX_BODY, OPENAI_PROTOCOL_V1, STATUS_PROTOCOL_V1,
+    BODY_CHUNK, MAX_BODY, OPENAI_PROTOCOL_V1, STATUS_PROTOCOL_V1, Versions,
 };
 use crate::status::{self, StatusRequest};
 use crate::trust::{until_untrusted, PeerTrust};
@@ -93,6 +93,8 @@ pub struct ShareConfig {
     pub name: String,
     /// App-side model lifecycle for `StartModel` / `StopModel` (M4); `None` = headless.
     pub model: Option<Arc<dyn crate::status::ModelControl>>,
+    /// Protocol version spoken / oldest accepted (M5; default = this build's).
+    pub versions: Versions,
     pub verbose: bool,
 }
 
@@ -139,6 +141,10 @@ pub struct ShareStats {
     pub revoked_disconnects: u64,
     /// Requests aborted because the peer lost trust mid-stream.
     pub revoked_streams: u64,
+    /// Requests / status calls refused because the peer speaks a too-old protocol (M5).
+    pub version_refused: u64,
+    /// `Unpair` answers sent to a removed Mac that tried to connect again (M5).
+    pub former_unpairs: u64,
 }
 
 pub type SharedShareStats = Arc<Mutex<ShareStats>>;
@@ -148,11 +154,18 @@ pub struct ShareHandle {
     pub listen_addr: Multiaddr,
     pub stats: SharedShareStats,
     pub admission: Admission,
+    forwarded: Arc<std::sync::atomic::AtomicUsize>,
     control: Control,
     tasks: Vec<JoinHandle<()>>,
 }
 
 impl ShareHandle {
+    /// Forwarded inference requests that hold an upstream connection right now (M5 busy
+    /// accounting: llama-server requests beyond this number are the big Mac's own).
+    pub fn forwarded(&self) -> usize {
+        self.forwarded.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Full pinned address for the use side: `<listen>/p2p/<peer_id>`.
     pub fn dial_addr(&self) -> Multiaddr {
         self.listen_addr.clone().with(Protocol::P2p(self.peer_id))
@@ -185,6 +198,8 @@ struct Ctx {
     model: Option<Arc<dyn crate::status::ModelControl>>,
     admission: Admission,
     limits: ShareLimits,
+    versions: Versions,
+    forwarded: Arc<std::sync::atomic::AtomicUsize>,
     idle: Arc<Mutex<HashMap<PeerId, usize>>>,
     stats: SharedShareStats,
     verbose: bool,
@@ -324,6 +339,7 @@ pub async fn start_share(
     let mut openai = control.accept(OPENAI_PROTOCOL_V1).map_err(other)?;
     let mut status_in = control.accept(STATUS_PROTOCOL_V1).map_err(other)?;
     let admission = Admission::new(cfg.admission);
+    let forwarded = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let ctx = Arc::new(Ctx {
         local,
         node: cfg.node.clone(),
@@ -333,6 +349,8 @@ pub async fn start_share(
         model: cfg.model.clone(),
         admission: admission.clone(),
         limits: cfg.limits,
+        versions: cfg.versions,
+        forwarded: forwarded.clone(),
         idle: Arc::default(),
         stats: stats.clone(),
         verbose: cfg.verbose,
@@ -386,6 +404,7 @@ pub async fn start_share(
         listen_addr,
         stats,
         admission,
+        forwarded,
         control: gated.control.clone(),
         tasks: vec![gated.task, openai_task, status_task],
     })
@@ -405,10 +424,20 @@ async fn handle_status(ctx: &Ctx, peer: PeerId, peer_key: [u8; 32], stream: libp
     let Some(frame) = frame.filter(|f| f.kind == FrameType::StatusReq) else {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "expected StatusReq"));
     };
-    let req: StatusRequest = serde_json::from_slice(&frame.payload)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let (req, peer_proto): (StatusRequest, Option<u32>) = status::decode_request(&frame.payload)?;
     ctx.stats.lock().unwrap().status_requests += 1;
-    let reply = status::answer(req, &ctx.name, ctx.upstream, ctx.admission.load(), peer, ctx.model.as_ref()).await;
+    let view = status::ShareView {
+        name: &ctx.name,
+        upstream: ctx.upstream,
+        load: ctx.admission.load(),
+        forwarded: ctx.forwarded.load(std::sync::atomic::Ordering::SeqCst),
+        versions: ctx.versions,
+    };
+    let reply = status::answer(req, peer_proto, view, peer, ctx.model.as_ref()).await;
+    if matches!(&reply, status::StatusReply::Refused { code, .. } if code == status::VERSION_MISMATCH) {
+        ctx.stats.lock().unwrap().version_refused += 1;
+        eprintln!("share event=version_refused peer={peer} peer_proto={:?}", peer_proto);
+    }
     writer.send_json(FrameType::StatusResp, &reply).await?;
     writer.finish().await
 }
@@ -443,6 +472,20 @@ async fn handle_openai(ctx: &Ctx, peer: PeerId, peer_key: [u8; 32], stream: libp
     let head: ReqHead = serde_json::from_slice(&first.payload)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     ctx.stats.lock().unwrap().requests += 1;
+    // M5: a use side that speaks a too-old protocol is refused cleanly (426 + message).
+    if crate::proto::peer_proto(head.proto) < ctx.versions.min_peer {
+        ctx.stats.lock().unwrap().version_refused += 1;
+        eprintln!("share event=version_refused peer={peer} peer_proto={:?}", head.proto);
+        return send_response(
+            &mut writer,
+            &http::error_response(
+                426,
+                status::VERSION_MISMATCH,
+                &status::too_old_message(&ctx.name, env!("CARGO_PKG_VERSION")),
+            ),
+        )
+        .await;
+    }
     // Allowlist, second time (the use side already checked), and rebuild the request
     // from constants: the peer's method/target bytes are never written upstream.
     let Some(canon) = allowlist::canonical(&head.method, &head.target) else {
@@ -590,6 +633,22 @@ async fn handle_openai(ctx: &Ctx, peer: PeerId, peer_key: [u8; 32], stream: libp
     Ok(())
 }
 
+/// Counts one forwarded request while alive.
+struct InFlight(Arc<std::sync::atomic::AtomicUsize>);
+
+impl InFlight {
+    fn enter(n: &Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(n.clone())
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 struct AbortOnDrop(JoinHandle<()>);
 
 impl Drop for AbortOnDrop {
@@ -735,6 +794,9 @@ async fn forward(
         }
     };
     upstream.set_nodelay(true)?;
+    // Busy accounting (M5): this forwarded request holds an upstream connection until
+    // `forward` returns or is dropped (cancel).
+    let _forwarded = (canon.route == Route::Inference).then(|| InFlight::enter(&ctx.forwarded));
     let (mut up_r, mut up_w) = upstream.into_split();
     up_w.write_all(&upstream_request(canon, head, ctx.upstream)).await?;
     let body = pump_body(up_w, body_rx, head.body);
@@ -835,6 +897,7 @@ mod tests {
                 ("x-bad".into(), "a\r\nPOST /slots/0?action=save HTTP/1.1".into()),
             ],
             body: BodyKind::Length(2),
+            proto: None,
         };
         let canon = allowlist::canonical(&head.method, &head.target).unwrap();
         let req = String::from_utf8(upstream_request(canon, &head, "127.0.0.1:8080".parse().unwrap())).unwrap();

@@ -125,12 +125,12 @@ fn pair_share_use_trust_revoke_end_to_end() {
     let port_http = free_port();
     let local: SocketAddr = format!("127.0.0.1:{port_http}").parse().unwrap();
     // no --peer: the only Mac that shares with this one, from the trust store
-    let _use = Kill(
+    let mut use_proc = Kill(
         Command::new(bin())
             .args(["use", "--http", &local.to_string(), "--data-dir"])
             .arg(&book)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap(),
     );
@@ -139,7 +139,17 @@ fn pair_share_use_trust_revoke_end_to_end() {
         assert!(Instant::now() < deadline, "use never listened");
         std::thread::sleep(Duration::from_millis(50));
     }
-    let models = http(local, format!("GET /v1/models HTTP/1.1\r\nHost: {local}\r\nConnection: close\r\n\r\n"));
+    // M5: the editor port is bound at once; until the paired connection is up it answers
+    // 503 (peer_waking), so wait for the first 200.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let models = loop {
+        let m = http(local, format!("GET /v1/models HTTP/1.1\r\nHost: {local}\r\nConnection: close\r\n\r\n"));
+        if m.starts_with("HTTP/1.1 200") || Instant::now() > deadline {
+            break m;
+        }
+        assert!(m.starts_with("HTTP/1.1 503") && m.contains("peer_waking"), "{m}");
+        std::thread::sleep(Duration::from_millis(200));
+    };
     assert!(models.starts_with("HTTP/1.1 200"), "{models}");
     assert!(models.contains("\"slipstream\""));
     let body = r#"{"stream":true,"messages":[{"role":"user","content":"hi"}]}"#;
@@ -174,9 +184,22 @@ fn pair_share_use_trust_revoke_end_to_end() {
         assert!(Instant::now() < deadline, "MacBook never got the Unpair: {l}");
         std::thread::sleep(Duration::from_millis(100));
     }
+    // M5: the use process (same session code as the app) ends with "removed this Mac"
+    // and releases the editor port; nothing more reaches llama-server.
     let n = mock.requests().len();
-    let after = http(local, format!("GET /v1/models HTTP/1.1\r\nHost: {local}\r\nConnection: close\r\n\r\n"));
-    assert!(after.starts_with("HTTP/1.1 502"), "{after}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(st) = use_proc.0.try_wait().unwrap() {
+            break st;
+        }
+        assert!(Instant::now() < deadline, "use did not stop after being removed");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut err = String::new();
+    use_proc.0.stderr.take().unwrap().read_to_string(&mut err).unwrap();
+    assert!(!status.success());
+    assert!(err.contains("removed this Mac"), "{err}");
+    assert!(TcpStream::connect(local).is_err(), "editor port released");
     assert_eq!(mock.requests().len(), n);
 }
 

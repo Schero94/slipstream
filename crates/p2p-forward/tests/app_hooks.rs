@@ -101,6 +101,10 @@ async fn app_origin_without_token_is_refused_at_start() {
             local: Default::default(),
             discovery: None,
             app_origin: Some(APP.into()),
+            persistent: false,
+            connect_wait: p2p_forward::client::CONNECT_WAIT,
+            versions: Default::default(),
+            before_dial: None,
             verbose: false,
         },
     )

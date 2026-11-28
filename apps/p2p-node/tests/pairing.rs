@@ -203,6 +203,7 @@ async fn scripted_session(
         name: "MacBook".into(),
         app_version: "0.6.0".into(),
         may_start_model: false,
+        macs: vec![],
     };
     let finish = PairMsg::Finish {
         info: hex::encode(key.seal_info(&mine)),

@@ -557,6 +557,8 @@
               <div class="p2p-actions">
                 <button type="button" id="macsStartModel" class="btn btn-primary" hidden></button>
                 <button type="button" id="macsStopModel" class="btn" hidden></button>
+                <button type="button" id="macsRepatch" class="btn btn-primary" hidden></button>
+                <button type="button" id="macsUseLocal" class="btn btn-primary" data-i18n="macs.useLocal" hidden>Use this Mac's model</button>
                 <button type="button" id="macsStopUsing" class="btn" data-i18n="btn.stopRemote">Stop using</button>
               </div>
             </div>
@@ -605,6 +607,7 @@
               </div>
             </div>
             <p id="macsShareStatus" class="macs-status" role="status" aria-live="polite"></p>
+            <p id="macsShareBattery" class="hint macs-warn" data-i18n="macs.shareBattery" hidden>This Mac runs on battery. It still shares, but it may go to sleep when no request runs — plug it in for reliable sharing.</p>
             <div class="p2p-actions"><button type="button" id="macsAddMac" class="btn" data-i18n="macs.addMac" hidden>Pair another Mac</button></div>
             <label class="chk macs-may"><input type="checkbox" id="macsMayStart" /><span data-i18n="macs.mayStart">Paired Macs may start and stop the model</span></label>
             <p class="hint" data-i18n="macs.mayStartHint">They can start it with your last settings (only when there is enough free memory) and stop only a model they started — never while this Mac is answering its own request.</p>

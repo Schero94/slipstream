@@ -89,6 +89,7 @@ pub async fn rig(opts: RigOptions) -> Rig {
             limits: opts.share_limits,
             name: "Test Studio".into(),
             model: opts.model.clone(),
+            versions: Default::default(),
             verbose: false,
         },
     )
@@ -116,6 +117,10 @@ pub async fn rig(opts: RigOptions) -> Rig {
             local: opts.local,
             discovery: None,
             app_origin: opts.app_origin.clone(),
+            persistent: false,
+            connect_wait: p2p_forward::client::CONNECT_WAIT,
+            versions: Default::default(),
+            before_dial: None,
             verbose: false,
         },
     )
@@ -276,7 +281,7 @@ impl RawPeer {
         body_frames: &[Vec<u8>],
     ) -> Result<String, std::io::Error> {
         let (mut rd, mut wr) = self.channel().await;
-        let head = ReqHead { method: method.into(), target: target.into(), headers, body };
+        let head = ReqHead { method: method.into(), target: target.into(), headers, body, proto: None };
         wr.send_json(FrameType::ReqHead, &head).await?;
         for f in body_frames {
             if wr.send(FrameType::ReqBody, f).await.is_err() {

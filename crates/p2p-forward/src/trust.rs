@@ -66,7 +66,22 @@ pub trait PeerTrust: Send + Sync + 'static {
     fn notify_revoked(&self, _peer: PeerId, _old_key: [u8; 32], _control: Control) -> BoxFuture {
         Box::pin(async {})
     }
+
+    /// The static key a *removed* Mac had (a tombstone kept after revoke, M5). When such a
+    /// Mac connects again — it was offline when it was removed — the gate answers with one
+    /// `Unpair` ([`notify_revoked`](Self::notify_revoked), at most once per
+    /// [`FORMER_UNPAIR_EVERY`] per peer) before it closes the connection, so the other Mac
+    /// can show "removed you" instead of retrying forever.
+    fn former_key(&self, _peer: &PeerId) -> Option<[u8; 32]> {
+        None
+    }
 }
+
+/// Rate limit of the `Unpair` answer to a removed Mac that keeps connecting.
+pub const FORMER_UNPAIR_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+/// Delay before that `Unpair` (the dialing side registers its pair-protocol acceptor
+/// right after it starts dialing).
+pub const FORMER_UNPAIR_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Gate re-evaluation tick (pairing-window expiry is noticed within this).
 pub const GATE_TICK: std::time::Duration = std::time::Duration::from_millis(250);
@@ -92,6 +107,7 @@ pub async fn until_untrusted(trust: &dyn PeerTrust, peer: PeerId, key: [u8; 32])
 #[derive(Default)]
 pub struct StaticTrust {
     peers: Mutex<HashMap<PeerId, [u8; 32]>>,
+    former: Mutex<HashMap<PeerId, [u8; 32]>>,
     open: std::sync::atomic::AtomicBool,
     epoch: TrustEpoch,
 }
@@ -110,6 +126,9 @@ impl StaticTrust {
 
     pub fn remove(&self, peer: &PeerId) -> Option<[u8; 32]> {
         let r = self.peers.lock().unwrap().remove(peer);
+        if let Some(k) = r {
+            self.former.lock().unwrap().insert(*peer, k);
+        }
         self.epoch.bump();
         r
     }
@@ -135,6 +154,10 @@ impl PeerTrust for StaticTrust {
 
     fn subscribe(&self) -> watch::Receiver<u64> {
         self.epoch.subscribe()
+    }
+
+    fn former_key(&self, peer: &PeerId) -> Option<[u8; 32]> {
+        self.former.lock().unwrap().get(peer).copied()
     }
 }
 

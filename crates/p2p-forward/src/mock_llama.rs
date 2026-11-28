@@ -60,9 +60,26 @@ pub struct MockLlama {
     pub addr: SocketAddr,
     pub log: Arc<Mutex<MockLog>>,
     pub changed: Arc<Notify>,
+    /// Streamed requests being answered right now.
+    pub active: Arc<std::sync::atomic::AtomicUsize>,
+    /// M5 busy accounting: `-1` (default) = the legacy static `/slots` (one busy slot) and no
+    /// request counters in `/metrics`; `k ≥ 0` = live: `/slots` and `/metrics`
+    /// (`llamacpp:requests_processing`) report `active + k` (k = "local" requests that did
+    /// not come through the forwarder).
+    pub local_busy: Arc<std::sync::atomic::AtomicI64>,
 }
 
 impl MockLlama {
+    /// Switch to live slot/metrics reporting with `k` extra local requests.
+    pub fn set_local_requests(&self, k: i64) {
+        self.local_busy.store(k, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn live_requests(&self) -> Option<usize> {
+        let k = self.local_busy.load(std::sync::atomic::Ordering::SeqCst);
+        (k >= 0).then(|| self.active.load(std::sync::atomic::Ordering::SeqCst) + k as usize)
+    }
+
     pub fn requests(&self) -> Vec<Seen> {
         self.log.lock().unwrap().requests.clone()
     }
@@ -93,6 +110,8 @@ pub async fn start(bind: SocketAddr) -> io::Result<MockLlama> {
         addr: listener.local_addr()?,
         log: Arc::default(),
         changed: Arc::new(Notify::new()),
+        active: Arc::default(),
+        local_busy: Arc::new(std::sync::atomic::AtomicI64::new(-1)),
     };
     let m = mock.clone();
     tokio::spawn(async move {
@@ -316,8 +335,20 @@ async fn serve_one(m: &MockLlama, mut sock: TcpStream) -> io::Result<()> {
             200,
             r#"{"default_generation_settings":{"n_ctx":8192,"params":{"temperature":0}},"total_slots":1,"model_path":"/Users/x/Modelle/m.gguf","chat_template":"..."}"#,
         ),
+        ("POST", "/completion") => json(
+            200,
+            r#"{"content":"hello","stop":true,"timings":{"prompt_n":10,"prompt_ms":100.0,"prompt_per_second":100.0,"predicted_n":5,"predicted_ms":50.0,"predicted_per_second":100.0}}"#,
+        ),
         ("GET", "/metrics") => {
-            let body = "# HELP llamacpp:prompt_tokens_total x\nllamacpp:prompt_tokens_total 1\n";
+            let mut body = "# HELP llamacpp:prompt_tokens_total x\nllamacpp:prompt_tokens_total 1\n".to_string();
+            if let Some(n) = m.live_requests() {
+                // one slot (--parallel 1): one processing, the rest deferred
+                body.push_str(&format!(
+                    "llamacpp:requests_processing {}\nllamacpp:requests_deferred {}\n",
+                    n.min(1),
+                    n.saturating_sub(1)
+                ));
+            }
             format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
@@ -325,9 +356,10 @@ async fn serve_one(m: &MockLlama, mut sock: TcpStream) -> io::Result<()> {
             .into_bytes()
         }
         ("GET", "/slots") => {
+            let busy = m.live_requests().is_none_or(|n| n > 0);
             let slots = serde_json::json!([{
-                "id": 0, "id_task": 7, "n_ctx": 8192, "speculative": false, "is_processing": true,
-                "phase": "prompt", "prompt_progress": {"total": 1000, "cache": 0, "processed": 400, "time_ms": 1234.5},
+                "id": 0, "id_task": 7, "n_ctx": 8192, "speculative": false, "is_processing": busy,
+                "phase": if busy { "prompt" } else { "idle" }, "prompt_progress": {"total": 1000, "cache": 0, "processed": 400, "time_ms": 1234.5},
                 "prompt": SECRET_PROMPT, "next_token": [{"has_next_token": true, "n_remain": -1, "n_decoded": 0}],
                 "params": {"grammar": SECRET_PROMPT, "temperature": 0.0}
             }]);
@@ -354,7 +386,16 @@ async fn serve_one(m: &MockLlama, mut sock: TcpStream) -> io::Result<()> {
     Ok(())
 }
 
+struct Active(Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for Active {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 async fn stream(m: &MockLlama, sock: TcpStream, variant: Variant, p: Params) -> io::Result<()> {
+    m.active.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let _active = Active(m.active.clone());
     let (mut r, mut w) = sock.into_split();
     let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let sent_w = sent.clone();

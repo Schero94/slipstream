@@ -163,6 +163,41 @@ async (page) => {
     checks.macs.pill = pill;
     if (clicks > 3) fail('MacBook pairing takes more than 3 clicks', String(clicks));
     if (!/pill-remote-on/.test(pill.cls)) fail('pill not in remote-on after pairing', JSON.stringify(pill));
+    // 6b. M5 states against the mock: waking → asleep (+ "use this Mac's model"), version
+    //     mismatch, busy with its own work, battery hint, editor re-patch for another context.
+    const st = async (patch, wait = 1300) => {
+      await page.evaluate((p) => Object.assign(window.__M.remote, p), patch);
+      await page.waitForTimeout(wait);
+      return page.evaluate(() => ({
+        pill: document.getElementById('statusPill').className,
+        line: document.getElementById('macsUsingText').textContent,
+        hint: document.getElementById('macsUsingHint').textContent,
+        useLocal: !document.getElementById('macsUseLocal').hidden,
+        repatch: document.getElementById('macsRepatch').hidden ? null : document.getElementById('macsRepatch').textContent,
+      }));
+    };
+    let s5 = await st({ useState: 'waking', wakeMs: 2500, wakeAt: null });
+    checks.macs.waking = s5;
+    if (!/pill-remote-waking/.test(s5.pill) || !/Waking|Wecke/.test(s5.line)) fail('waking state', JSON.stringify(s5));
+    s5 = await st({}, 2600);
+    checks.macs.asleep = s5;
+    if (!/pill-remote-off/.test(s5.pill) || !s5.useLocal || !/asleep|schläft/.test(s5.line)) fail('asleep state', JSON.stringify(s5));
+    s5 = await st({ useState: 'version_mismatch', mismatchSide: 'peer', remoteVersion: '0.5.3' });
+    checks.macs.version = s5;
+    if (!/pill-remote-version/.test(s5.pill) || !/0\.5\.3/.test(s5.line) || !/0\.6/.test(s5.line)) fail('version mismatch', JSON.stringify(s5));
+    await page.evaluate(() => localStorage.setItem('slipstream.editorPatch', JSON.stringify({ targets: ['kilo'], ctx: 32768 })));
+    s5 = await st({ useState: 'connected', nCtx: 65536, localBusy: true, selfBattery: true });
+    checks.macs.connectedM5 = s5;
+    if (!/pill-remote-busy/.test(s5.pill)) fail('busy with its own work not shown', JSON.stringify(s5));
+    if (!/battery|Akku/.test(s5.hint)) fail('battery-saving hint missing', JSON.stringify(s5));
+    if (!s5.repatch || !/65536/.test(s5.repatch)) fail('re-patch offer missing', JSON.stringify(s5));
+    await page.click('#macsRepatch');
+    await page.waitForTimeout(400);
+    const patchCtx = await page.evaluate(() => window.__M.lastPatch && window.__M.lastPatch.ctx);
+    checks.macs.repatchCtx = patchCtx;
+    if (patchCtx !== 65536) fail('re-patch did not write the remote context', String(patchCtx));
+    s5 = await st({ localBusy: false, selfBattery: false });
+    if (s5.repatch) fail('re-patch still offered after patching', s5.repatch);
     const startErr = await page.evaluate(async () => {
       try { await window.__TAURI__.core.invoke('start_server', { cfg: {} }); return 'started'; } catch (e) { return String(e); }
     });
@@ -172,9 +207,14 @@ async (page) => {
     await page.waitForTimeout(1300);
     const after = await page.evaluate(() => document.getElementById('statusPill').className);
     if (/pill-remote/.test(after)) fail('pill still remote after Stop using', after);
-    // Big Mac: one click shows the code.
+    // Big Mac: one click shows the code (on battery: sharing allowed, with a warning).
+    await page.evaluate(() => { window.__M.remote.shareBattery = true; });
     await page.click('#macsShareToggle');
     await page.waitForTimeout(1200);
+    const batt = await page.evaluate(() => !document.getElementById('macsShareBattery').hidden);
+    checks.macs.shareBatteryWarning = batt;
+    if (!batt) fail('sharing on battery shows no warning', String(batt));
+    await page.evaluate(() => { window.__M.remote.shareBattery = false; });
     const code = await page.evaluate(() => document.getElementById('macsCode6').textContent);
     checks.macs.bigMacCode = code;
     if (!/^\d{3} \d{3}$/.test(code)) fail('Share this Mac did not show a code in one click', code);

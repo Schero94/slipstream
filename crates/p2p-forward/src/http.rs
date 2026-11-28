@@ -150,6 +150,7 @@ pub fn reason(status: u16) -> &'static str {
         404 => "Not Found",
         408 => "Request Timeout",
         413 => "Payload Too Large",
+        426 => "Upgrade Required",
         500 => "Internal Server Error",
         502 => "Bad Gateway",
         503 => "Service Unavailable",
@@ -189,7 +190,7 @@ pub fn error_body(status: u16, kind: &str, slipstream_code: &str, message: &str)
 
 pub fn error_response(status: u16, slipstream_code: &str, message: &str) -> Vec<u8> {
     let kind = match status {
-        400 | 408 | 413 => "invalid_request_error",
+        400 | 408 | 413 | 426 => "invalid_request_error",
         401 => "authentication_error",
         403 => "permission_error",
         503 => "unavailable_error",

@@ -36,6 +36,7 @@ async fn share(big: &Mac, mock: &MockLlama) -> Running {
             limits: Default::default(),
             name: big.name.clone(),
             model: None,
+            versions: Default::default(),
             verbose: false,
         },
     )
@@ -64,6 +65,10 @@ async fn use_side(book: &Mac, selector: Option<&str>) -> std::io::Result<(UseHan
             local: Default::default(),
             discovery: None,
             app_origin: None,
+            persistent: false,
+            connect_wait: p2p_forward::client::CONNECT_WAIT,
+            versions: Default::default(),
+            before_dial: None,
             verbose: false,
         },
     )
@@ -221,7 +226,8 @@ async fn revoked_peer_mid_stream_is_aborted_within_1s() {
     // new requests fail and nothing reaches llama-server
     let n_req = mock.requests().len();
     let resp = send(handle.bind, &request("GET", "/v1/models", &host, b"")).await;
-    assert!(resp.starts_with("HTTP/1.1 502"), "{resp}");
+    // M5: no connection → a clear 503 JSON error (was 502 from the failed stream open)
+    assert!(resp.starts_with("HTTP/1.1 503") && resp.contains("peer_unreachable"), "{resp}");
     assert_eq!(mock.requests().len(), n_req);
 }
 
@@ -248,6 +254,7 @@ async fn dial_with_wrong_pinned_peer_id_is_refused() {
             limits: Default::default(),
             name: "Mac Studio".into(),
             model: None,
+            versions: Default::default(),
             verbose: false,
         },
     )
@@ -287,6 +294,10 @@ async fn dial_with_wrong_pinned_peer_id_is_refused() {
             local: Default::default(),
             discovery: None,
             app_origin: None,
+            persistent: false,
+            connect_wait: p2p_forward::client::CONNECT_WAIT,
+            versions: Default::default(),
+            before_dial: None,
             verbose: false,
         },
     )
@@ -352,6 +363,7 @@ async fn tampered_trust_file_is_empty_with_flag_and_fails_closed() {
         last_seen: None,
         app_version: "0".into(),
         may_start_model: true,
+        wake_macs: vec![],
     };
     let forged = serde_json::json!({"body": {"version": 1, "peers": [fake]}, "mac": "00".repeat(32)});
     std::fs::write(&path, serde_json::to_vec(&forged).unwrap()).unwrap();

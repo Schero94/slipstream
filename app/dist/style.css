@@ -797,6 +797,8 @@ details.manual-steps .manual-model { margin: 8px 0 0; }
 .pill-remote-waking { color: var(--yellow); background: var(--yellow-tint); }
 .pill-remote-busy { color: var(--yellow); background: var(--yellow-tint); }
 .pill-remote-off { color: var(--red); background: var(--red-tint); }
+.pill-remote-version { color: var(--yellow); background: var(--yellow-tint); }
+.macs-warn { color: var(--yellow); }
 .share-badge {
   font-size: 11.5px; font-weight: 600; padding: 5px 10px; border-radius: var(--radius-sm);
   color: var(--muted); white-space: nowrap;

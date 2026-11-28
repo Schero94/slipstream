@@ -79,7 +79,25 @@ pub struct TrustedPeer {
     /// `role = share`: the other Mac lets us start/stop its model. `role = use`: we let it
     /// start/stop ours.
     pub may_start_model: bool,
+    /// M5: the other Mac's Ethernet / Wi-Fi hardware addresses (sent at pairing, for
+    /// Wake-on-LAN). Omitted when empty, so pre-M5 files keep their exact bytes (and MAC).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wake_macs: Vec<String>,
 }
+
+/// A Mac this one removed (M5 tombstone): its static key lets the share side answer a
+/// later connection attempt with an authenticated `Unpair` ("removed while offline").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FormerPeer {
+    pub peer_id: String,
+    pub encryption_node_id: String,
+    /// Unix seconds.
+    pub removed_at: u64,
+}
+
+/// Tombstones are kept this long and at most [`MAX_FORMER`] of them.
+pub const FORMER_TTL_SECS: u64 = 30 * 24 * 3600;
+pub const MAX_FORMER: usize = 32;
 
 impl TrustedPeer {
     pub fn peer(&self) -> Option<PeerId> {
@@ -100,6 +118,15 @@ impl TrustedPeer {
 struct Body {
     version: u32,
     peers: Vec<TrustedPeer>,
+    /// M5 tombstones; omitted when empty (pre-M5 files keep their MAC).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    removed: Vec<FormerPeer>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Data {
+    peers: Vec<TrustedPeer>,
+    removed: Vec<FormerPeer>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -140,6 +167,7 @@ fn stamp(path: &Path) -> Option<Stamp> {
 
 struct State {
     peers: Vec<TrustedPeer>,
+    removed: Vec<FormerPeer>,
     pairings_reset: bool,
     stamp: Option<Stamp>,
 }
@@ -147,7 +175,7 @@ struct State {
 /// Outcome of reading the file.
 enum Loaded {
     Missing,
-    Valid(Vec<TrustedPeer>),
+    Valid(Data),
     Tampered,
 }
 
@@ -180,6 +208,7 @@ impl TrustStore {
             key,
             state: Mutex::new(State {
                 peers: Vec::new(),
+                removed: Vec::new(),
                 pairings_reset: false,
                 stamp: None,
             }),
@@ -233,7 +262,13 @@ impl TrustStore {
         {
             return Ok((Loaded::Tampered, st));
         }
-        Ok((Loaded::Valid(file.body.peers), st))
+        Ok((
+            Loaded::Valid(Data {
+                peers: file.body.peers,
+                removed: file.body.removed,
+            }),
+            st,
+        ))
     }
 
     /// Re-read the file. Returns whether the trusted set (or the reset flag) changed;
@@ -242,11 +277,13 @@ impl TrustStore {
         let (loaded, st) = self.read_file()?;
         let mut state = self.state.lock().unwrap();
         state.stamp = st;
-        let (peers, tampered) = match loaded {
-            Loaded::Missing => (Vec::new(), false),
-            Loaded::Valid(p) => (p, false),
-            Loaded::Tampered => (Vec::new(), true),
+        let (data, tampered) = match loaded {
+            Loaded::Missing => (Data::default(), false),
+            Loaded::Valid(d) => (d, false),
+            Loaded::Tampered => (Data::default(), true),
         };
+        let Data { peers, removed } = data;
+        state.removed = removed;
         let mut changed = state.peers != peers;
         if tampered && !state.pairings_reset {
             state.pairings_reset = true;
@@ -291,10 +328,11 @@ impl TrustStore {
     }
 
     /// Atomic write: temp file (0600, create_new) → fsync → rename → fsync dir.
-    fn write(&self, peers: &[TrustedPeer]) -> io::Result<()> {
+    fn write(&self, data: &Data) -> io::Result<()> {
         let body = Body {
             version: TRUST_FILE_VERSION,
-            peers: peers.to_vec(),
+            peers: data.peers.clone(),
+            removed: data.removed.clone(),
         };
         let file = FileFormat {
             mac: hex::encode(self.mac(&body)),
@@ -332,16 +370,34 @@ impl TrustStore {
     /// Read-modify-write under the state lock, starting from the file on disk (so a
     /// concurrent change by another process is not overwritten with a stale view).
     fn modify<T>(&self, f: impl FnOnce(&mut Vec<TrustedPeer>) -> io::Result<T>) -> io::Result<T> {
+        self.modify_all(|d| f(&mut d.peers))
+    }
+
+    fn modify_all<T>(&self, f: impl FnOnce(&mut Data) -> io::Result<T>) -> io::Result<T> {
         let (loaded, _) = self.read_file()?;
         let mut state = self.state.lock().unwrap();
-        let mut peers = match loaded {
-            Loaded::Valid(p) => p,
+        let mut data = match loaded {
+            Loaded::Valid(d) => d,
             // a tampered file is replaced by what we trust in memory (empty after a reset)
-            Loaded::Missing | Loaded::Tampered => state.peers.clone(),
+            Loaded::Missing | Loaded::Tampered => Data {
+                peers: state.peers.clone(),
+                removed: state.removed.clone(),
+            },
         };
-        let out = f(&mut peers)?;
-        self.write(&peers)?;
+        let out = f(&mut data)?;
+        // tombstones: re-paired peers drop theirs; old / excess ones expire
+        let now = unix_now();
+        let live: Vec<String> = data.peers.iter().map(|p| p.peer_id.clone()).collect();
+        data.removed
+            .retain(|r| !live.contains(&r.peer_id) && now.saturating_sub(r.removed_at) < FORMER_TTL_SECS);
+        if data.removed.len() > MAX_FORMER {
+            let cut = data.removed.len() - MAX_FORMER;
+            data.removed.drain(..cut);
+        }
+        self.write(&data)?;
         state.stamp = stamp(&self.path);
+        state.removed = data.removed;
+        let peers = data.peers;
         let changed = state.peers != peers;
         state.peers = peers;
         drop(state);
@@ -366,7 +422,22 @@ impl TrustStore {
     /// Remove by exact PeerId or by name (case-insensitive). Ambiguous names are refused.
     pub fn revoke(&self, selector: &str) -> io::Result<TrustedPeer> {
         let selector = selector.trim();
-        self.modify(|peers| {
+        self.modify_all(|data| {
+            let removed = Self::revoke_in(&mut data.peers, selector)?;
+            // M5: remember the key, so a later connection attempt of the removed Mac (it
+            // may be offline now) is answered with an authenticated Unpair.
+            data.removed.retain(|r| r.peer_id != removed.peer_id);
+            data.removed.push(FormerPeer {
+                peer_id: removed.peer_id.clone(),
+                encryption_node_id: removed.encryption_node_id.clone(),
+                removed_at: unix_now(),
+            });
+            Ok(removed)
+        })
+    }
+
+    fn revoke_in(peers: &mut Vec<TrustedPeer>, selector: &str) -> io::Result<TrustedPeer> {
+        {
             let by_id: Vec<usize> = (0..peers.len()).filter(|&i| peers[i].peer_id == selector).collect();
             let hits = if by_id.is_empty() {
                 (0..peers.len())
@@ -386,7 +457,15 @@ impl TrustStore {
                     format!("several paired Macs are named \"{selector}\"; use the PeerId"),
                 )),
             }
-        })
+        }
+    }
+
+    /// The static key of a Mac this one removed (tombstone), if still kept.
+    pub fn former_key(&self, peer: &PeerId) -> Option<[u8; 32]> {
+        let id = peer.to_string();
+        let state = self.state.lock().unwrap();
+        let r = state.removed.iter().find(|r| r.peer_id == id)?;
+        hex::decode(&r.encryption_node_id).ok()?.try_into().ok()
     }
 
     /// Remove `peer` if present (the peer sent `Unpair`).
@@ -527,6 +606,10 @@ impl PeerTrust for NodeTrust {
         self.store.epoch().subscribe()
     }
 
+    fn former_key(&self, peer: &PeerId) -> Option<[u8; 32]> {
+        self.store.former_key(peer)
+    }
+
     fn notify_revoked(&self, peer: PeerId, old_key: [u8; 32], control: Control) -> BoxFuture {
         let node = self.node.clone();
         let local = self.local;
@@ -652,6 +735,7 @@ mod tests {
             last_seen: None,
             app_version: "0.6.0".into(),
             may_start_model: true,
+            wake_macs: vec![],
         }
     }
 

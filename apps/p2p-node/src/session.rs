@@ -21,14 +21,17 @@ use std::time::Duration;
 use libp2p::multiaddr::Protocol;
 use libp2p::{Multiaddr, PeerId};
 use p2p_crypto::NodeKeypair;
-use p2p_forward::status::StatusRequest;
+use p2p_forward::client::LocalAnswer;
+use p2p_forward::proto::Versions;
+use p2p_forward::status::{Compat, StatusRequest};
 use p2p_forward::{ModelControl, StatusReply, UseHandle};
 use p2p_net::discovery::mdns::{self, DiscoveryEvent};
 use serde::Serialize;
 use tokio::task::JoinHandle;
 
-use crate::pairing::{attach_pair_protocol, local_info, PairCtx, PairingWindow, SystemClock, WindowState};
+use crate::pairing::{attach_pair_protocol, local_info, share_info, PairCtx, PairingWindow, SystemClock, WindowState};
 use crate::trust::{NodeTrust, TrustStore, TrustedPeer, WATCH_INTERVAL};
+use crate::wake::WakeTargets;
 
 /// Default share listen address (fixed port so "Not listed? Enter its address" has a stable
 /// answer); falls back to a free port when 9003 is taken.
@@ -85,6 +88,25 @@ pub struct ShareOpts {
     pub may_start_model: bool,
     pub announce: bool,
     pub model: Option<Arc<dyn ModelControl>>,
+    pub paired: p2p_libp2p::paired::PairedConfig,
+    pub versions: Versions,
+    pub verbose: bool,
+}
+
+impl ShareOpts {
+    pub fn new(upstream: SocketAddr) -> Self {
+        Self {
+            listen: None,
+            upstream,
+            name: None,
+            may_start_model: false,
+            announce: true,
+            model: None,
+            paired: p2p_libp2p::paired::PairedConfig::default(),
+            versions: Versions::default(),
+            verbose: false,
+        }
+    }
 }
 
 /// The pairing window as the window shows it.
@@ -146,12 +168,13 @@ impl ShareSession {
             upstream: opts.upstream,
             trust: trust.clone(),
             node: node.node.clone(),
-            paired: p2p_libp2p::paired::PairedConfig::default(),
+            paired: opts.paired.clone(),
             admission: p2p_forward::admission::AdmissionLimits::default(),
             limits: p2p_forward::ShareLimits::default(),
             name: name.clone(),
             model: opts.model.clone(),
-            verbose: false,
+            versions: opts.versions,
+            verbose: opts.verbose,
         };
         let identity = || p2p_forward::transport_identity(&node.node);
         let handle = match p2p_forward::start_share(identity(), cfg(listen.clone())).await {
@@ -165,7 +188,7 @@ impl ShareSession {
         };
         let pair_task = attach_pair_protocol(
             handle.control(),
-            PairCtx::new(trust.clone(), local_info(Some(name), opts.may_start_model)),
+            PairCtx::new(trust.clone(), share_info(Some(name), opts.may_start_model)),
         )?;
         let fp = crate::lan::fingerprint(&handle.peer_id);
         let control = match crate::control::start_control_server(&node.dir, trust.clone(), handle.dial_addr(), fp).await
@@ -250,6 +273,11 @@ impl ShareSession {
     pub fn load(&self) -> (usize, usize) {
         self.handle.admission.load()
     }
+
+    /// Forwarded requests holding an upstream connection (M5 busy accounting).
+    pub fn forwarded(&self) -> usize {
+        self.handle.forwarded()
+    }
 }
 
 // --------------------------------------------------------------------- use
@@ -257,26 +285,72 @@ impl ShareSession {
 pub struct UseOpts {
     /// PeerId of the paired Mac to use.
     pub peer: String,
+    /// A pinned address (`.../p2p/<PeerId>`) to dial besides the stored `last_addrs`
+    /// (CLI `--peer /ip4/...`).
+    pub addr: Option<Multiaddr>,
     pub bind: SocketAddr,
-    pub token: String,
+    /// Per-install bearer token (the app always sets it; the CLI with `--token-file`).
+    pub token: Option<String>,
     pub app_origin: Option<String>,
     /// LAN discovery (mDNS browse) for the pinned Mac's current address.
     pub discovery: bool,
+    pub paired: p2p_libp2p::paired::PairedConfig,
+    pub spare_stream: bool,
+    pub verbose: bool,
+    /// Where Wake-on-LAN packets go (tests: a loopback socket; never the LAN in tests).
+    pub wake: WakeTargets,
+    /// "Waking…" phase length before "asleep or off" ([`crate::wake::WAKE_WINDOW`]).
+    pub wake_window: Duration,
+    /// Quiet re-dial time after a drop / at start before the waking phase begins.
+    pub wake_grace: Duration,
+    pub versions: Versions,
 }
+
+impl UseOpts {
+    pub fn new(peer: impl Into<String>, bind: SocketAddr) -> Self {
+        Self {
+            peer: peer.into(),
+            addr: None,
+            bind,
+            token: None,
+            app_origin: None,
+            discovery: true,
+            paired: p2p_libp2p::paired::PairedConfig::default(),
+            spare_stream: true,
+            verbose: false,
+            wake: WakeTargets::Broadcast,
+            wake_window: crate::wake::WAKE_WINDOW,
+            wake_grace: WAKE_GRACE,
+            versions: Versions::default(),
+        }
+    }
+}
+
+/// Default [`UseOpts::wake_grace`].
+pub const WAKE_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum UseState {
-    /// First dial in progress.
+    /// First dial in progress (quiet grace period at start).
     Connecting,
-    /// The forwarder runs and the paired connection is up.
+    /// The forwarder runs and the paired connection is up (versions compatible).
     Connected,
-    /// The forwarder runs, the connection dropped; it re-dials by itself.
+    /// The connection dropped; quiet re-dial for [`UseOpts::wake_grace`].
     Reconnecting,
-    /// Could not reach the Mac; retried every [`USE_RETRY`].
+    /// M5: not reachable — magic packets sent (if its MAC is known), re-dialing; editors get
+    /// a 503 "waking" answer. Ends after [`UseOpts::wake_window`].
+    Waking { remaining_s: u64, wol_sent: bool },
+    /// M5: still unreachable after the waking phase: asleep, off or not on this network.
+    /// Re-dialing continues; the window offers "use this Mac's model".
+    Asleep { error: String },
+    /// No address is known for this Mac (no LAN discovery, nothing stored).
     Unreachable { error: String },
     /// The editor port is taken by something else.
     PortBusy { error: String },
+    /// M5: the two Macs speak different protocol versions. `side` = "peer" (the other Mac
+    /// must update) or "self" (this Mac must update); `version` = the other Mac's app version.
+    VersionMismatch { side: String, version: String },
     /// The other Mac removed this one (Unpair) — nothing more is tried.
     Removed,
 }
@@ -284,6 +358,8 @@ pub enum UseState {
 struct UseInner {
     state: Mutex<UseState>,
     handle: Mutex<Option<Arc<UseHandle>>>,
+    /// Last status of the other Mac (from the version check / the app's monitor).
+    status: Mutex<Option<p2p_forward::Status>>,
 }
 
 pub struct UseSession {
@@ -309,6 +385,7 @@ impl UseSession {
         let inner = Arc::new(UseInner {
             state: Mutex::new(UseState::Connecting),
             handle: Mutex::new(None),
+            status: Mutex::new(None),
         });
         let sup = inner.clone();
         let task = tokio::spawn(async move { supervise(node, peer, opts, sup).await });
@@ -328,18 +405,101 @@ impl UseSession {
         self.inner.handle.lock().unwrap().clone()
     }
 
+    /// The last status the version check saw (the app refreshes it with [`rpc`](Self::rpc)).
+    pub fn last_status(&self) -> Option<p2p_forward::Status> {
+        self.inner.status.lock().unwrap().clone()
+    }
+
     pub async fn rpc(&self, req: StatusRequest) -> io::Result<StatusReply> {
         let h = self
             .handle()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "not connected to the other Mac"))?;
-        h.rpc(req).await
+        if !h.connected() {
+            return Err(io::Error::new(io::ErrorKind::NotConnected, "not connected to the other Mac"));
+        }
+        let r = h.rpc(req).await?;
+        if let StatusReply::Status(s) = &r {
+            *self.inner.status.lock().unwrap() = Some(s.clone());
+        }
+        Ok(r)
+    }
+}
+
+/// The 503 answers editors get while the paired Mac is away (EN; the window shows its
+/// own EN/DE text).
+pub fn waking_answer(name: &str) -> LocalAnswer {
+    LocalAnswer::new(
+        503,
+        "peer_waking",
+        format!("{name} is not answering right now; Slipstream is trying to wake it. Try again in a few seconds."),
+    )
+}
+
+pub fn asleep_answer(name: &str) -> LocalAnswer {
+    LocalAnswer::new(
+        503,
+        "peer_asleep",
+        format!(
+            "{name} is asleep, turned off or not on this network. Wake it, or switch back to this Mac's own model in Slipstream (Your Macs)."
+        ),
+    )
+}
+
+/// The local answer (426) while the versions do not match.
+pub fn version_answer(name: &str, side: &str, version: &str) -> LocalAnswer {
+    let msg = if side == "self" {
+        format!(
+            "{name} runs Slipstream {version}, which needs a newer Slipstream on this Mac. Update this Mac to {} or newer.",
+            p2p_forward::proto::PROTO_FIRST_APP
+        )
+    } else {
+        format!(
+            "{name} runs Slipstream {version}. Update it to {} or newer.",
+            p2p_forward::proto::PROTO_FIRST_APP
+        )
+    };
+    LocalAnswer::new(426, p2p_forward::status::VERSION_MISMATCH, msg)
+}
+
+/// What the version check found.
+enum Check {
+    Ok(p2p_forward::Status),
+    Mismatch { side: &'static str, version: String },
+    /// Could not ask (try again later).
+    Unknown,
+}
+
+async fn version_check(handle: &UseHandle, versions: Versions, stored_version: &str) -> Check {
+    match tokio::time::timeout(Duration::from_secs(10), handle.rpc(StatusRequest::Status)).await {
+        Ok(Ok(StatusReply::Status(s))) => match s.compat(versions) {
+            Compat::Ok => Check::Ok(s),
+            Compat::PeerTooOld => Check::Mismatch {
+                side: "peer",
+                version: s.app_version.clone(),
+            },
+            Compat::SelfTooOld => Check::Mismatch {
+                side: "self",
+                version: s.app_version.clone(),
+            },
+        },
+        Ok(Ok(StatusReply::Refused { code, .. })) if code == p2p_forward::status::VERSION_MISMATCH => Check::Mismatch {
+            side: "self",
+            version: stored_version.to_string(),
+        },
+        // The other Mac does not speak our status protocol at all: another version.
+        Ok(Err(e)) if e.kind() == io::ErrorKind::Unsupported => Check::Mismatch {
+            side: "peer",
+            version: stored_version.to_string(),
+        },
+        _ => Check::Unknown,
     }
 }
 
 async fn supervise(node: Arc<Node>, peer: PeerId, opts: UseOpts, inner: Arc<UseInner>) {
     let set = |s: UseState| *inner.state.lock().unwrap() = s;
+    let entry_name = node.store.get(&peer).map(|p| p.name).unwrap_or_else(|| "The other Mac".into());
     let (lan_inputs, _lan) = if opts.discovery {
-        match crate::lan::start_use_discovery(node.store.clone(), peer, false) {
+        match crate::lan::start_use_discovery(node.store.clone(), peer, opts.verbose) {
             Ok((d, l)) => (Some(d), Some(l)),
             Err(e) => {
                 eprintln!("use event=no_lan_discovery error={e}");
@@ -350,19 +510,36 @@ async fn supervise(node: Arc<Node>, peer: PeerId, opts: UseOpts, inner: Arc<UseI
         (None, None)
     };
     let trust = NodeTrust::new(node.store.clone(), node.node.clone());
-    loop {
+    // `Unpair` from the big Mac (also its answer when a removed Mac reconnects) arrives on
+    // the pair protocol: registered before the first dial.
+    let pair_task: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::default();
+    let hook: p2p_forward::client::BeforeDial = {
+        let (slot, trust) = (pair_task.clone(), trust.clone());
+        Arc::new(move |control| {
+            if let Ok(t) = attach_pair_protocol(control, PairCtx::new(trust.clone(), local_info(None, false))) {
+                if let Some(old) = slot.lock().unwrap().replace(t) {
+                    old.abort();
+                }
+            }
+        })
+    };
+    // 1. The forwarder: bound at once (persistent), dials in the background.
+    let (handle, pair) = loop {
         if !node.store.is_trusted(&peer) {
             set(UseState::Removed);
             return;
         }
-        let target = match crate::trust::resolve_use_peer(&node.store, Some(&peer.to_string())) {
-            Ok((_, Some(addr))) => addr,
-            Ok((id, None)) => Multiaddr::empty().with(Protocol::P2p(id)),
-            Err(e) => {
-                set(UseState::Unreachable { error: e });
-                tokio::time::sleep(USE_RETRY).await;
-                continue;
-            }
+        let target = match &opts.addr {
+            Some(a) => a.clone(),
+            None => match crate::trust::resolve_use_peer(&node.store, Some(&peer.to_string())) {
+                Ok((_, Some(addr))) => addr,
+                Ok((id, None)) => Multiaddr::empty().with(Protocol::P2p(id)),
+                Err(e) => {
+                    set(UseState::Unreachable { error: e });
+                    tokio::time::sleep(USE_RETRY).await;
+                    continue;
+                }
+            },
         };
         if lan_inputs.is_none() && target.iter().count() <= 1 {
             set(UseState::Unreachable {
@@ -378,49 +555,132 @@ async fn supervise(node: Arc<Node>, peer: PeerId, opts: UseOpts, inner: Arc<UseI
                 trust: trust.clone(),
                 node: node.node.clone(),
                 bind: opts.bind,
-                paired: p2p_libp2p::paired::PairedConfig::default(),
-                spare_stream: true,
-                token: Some(opts.token.clone()),
+                paired: opts.paired.clone(),
+                spare_stream: opts.spare_stream,
+                token: opts.token.clone(),
                 local: p2p_forward::LocalLimits::default(),
                 discovery: lan_inputs.clone(),
                 app_origin: opts.app_origin.clone(),
-                verbose: false,
+                persistent: true,
+                connect_wait: p2p_forward::client::CONNECT_WAIT,
+                versions: opts.versions,
+                before_dial: Some(hook.clone()),
+                verbose: opts.verbose,
             },
         )
         .await;
-        let handle = match started {
-            Ok(h) => Arc::new(h),
+        match started {
+            Ok(h) => {
+                let h = Arc::new(h);
+                let pair = pair_task.lock().unwrap().take();
+                h.set_offline(waking_answer(&entry_name));
+                break (h, pair);
+            }
             Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
                 set(UseState::PortBusy { error: e.to_string() });
                 tokio::time::sleep(USE_RETRY).await;
-                continue;
             }
             Err(e) => {
                 set(UseState::Unreachable { error: e.to_string() });
                 tokio::time::sleep(USE_RETRY).await;
-                continue;
             }
-        };
-        // `Unpair` from the big Mac arrives on this protocol and removes it from our store.
-        let pair = attach_pair_protocol(handle.control(), PairCtx::new(trust.clone(), local_info(None, false))).ok();
-        *inner.handle.lock().unwrap() = Some(handle.clone());
-        set(UseState::Connected);
-        loop {
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            if !node.store.is_trusted(&peer) {
-                inner.handle.lock().unwrap().take();
-                if let Some(p) = pair {
-                    p.abort();
-                }
-                set(UseState::Removed);
-                return;
-            }
-            set(if handle.connected() {
-                UseState::Connected
-            } else {
-                UseState::Reconnecting
-            });
         }
+    };
+    *inner.handle.lock().unwrap() = Some(handle.clone());
+
+    // 2. Watch: connection, version, waking, removal.
+    let t_start = tokio::time::Instant::now();
+    let mut ever_connected = false;
+    let mut checked = false;
+    let mut mismatch: Option<(String, String)> = None;
+    let mut down_since: Option<tokio::time::Instant> = Some(t_start);
+    let mut last_wol: Option<tokio::time::Instant> = None;
+    let mut wol_sent = false;
+    loop {
+        if !node.store.is_trusted(&peer) {
+            inner.handle.lock().unwrap().take();
+            if let Some(p) = pair {
+                p.abort();
+            }
+            set(UseState::Removed);
+            return;
+        }
+        if handle.connected() {
+            ever_connected = true;
+            down_since = None;
+            last_wol = None;
+            wol_sent = false;
+            if !checked {
+                let stored = node.store.get(&peer).map(|p| p.app_version).unwrap_or_default();
+                match version_check(&handle, opts.versions, &stored).await {
+                    Check::Ok(s) => {
+                        checked = true;
+                        mismatch = None;
+                        handle.set_blocked(None);
+                        *inner.status.lock().unwrap() = Some(s);
+                    }
+                    Check::Mismatch { side, version } => {
+                        checked = true;
+                        eprintln!("use event=version_mismatch peer={peer} side={side} version={version}");
+                        handle.set_blocked(Some(version_answer(&entry_name, side, &version)));
+                        mismatch = Some((side.to_string(), version));
+                    }
+                    Check::Unknown => {}
+                }
+            }
+            set(match &mismatch {
+                Some((side, version)) => UseState::VersionMismatch {
+                    side: side.clone(),
+                    version: version.clone(),
+                },
+                None => UseState::Connected,
+            });
+        } else {
+            checked = false;
+            let now = tokio::time::Instant::now();
+            let since = *down_since.get_or_insert(now);
+            let down = now.duration_since(since);
+            if down < opts.wake_grace {
+                handle.set_offline(waking_answer(&entry_name));
+                set(if ever_connected { UseState::Reconnecting } else { UseState::Connecting });
+            } else {
+                let waking_for = down - opts.wake_grace;
+                let resend = if waking_for < opts.wake_window {
+                    crate::wake::WAKE_RESEND
+                } else {
+                    Duration::from_secs(60)
+                };
+                if last_wol.is_none_or(|t| now.duration_since(t) >= resend) {
+                    last_wol = Some(now);
+                    let macs = node.store.get(&peer).map(|p| p.wake_macs).unwrap_or_default();
+                    let targets = opts.wake.clone();
+                    let sent = tokio::task::spawn_blocking(move || {
+                        crate::wake::send_wake(&macs, &targets.resolve()).unwrap_or(0)
+                    })
+                    .await
+                    .unwrap_or(0);
+                    if sent > 0 {
+                        wol_sent = true;
+                        eprintln!("use event=wake_sent peer={peer} datagrams={sent} unix_ms={}", p2p_forward::unix_ms());
+                    }
+                }
+                if waking_for < opts.wake_window {
+                    handle.set_offline(waking_answer(&entry_name));
+                    set(UseState::Waking {
+                        remaining_s: (opts.wake_window - waking_for).as_secs(),
+                        wol_sent,
+                    });
+                } else {
+                    handle.set_offline(asleep_answer(&entry_name));
+                    set(UseState::Asleep {
+                        error: handle
+                            .last_error()
+                            .unwrap_or_else(|| "no answer".into()),
+                    });
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 

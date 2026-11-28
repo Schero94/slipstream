@@ -261,6 +261,10 @@ async fn binds_ipv6_loopback_too_and_refuses_if_taken() {
             local: LocalLimits::default(),
             discovery: None,
             app_origin: None,
+            persistent: false,
+            connect_wait: p2p_forward::client::CONNECT_WAIT,
+            versions: Default::default(),
+            before_dial: None,
             verbose: false,
         },
     )
@@ -299,6 +303,7 @@ async fn idle_streams_capped_and_handshake_bounded() {
             target: "/health".into(),
             headers: vec![],
             body: BodyKind::None,
+            proto: None,
         };
         if wr.send_json(FrameType::ReqHead, &head).await.is_err() {
             continue;

@@ -38,6 +38,11 @@ pub fn target_bytes_ok(target: &str) -> bool {
 const ROUTES: &[(&str, &str, Route)] = &[
     ("POST", "/v1/chat/completions", Route::Inference),
     ("POST", "/v1/completions", Route::Inference),
+    // M5: llama-server's native completion endpoint (the app's benchmark reads its
+    // `timings`). Same handler family as `/v1/completions`, takes the model slot (so it
+    // goes through inference admission), and has no file side effects: slot save/restore
+    // lives only under `POST /slots/*`, which stays refused.
+    ("POST", "/completion", Route::Inference),
     ("GET", "/v1/models", Route::Light),
     ("GET", "/health", Route::Light),
     ("POST", "/tokenize", Route::Light),
@@ -361,6 +366,7 @@ mod tests {
     fn exact_allowlist() {
         assert_eq!(route("POST", "/v1/chat/completions"), Some(Route::Inference));
         assert_eq!(route("POST", "/v1/completions"), Some(Route::Inference));
+        assert_eq!(route("POST", "/completion"), Some(Route::Inference));
         assert_eq!(route("GET", "/v1/models"), Some(Route::Light));
         assert_eq!(route("GET", "/health"), Some(Route::Light));
         for p in ["/tokenize", "/detokenize", "/apply-template"] {
@@ -379,7 +385,9 @@ mod tests {
             ("POST", "/props"),
             ("GET", "/v1/chat/completions"),
             ("POST", "/chat/completions"),
-            ("POST", "/completion"),
+            ("POST", "/completions"),
+            ("POST", "/completion/"),
+            ("GET", "/completion"),
             ("POST", "/v1/chat/completions/"),
             ("POST", "//v1/chat/completions"),
             ("POST", "/v1/chat%2Fcompletions"),

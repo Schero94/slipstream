@@ -21,7 +21,7 @@ use p2p_libp2p::paired::{build_paired_swarm, handle_ping, Control, PairedBehavio
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::trust::{PeerTrust, GATE_TICK, NOTIFY_REVOKED_BUDGET};
+use crate::trust::{PeerTrust, FORMER_UNPAIR_DELAY, FORMER_UNPAIR_EVERY, GATE_TICK, NOTIFY_REVOKED_BUDGET};
 use crate::unix_ms;
 use crate::worker::{LogRateLimit, SharedShareStats};
 
@@ -86,6 +86,8 @@ async fn gate_loop(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let (close_tx, mut close_rx) = mpsc::unbounded_channel::<PeerId>();
     let mut peers: HashMap<PeerId, PeerState> = HashMap::new();
+    // M5: last `Unpair` answer per removed Mac (rate limit).
+    let mut former_sent: HashMap<PeerId, Instant> = HashMap::new();
     loop {
         let reevaluate = tokio::select! {
             event = swarm.select_next_some() => {
@@ -108,6 +110,26 @@ async fn gate_loop(
                                 peers.entry(peer_id).or_insert(PeerState::Guest);
                                 stats.lock().unwrap().pairing_guests += 1;
                                 eprintln!("{role} event=pairing_guest peer={peer_id} unix_ms={}", unix_ms());
+                            }
+                            None if trust.former_key(&peer_id).is_some()
+                                && former_sent.get(&peer_id).is_none_or(|t| t.elapsed() >= FORMER_UNPAIR_EVERY) =>
+                            {
+                                // A Mac removed while it was offline: tell it once (rate-limited)
+                                // with an authenticated `Unpair` under its old key, then close.
+                                // It never gets a forwarder stream (those re-check trust).
+                                let key = trust.former_key(&peer_id).expect("checked");
+                                former_sent.insert(peer_id, Instant::now());
+                                peers.insert(peer_id, PeerState::Revoking);
+                                stats.lock().unwrap().connections_rejected += 1;
+                                stats.lock().unwrap().former_unpairs += 1;
+                                eprintln!("{role} event=former_peer_unpair peer={peer_id} unix_ms={}", unix_ms());
+                                let notify = trust.notify_revoked(peer_id, key, control.clone());
+                                let close_tx = close_tx.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(FORMER_UNPAIR_DELAY).await;
+                                    let _ = tokio::time::timeout(NOTIFY_REVOKED_BUDGET, notify).await;
+                                    let _ = close_tx.send(peer_id);
+                                });
                             }
                             None => {
                                 // Trust gate: closed before any stream of theirs is read.

@@ -1440,6 +1440,17 @@ const REMOTE_I18N = {
     "pill.remoteWaking": "Waking {name}…",
     "pill.remoteOff": "{name} unreachable",
     "pill.remoteBusy": "{name} busy",
+    "macs.statusWaking": "Waking {name}… Slipstream sent it a wake-up signal and keeps trying.",
+    "macs.statusWakingNoMac": "Trying to reach {name}… (it may be waking up).",
+    "macs.statusAsleep": "{name} is asleep, turned off or not on this network. Wake it, or use this Mac's own model meanwhile.",
+    "macs.useLocal": "Use this Mac's model",
+    "macs.versionPeer": "{name} runs Slipstream {v}. Update it to {min} or newer.",
+    "macs.versionSelf": "{name} runs Slipstream {v}, which needs a newer Slipstream on this Mac. Update this Mac to {min} or newer.",
+    "macs.repatch": "Update editor settings for {name}'s model ({ctx} context)",
+    "macs.repatched": "Editor settings updated for {name}'s model ({ctx} context). Restart the editor.",
+    "macs.batterySaving": "This MacBook saves battery: the model runs on {name}.",
+    "macs.shareBattery": "This Mac runs on battery. It still shares, but it may go to sleep when no request runs — plug it in for reliable sharing.",
+    "pill.remoteVersion": "{name}: update needed",
     "btn.stopRemote": "Stop using",
     "err.remote_active": "This Mac is using another Mac right now. Stop using it first (Your Macs).",
     "err.sharingActive": "This Mac is sharing its model. Turn sharing off before using another Mac.",
@@ -1550,6 +1561,17 @@ const REMOTE_I18N = {
     "pill.remoteWaking": "Wecke {name}…",
     "pill.remoteOff": "{name} nicht erreichbar",
     "pill.remoteBusy": "{name} beschäftigt",
+    "macs.statusWaking": "Wecke {name}… Slipstream hat ein Wecksignal geschickt und versucht es weiter.",
+    "macs.statusWakingNoMac": "Versuche {name} zu erreichen… (er wacht vielleicht gerade auf).",
+    "macs.statusAsleep": "{name} schläft, ist ausgeschaltet oder nicht in diesem Netzwerk. Wecke ihn – oder nutze solange das Modell dieses Macs.",
+    "macs.useLocal": "Modell dieses Macs nutzen",
+    "macs.versionPeer": "{name} hat Slipstream {v}. Aktualisiere ihn auf {min} oder neuer.",
+    "macs.versionSelf": "{name} hat Slipstream {v} und braucht ein neueres Slipstream auf diesem Mac. Aktualisiere diesen Mac auf {min} oder neuer.",
+    "macs.repatch": "Editor-Einstellungen für das Modell von {name} anpassen ({ctx} Kontext)",
+    "macs.repatched": "Editor-Einstellungen für das Modell von {name} angepasst ({ctx} Kontext). Starte den Editor neu.",
+    "macs.batterySaving": "Dieses MacBook spart Akku: Das Modell läuft auf {name}.",
+    "macs.shareBattery": "Dieser Mac läuft auf Akku. Er teilt weiter, kann aber einschlafen, solange keine Anfrage läuft – schließ ihn für zuverlässiges Teilen ans Netzteil an.",
+    "pill.remoteVersion": "{name}: Update nötig",
     "btn.stopRemote": "Nicht mehr nutzen",
     "err.remote_active": "Dieser Mac nutzt gerade einen anderen Mac. Beende das zuerst (Deine Macs).",
     "err.sharingActive": "Dieser Mac teilt sein Modell. Schalte das Teilen aus, bevor du einen anderen Mac nutzt.",
@@ -2763,7 +2785,7 @@ $("powerBtn").onclick = () => {
   return startServer();
 };
 
-const REMOTE_PILL = { "remote-on": "pill.remote", "remote-waking": "pill.remoteWaking", "remote-off": "pill.remoteOff", "remote-busy": "pill.remoteBusy" };
+const REMOTE_PILL = { "remote-on": "pill.remote", "remote-waking": "pill.remoteWaking", "remote-off": "pill.remoteOff", "remote-busy": "pill.remoteBusy", "remote-version": "pill.remoteVersion" };
 function setPill(mode) {
   const p = $("statusPill"), b = $("powerBtn");
   state.pillMode = mode;
@@ -3658,6 +3680,10 @@ async function doAgent(a) {
       $("agentNote").append(before, code, after);
       toast(fillVars(t("agent.patched"), { name: a.name, path, app: a.restart }));
       localStorage.setItem("slipstream.editorConnected", "1"); markJourney();
+      // M5: remember what the editor config was written for (re-patch offer for another Mac)
+      const prev = savedEditorPatch() || { targets: [] };
+      const targets = Array.from(new Set([...(prev.targets || []), a.target]));
+      localStorage.setItem("slipstream.editorPatch", JSON.stringify({ targets, ctx: +$("ctx").value }));
     } catch (e) { toast(String(e), true); }
   } else {
     try {
@@ -3820,8 +3846,9 @@ async function runBenchmark() {
       badge.className = "badge partial"; badge.textContent = `${i}/${runs}`;
       out.innerHTML = `<div class="bench-note bench-run">${t("bench.running")} ${i}/${runs}</div>`
         + renderBenchTable(rows, runs);
+      // srvHeaders: through the forwarder (using another Mac) the benchmark measures that Mac
       const res = await fetch(`http://127.0.0.1:${PORT}/completion`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: srvHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           prompt: benchPrompt(i), n_predict: nTok, temperature: 0, seed: 42,
           cache_prompt: false, stream: false,
@@ -5801,9 +5828,22 @@ function srvHeaders(h) {
 function remotePillMode(r) {
   const u = r && r.use;
   if (!u) return "off";
-  if (u.state === "connected") return u.busy && u.queue_len > 0 ? "remote-busy" : "remote-on";
-  if (u.state === "connecting" || u.state === "reconnecting") return "remote-waking";
+  // "busy": the big Mac works on its own request (local_busy, M5) or ours wait in its queue
+  if (u.state === "connected") return u.local_busy || (u.busy && u.queue_len > 0) ? "remote-busy" : "remote-on";
+  if (u.state === "connecting" || u.state === "reconnecting" || u.state === "waking") return "remote-waking";
+  if (u.state === "version_mismatch") return "remote-version";
   return "remote-off";
+}
+/** M5: the editor config was written for another context size than the used Mac's model
+ *  runs with → the n_ctx to re-patch for, else null. `saved` = {targets, ctx} from the last
+ *  Connect-editor patch (localStorage slipstream.editorPatch). The base URL never changes. */
+function editorRepatchCtx(r, saved) {
+  const u = r && r.use;
+  if (!u || u.state !== "connected" || !u.n_ctx || !saved || !(saved.targets || []).length) return null;
+  return Number(saved.ctx) === Number(u.n_ctx) ? null : Number(u.n_ctx);
+}
+function savedEditorPatch() {
+  try { return JSON.parse(localStorage.getItem("slipstream.editorPatch") || "null"); } catch { return null; }
 }
 function fmtMinSec(s) {
   s = Math.max(0, Math.floor(s || 0));
@@ -5830,6 +5870,12 @@ const REMOTE_BE_KEYS = {
 function remoteUseLine(r) {
   const u = r.use, name = remoteName(r);
   if (u.state === "connecting" || u.state === "reconnecting") return fillVars(t("macs.statusConnecting"), { name });
+  if (u.state === "waking") return fillVars(t(u.wake_known ? "macs.statusWaking" : "macs.statusWakingNoMac"), { name });
+  if (u.state === "asleep") return fillVars(t("macs.statusAsleep"), { name });
+  if (u.state === "version_mismatch") {
+    return fillVars(t(u.mismatch_side === "self" ? "macs.versionSelf" : "macs.versionPeer"),
+      { name, v: u.mismatch_version || u.remote_version || "?", min: u.min_version || "0.6" });
+  }
   if (u.state === "unreachable") return fillVars(t("macs.statusUnreachable"), { name });
   if (u.state === "port_busy") return fillVars(t("macs.statusPortBusy"), { name });
   if (u.model_running === false) return fillVars(t("macs.statusModelOff"), { name });
@@ -5880,8 +5926,10 @@ function renderMacs() {
     const name = remoteName(r);
     $("macsUsingText").textContent = remoteUseLine(r);
     const hints = [t("macs.editorSame")];
-    if (r.use.state === "connected" && r.use.busy && r.use.queue_len > 0) hints.unshift(fillVars(t("macs.busy"), { name }));
+    if (r.use.state === "connected" && (r.use.local_busy || (r.use.busy && r.use.queue_len > 0))) hints.unshift(fillVars(t("macs.busy"), { name }));
     if (r.use.on_battery) hints.push(fillVars(t("macs.battery"), { name }));
+    // this MacBook on battery: a saving hint, never a warning (the work runs elsewhere)
+    if (r.on_battery) hints.push(fillVars(t("macs.batterySaving"), { name }));
     $("macsUsingHint").textContent = hints.join(" ");
     const canCtl = r.use.state === "connected" && r.use.can_start_model;
     const st = $("macsStartModel"), sp = $("macsStopModel");
@@ -5889,6 +5937,10 @@ function renderMacs() {
     sp.hidden = !(canCtl && r.use.model_running === true);
     st.textContent = fillVars(t("macs.startModel"), { name });
     sp.textContent = fillVars(t("macs.stopModel"), { name });
+    const ctx = editorRepatchCtx(r, savedEditorPatch());
+    $("macsRepatch").hidden = ctx === null;
+    if (ctx !== null) $("macsRepatch").textContent = fillVars(t("macs.repatch"), { name, ctx });
+    $("macsUseLocal").hidden = r.use.state !== "asleep";
   }
   // Found list (after "Find my Macs").
   const list = $("macsFound");
@@ -5960,6 +6012,8 @@ function renderMacs() {
     if (share.caffeinate) shareLine += ` · ${t("macs.stayAwake")}`;
   }
   $("macsShareStatus").textContent = shareLine;
+  // sharing on battery is allowed, with a warning (M5 battery rules)
+  $("macsShareBattery").hidden = !(share && share.on_battery);
   // Badge in the card head (big Mac: "Shared · 1 request"; MacBook: "Using Mac Studio").
   const badge = $("macsBadge");
   if (using) { badge.hidden = false; badge.textContent = fillVars(t("pill.remote"), { name: remoteName(r) }); badge.className = "badge ready"; }
@@ -6072,6 +6126,24 @@ async function macsUse(peer, name) {
   poll();
 }
 
+/** Re-run the Connect-editor patch for the used Mac's context size (base URL unchanged). */
+async function macsRepatch() {
+  const r = state.remote, saved = savedEditorPatch();
+  const ctx = editorRepatchCtx(r, saved);
+  if (ctx === null) return;
+  try {
+    for (const target of saved.targets) {
+      await invoke("patch_kilo_config", {
+        cfg: { home: state.def ? state.def.home : "", base_url: BASE_URL, model: agentModelId(),
+               api_key: apiKeyForEditors(), ctx, max_out: 4096, target },
+      });
+    }
+    localStorage.setItem("slipstream.editorPatch", JSON.stringify({ targets: saved.targets, ctx }));
+    toast(fillVars(t("macs.repatched"), { name: remoteName(r), ctx }));
+  } catch (e) { toast(String(e), true); }
+  renderMacs();
+}
+
 async function stopUsingRemote() {
   try { state.remote = await invoke("remote_stop_using"); } catch (e) { toast(remoteErr(e), true); }
   renderMacs();
@@ -6115,6 +6187,12 @@ function initMacs() {
     macsAskCode(a, [], a);
   };
   $("macsStopUsing").onclick = stopUsingRemote;
+  $("macsRepatch").onclick = macsRepatch;
+  // asleep / off: back to this Mac's own model in one click
+  $("macsUseLocal").onclick = async () => {
+    await stopUsingRemote();
+    if (state.modelReady !== false) startServer();
+  };
   $("macsStartModel").onclick = async () => {
     toast(fillVars(t("macs.startingModel"), { name: remoteName(state.remote) }));
     try { await invoke("remote_start_model"); } catch (e) { toast(remoteErr(e), true); }

@@ -10,6 +10,7 @@ pub mod runtime;
 pub mod session;
 pub mod spawn_guard;
 pub mod trust;
+pub mod wake;
 pub mod wire;
 
 pub use admission::{AdmissionController, AdmissionPermit, AdmissionRejection};

@@ -4736,3 +4736,91 @@ Decisions:
   (now a 5 s re-dial loop shown as Waking → unreachable), version-mismatch message, editor re-patch when the other Mac's context differs,
   `Unpair` is only delivered while a share/use connection is up (a revoke with sharing off tells the other Mac at its next connection
   attempt, which is refused), the CLI `share`/`use` still have their own copies of the session code (could move onto `session.rs`).
+
+## v0.6 M5 edge cases — wake, versions, re-patch, busy, battery, chaos — every §5 row tested or documented; chaos green at 2 % loss / 20 ms jitter — 2026-11-28
+
+Plan: docs/plans/2026-11-28-use-your-other-mac.md §5 / §7 / §9 M5. Host M3 Pro 36 GB, macOS 27.0.1, base de9a2c6 + this change, debug
+test builds, everything on one Mac (separate data dirs / processes, mock llama-server, no mDNS in the new tests, Wake-on-LAN packets
+only to a loopback UDP socket — nothing is broadcast on the LAN from tests, no system setting touched). No performance claim in this
+entry; times below are behaviour checks from the test logs.
+
+Code: `crates/p2p-forward` (`proto::{PROTO_VERSION, MIN_PEER_PROTO, PROTO_FIRST_APP, Versions}`, `ReqHead.proto`, `status::{Compat,
+ShareView, local_requests, encode/decode_request, VERSION_MISMATCH}`, `Status.{proto,min_proto,local_busy}`, `client::{persistent,
+connect_wait, LocalAnswer, set_offline, set_blocked, ChunkFramer, peer_lost_tail}`, worker forwarded-request counter + 426 refusal,
+gate `former_key` Unpair answer, allowlist `POST /completion`, mock live `/slots` + `/metrics`), `crates/p2p-crypto` (`PairInfo.macs`,
+bound into the confirmation tag), `apps/p2p-node` (`wake.rs`, trust store `wake_macs` + tombstones, `session.rs` UseState
+Waking/Asleep/VersionMismatch + version check + WoL, CLI `share`/`use` on `session.rs`), `app/src-tauri/src/remote.rs`, `app/dist`.
+
+Decisions:
+- **Editor port while the big Mac is away:** the use side now binds `127.0.0.1`+`[::1]:8080` at once and keeps them (`persistent`);
+  a request waits ≤ 2 s (`CONNECT_WAIT`) for the connection, then gets a **503 JSON** (`Retry-After: 5`, `slipstream_code`
+  `peer_waking` / `peer_asleep` / `peer_unreachable`). A streaming request that cannot start gets the same 503 JSON, not an SSE body:
+  OpenAI clients read non-2xx bodies as JSON errors before a stream starts. A stream that already started and loses the peer ends
+  with the documented SSE error event `data: {"error":{…"slipstream_code":"peer_lost"…}}` **plus the terminating chunk**; the use side
+  now forwards chunked bodies only in whole chunks (`ChunkFramer`, byte-identical overall, holds back at most one partial chunk), so
+  that event always lands on an event boundary (before M5 it could be appended inside a half-forwarded chunk).
+- **Wake:** the sharing Mac sends its `en*` MAC addresses (ifconfig, read-only) in the encrypted pairing claims; they are bound into
+  the SPAKE2 confirmation tag (only when non-empty, so the pre-M5 transcript is unchanged) and stored as `wake_macs` (omitted when empty
+  → pre-M5 trust files keep their HMAC). Unreachable: 2 s quiet re-dial ("connecting"), then "Waking…" for 20 s with a magic packet
+  (6×FF + 16×MAC) to `255.255.255.255:9` + each interface broadcast every 3 s, then "asleep or off" (re-dial continues, WoL every 60 s)
+  with a "Use this Mac's model" button. Whether a real Mac wakes is an M6 check (Ethernet magic packet vs Wi-Fi Sleep Proxy).
+- **Versions:** wire protocol version 1 (`PROTO_VERSION`) travels in every `ReqHead` / status request and every `Status`; absent = 1
+  (nothing older shipped). Use side checks after each (re)connect: peer too old → "{name} runs Slipstream {v}. Update it to 0.6 or
+  newer."; this Mac too old (share refuses with `version_mismatch`) → "…Update this Mac to 0.6 or newer." (EN/DE); editors get a 426
+  with the same text; a peer without the status protocol at all (`UnsupportedProtocol`) also counts as a mismatch. The share side
+  refuses a too-old peer's status call and requests (426) cleanly and counts `version_refused`.
+- **Removed while offline:** revoke keeps a tombstone (PeerId + static key, 30 days, ≤ 32) in the HMAC'd trust store; when the removed
+  Mac connects again the gate answers once (≤ 1 per 10 s per peer; the dialing side registers its pair-protocol acceptor before the first dial) with the authenticated `Unpair` under the old key, then closes; it
+  never gets a forwarder stream. Re-pairing drops the tombstone.
+- **Busy accounting:** the share side counts forwarded inference requests that hold an upstream connection (`ShareHandle::forwarded`);
+  local requests = llama-server `requests_processing + requests_deferred` (`/metrics`, the app runs `--metrics`; else busy `/slots`)
+  minus that count. `Status.local_busy` ("busy with its own work") and StopModel's "no local request in flight" both use it. Known
+  window: between the forwarder's upstream connect and llama-server registering the task (body upload) a local request could be
+  under-counted by one — small, documented.
+- **`POST /completion` allowed (item 9):** llama-server's native completion endpoint (same handler family as `/v1/completions`, takes
+  the slot → inference admission, no file side effects; slot save/restore stays refused under `POST /slots/*`). The app's benchmark now
+  sends the local key (`srvHeaders`), so in remote mode it measures the big Mac through the forwarder (forwarder overhead included).
+- **Battery:** `want_awake(on_battery, active) = !on_battery || active > 0` (unchanged rule, now a tested function); sharing on battery
+  shows a warning on the big Mac; a MacBook on battery that uses another Mac shows "This MacBook saves battery: the model runs on {name}."
+  (hint text, never a warning).
+- **CLI on session.rs:** `slipstream-node share|use` now run `ShareSession` / `UseSession` (the duplicated session code in main.rs is
+  gone). `use` exits non-zero if the first connection does not come within ~6 s (unless `--keep-trying`), when removed ("… removed this
+  Mac"), on a version mismatch or a busy port; after the first connection it rides out sleeps like the app.
+- **remote_status cache:** `lan_ips` + `on_battery` (ifconfig / pmset) re-read at most every 10 s or when the use state changes
+  (a network change shows up there), not per 1 s poll.
+- **Editor re-patch:** the window remembers what the last Connect-editor patch wrote (`slipstream.editorPatch` = targets + ctx); while
+  using a Mac whose `n_ctx` differs it offers "Update editor settings for {name}'s model ({n_ctx} context)", which re-runs the patch for
+  the same editors with the remote n_ctx (base URL and key unchanged).
+
+| Plan §5 row | Test / check | Result |
+|---|---|---|
+| Asleep: cached addrs → WoL → 20 s retry → clear message | `apps/p2p-node/tests/edge_cases.rs::asleep_wakes_with_magic_packets_then_says_asleep_then_reconnects` (window 2 s in the test), `app remote::tests::waking_then_asleep_then_back` (1 s), `wake.rs` unit tests (packet layout, ifconfig parsing, send to loopback), UI walk §6b | port bound at once, 503 `peer_waking` → magic packet received at the loopback target (equal to `magic_packet(wake_macs[0])`) → `Asleep` after grace + window → 503 `peer_asleep` → share back on the same port → connected 0.5 s later, 200. Real wake on hardware: **M6** |
+| Sleeps mid-request (≤ 10 s detection, SSE error) | `tests/chaos.rs::sigstop_of_the_share_process_then_sigcont` (real `slipstream-node share` process), `…::blackhole_mid_stream…`, `p2p-forward/tests/peer_death.rs` | SIGSTOP: stream ended 9.75 s after the stop with prefix + `peer_lost` event + terminating chunk; 503 while stopped; re-dial 0.10 s after SIGCONT, identical stream. Blackhole: ended 9.99 s (incl. 0.4 s before the cut), re-dial 0.99 s |
+| Network change (re-browse, re-dial; no automatic local fallback, offer a button) | M3 `discovery.rs` (re-dial ≤ 10 s after a new port), chaos re-dial above; "Use this Mac's model" button shown only in the asleep state (UI walk) | covered on one host; Wi-Fi↔Ethernet / VPN roaming: **M6** |
+| Version mismatch | `edge_cases.rs::version_mismatch_is_clear_on_both_sides`, `status.rs` unit tests (wire compat, pre-M5 status = v1), `proto.rs` (pre-M5 ReqHead), UI test + walk (EN/DE text) | big Mac too old → `VersionMismatch{peer}`, 426 "…Update it to 0.6 or newer.", nothing forwarded; MacBook too old → share refuses (`version_refused` ≥ 1), `VersionMismatch{self}`, 426 "…Update this Mac…" |
+| Both sides running models | M4 `remote::tests::share_and_use_in_process_against_mock_llama` (confirm "stop this MacBook's model?", `start_server` → `remote_active`) | unchanged, green |
+| Port 8080 busy | `edge_cases.rs::editor_port_taken_by_another_program_is_reported` + M1 `bind_loopback_pair` (refuses half of localhost) | `PortBusy` while another program holds the port; takes it and connects within the 5 s retry once it is free; CLI exits with the bind error |
+| No model on the big Mac ("Start it on Mac Studio") | M4 StartModel test; worker answers 503 `model_not_running` | unchanged |
+| Model / context differs (one-click re-patch, base URL unchanged) | `test_remote_macs_ui.mjs` (`editorRepatchCtx`: only connected, n_ctx known, a patch done, ctx different), UI walk (click writes ctx 65536 via `patch_kilo_config`, offer disappears) | green |
+| Battery rules | `remote::tests::battery_rules_for_the_power_assertion`, UI walk (share warning on battery, MacBook saving hint), UI test (hint wording has no warning words) | green; real caffeinate/pmset behaviour on battery: **M6** |
+| Revoke mid-request / removed while offline | M2 `trust_gate.rs::revoked_peer_mid_stream_is_aborted_within_1s` (new requests now 503 `peer_unreachable`), `edge_cases.rs::removed_while_offline_learns_it_at_the_next_connection`, `paired_cli.rs` (CLI `use` exits "removed this Mac", port released) | removed while sharing was off: MacBook shows `Removed` 0.52 s after it connects (former-peer Unpair), no forwarder stream, tombstone dropped on re-pair |
+| Busy ("busy with its own work") | `p2p-forward/tests/m5_share_side.rs::busy_accounting_counts_forwarded_requests`, `remote::tests::stop_model_uses_metrics_minus_forwarded_requests` | forwarded stream alone: `busy`, not `local_busy`; + 1 local request: `local_busy`; StopModel refused with a local request, allowed without; forwarded count back to 0 after cancel |
+| Two MacBooks on one big Mac | M1 admission tests (per peer 1 + 2 queued, light routes global cap) | unchanged; a real second MacBook: **M6** |
+| Benchmarks in remote mode | `m5_share_side.rs::native_completion_endpoint_is_forwarded_for_benchmarks`, allowlist unit test | `POST /completion` forwarded, `timings` returned; `/completions`, `/completion/`, `GET /completion` still 403 |
+| Chaos (plan §7) | `apps/p2p-node/tests/chaos.rs` | 2 % loss + 20 ms jitter (4 ms RTT): 12/12 streams byte-identical (39 of 1909 packets dropped, 5.2 s); blackhole + SIGSTOP above; no request hung (every fetch under a deadline) |
+
+- Tests: `cargo test --workspace` **304 passed** (286 + 18: status 3, client framer 1, pake 1, wake 3, `m5_share_side` 3,
+  `edge_cases` 4, `chaos` 3), 0 failed; `app/src-tauri` **115/115** (111 + 4: battery rules, waking → asleep → back, StopModel busy
+  accounting, status cache); `node app/scripts/test_*.mjs` 8/8 (`test_remote_macs_ui.mjs` extended: M5 pill states, re-patch rule, EN/DE
+  M5 strings, battery wording, benchmark key); `browser_click_walk.js` (Playwright MCP, mock) 0 failures, 0 console errors, new §6b
+  (waking → asleep + "use this Mac's model", version mismatch, busy, battery hint, re-patch click writes ctx 65536, share-on-battery warning).
+- Changed expectations (behaviour change, intended): with no connection the use side answers **503** `peer_unreachable` instead of 502
+  (`peer_death.rs`, `trust_gate.rs`); CLI `use` exits "removed this Mac" after a revoke instead of serving 502 (`paired_cli.rs`).
+- Flake seen (not touched by M5): `crates/p2p-net/tests/mdns_live.rs::announce_found_pair_flag_and_lost` failed 2 of 4 runs today at a
+  pair-flag round ("not seen within 3 s", live multicast on this Mac's network); passes on rerun. M5 tests use no mDNS.
+- First race found and fixed while writing the removed-while-offline test (1 of 5 runs): the former-peer `Unpair` could arrive before the
+  use side registered its pair acceptor (libp2p-stream drops it) and the 30 s rate limit then hid it → acceptor now registered before the
+  first dial (`UseConfig::before_dial`), rate limit 10 s; 6/6 green after.
+- Open for **M6** (needs a second real Mac): WoL actually waking a sleeping Mac (Ethernet vs Wi-Fi / Sleep Proxy, "Wake for network
+  access"), real sleep mid-request on Wi-Fi, roaming/VPN, battery + caffeinate on a real MacBook/big Mac, two real MacBooks, Local Network
+  prompts with the bundle, a real Kilo/OpenCode re-patch session, the version message against a real older build.

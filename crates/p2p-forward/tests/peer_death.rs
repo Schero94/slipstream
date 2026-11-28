@@ -1,7 +1,8 @@
 //! M1 acceptance "peer death ≤ 10 s" (plan §9): the share side vanishes mid-request
 //! (UDP blackhole = big Mac asleep / off the network). With the production transport
 //! config (QUIC keep-alive 2 s, idle timeout 8 s) the use side must detect it within
-//! 10 s, end the editor's stream with an SSE error event, answer new requests with 502,
+//! 10 s, end the editor's stream with an SSE error event, answer new requests with a
+//! 503 JSON error (M5: `peer_unreachable` after a short wait for the connection),
 //! and the share side must drop its llama-server connection (cancel).
 
 mod support;
@@ -63,10 +64,14 @@ async fn peer_death_detected_within_10s_mid_stream() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(r.use_side.stats.lock().unwrap().peer_lost_mid_request, 1);
-    // new requests fail fast with 502 while the peer is gone
+    // the stream ended on an event boundary, cleanly terminated (M5)
+    assert!(tail.ends_with(b"\r\n0\r\n\r\n"), "no terminating chunk");
+    // new requests get a clear 503 JSON error while the peer is gone (M5; was 502)
     let t = Instant::now();
     let resp = send(fwd, &request("POST", "/v1/chat/completions", &host, &[], &chat_body("plain"))).await;
-    assert_eq!(resp.status(), 502, "{}", resp.head());
+    assert_eq!(resp.status(), 503, "{}", resp.head());
+    assert!(resp.body_text().contains("peer_unreachable"), "{}", resp.body_text());
+    assert!(resp.head().contains("Retry-After"), "{}", resp.head());
     assert!(t.elapsed() < Duration::from_secs(3));
     // the share side noticed too and dropped the upstream connection
     let d = r.mock.wait_disconnects(1, Duration::from_secs(5)).await;

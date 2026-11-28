@@ -17,6 +17,11 @@
 //     .removedBy = "Mac Studio" ("this Mac removed you"), .pairingsReset = true
 //     .shareRequests = 1 (big Mac badge), .peerPairs() = the other Mac types the code (share side)
 //     .connectMs = 1200 (connecting → connected)
+//   M5: .useState also "waking" | "asleep" | "version_mismatch" (.mismatchSide "peer"|"self",
+//     .remoteVersion), .wakeKnown, .nCtx (the used Mac's context; ≠ the last editor patch →
+//     re-patch button), .localBusy (big Mac busy with its own work), .selfBattery (this Mac on
+//     battery: saving hint), .shareBattery (sharing on battery: warning), .wakeMs = 20000
+//     (waking → asleep after this long, like the 20 s window)
 (() => {
   const GiB = 1073741824;
   const M = window.__M = Object.assign({
@@ -29,16 +34,25 @@
     code: "482913", useState: "connected", modelRunning: true, busy: false, queue: 0, activity: null, canStart: true,
     onBattery: false, removedBy: null, pairingsReset: false, shareRequests: 0, mayStart: true, lanStarted: false,
     usePeer: null, pairing: null, connectMs: 1200, shareOn: false,
+    mismatchSide: "peer", remoteVersion: "0.5.3", wakeKnown: true, nCtx: 65536, localBusy: false,
+    selfBattery: false, shareBattery: false, wakeMs: 20000, wakeAt: null,
   }, M.remote || {});
   const STUDIO = "12D3KooWStudioMockPeer000000000000000000000000000";
   const BOOK = "12D3KooWBookMockPeer00000000000000000000000000000";
   const remoteStatus = () => {
+    // waking → asleep after the window (like the backend's 20 s)
+    if (R.useState === "waking") { R.wakeAt = R.wakeAt || Date.now(); if (Date.now() - R.wakeAt >= R.wakeMs) R.useState = "asleep"; }
+    else R.wakeAt = null;
     const u = R.mode === "using" ? {
       peer_id: R.usePeer, name: (R.paired.find((p) => p.peer_id === R.usePeer) || {}).name || "Mac Studio",
       state: R.useState, error: R.useState === "unreachable" ? "dial timed out" : null, bind: "127.0.0.1:8080",
-      model_running: R.useState === "connected" ? R.modelRunning : null, model_id: "slipstream", n_ctx: 65536,
-      busy: R.busy, queue_len: R.queue, on_battery: R.onBattery, can_start_model: R.canStart, remote_version: "0.5.3",
-      activity: R.activity,
+      model_running: R.useState === "connected" ? R.modelRunning : null, model_id: "slipstream", n_ctx: R.nCtx,
+      busy: R.busy, queue_len: R.queue, on_battery: R.onBattery, can_start_model: R.canStart, remote_version: R.remoteVersion,
+      activity: R.activity, local_busy: R.localBusy,
+      wake_remaining_s: R.useState === "waking" ? Math.max(0, Math.ceil((R.wakeMs - (Date.now() - R.wakeAt)) / 1000)) : null,
+      wol_sent: R.useState === "waking" && R.wakeKnown, wake_known: R.wakeKnown,
+      mismatch_side: R.useState === "version_mismatch" ? R.mismatchSide : null,
+      mismatch_version: R.useState === "version_mismatch" ? R.remoteVersion : null, min_version: "0.6",
     } : null;
     let pairing = null;
     if (R.pairing) {
@@ -48,9 +62,11 @@
         paired_name: R.pairing.name || null, failed_attempts: 0 };
     }
     const sh = R.shareOn ? { on: true, announced: true, pairing, requests: R.shareRequests, queued: 0, port: 9003,
-      dial: "/ip4/0.0.0.0/udp/9003/quic-v1/p2p/" + STUDIO, lan_ips: ["192.168.1.20"], caffeinate: true, remote_started: false } : null;
+      dial: "/ip4/0.0.0.0/udp/9003/quic-v1/p2p/" + STUDIO, lan_ips: ["192.168.1.20"], caffeinate: !R.shareBattery || R.shareRequests > 0,
+      on_battery: R.shareBattery, remote_started: false } : null;
     return { mode: R.mode === "using" ? "using" : (R.shareOn ? "sharing" : "off"), use: u, share: sh, paired: R.paired,
-      may_start_model: R.mayStart, removed_by: R.removedBy, pairings_reset: R.pairingsReset, lan_started: R.lanStarted, fp: "a1b2c3d4e5f60718" };
+      may_start_model: R.mayStart, removed_by: R.removedBy, pairings_reset: R.pairingsReset, lan_started: R.lanStarted, fp: "a1b2c3d4e5f60718",
+      on_battery: R.selfBattery };
   };
   R.peerPairs = (name = "MacBook Air") => {
     R.paired.push({ peer_id: BOOK, name, role: "use", paired_at: 1764300000, last_seen: 1764300000, app_version: "0.5.3", fp: "77aa00bb11cc22dd" });
@@ -165,7 +181,7 @@
     p2p_status: () => ({ state: "stopped", mode: "local", donate_capacity: false }),
     p2p_recent_peers: () => [], path_is_dir: () => true, list_ext_model_bases: () => [],
     mlx_runtime_status: () => "{}",
-    patch_kilo_config: ({ cfg }) => `/Users/demo/.config/${cfg.target || "kilo"}/config.json`,
+    patch_kilo_config: ({ cfg }) => { M.lastPatch = cfg; return `/Users/demo/.config/${cfg.target || "kilo"}/config.json`; },
   };
   // Editor request simulation: layer-major prompt read (~290 tok/s, progress every tick on
   // /slots, every 3rd tick in the log), then the final checkpoint chunk (no /slots answer, one

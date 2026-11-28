@@ -24,7 +24,7 @@ use p2p_core::{JobRequest, NodeId};
 use p2p_crypto::NodeKeypair;
 use p2p_engine::{plan_serve_for_choice, resolve_engine_choice, EngineChoice};
 use p2p_ledger::Ledger;
-use p2p_node::pairing::{attach_pair_protocol, local_info, start_pair_listener, PairCtx, PairingWindow, SystemClock};
+use p2p_node::pairing::{local_info, start_pair_listener, PairingWindow, SystemClock};
 use p2p_node::trust::{NodeTrust, TrustStore};
 use p2p_node::{
     capability_for_engine, capability_to_advert, client_hello, default_capability, send_sealed_job,
@@ -251,6 +251,10 @@ enum Commands {
         /// Measurement only: do not keep a pre-opened spare stream.
         #[arg(long, default_value_t = false, hide = true)]
         no_spare_stream: bool,
+        /// Keep running even if the paired Mac cannot be reached at start (editors get a
+        /// 503 until it answers; Wake-on-LAN is tried). Default: exit after ~6 s.
+        #[arg(long, default_value_t = false)]
+        keep_trying: bool,
         /// Do not look for the paired Mac on the local network; dial only its stored
         /// address (or --peer).
         #[arg(long, default_value_t = false)]
@@ -479,6 +483,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             token_file,
             no_spare_stream,
             no_discovery,
+            keep_trying,
             verbose,
         } => {
             cmd_use(
@@ -489,6 +494,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 token_file,
                 !no_spare_stream,
                 !no_discovery,
+                keep_trying,
                 verbose,
             )
             .await?
@@ -888,59 +894,27 @@ async fn cmd_share(
     policy.validate()?;
     let upstream = p2p_forward::parse_upstream(&forward)?;
     let dir = resolve_data_dir(data_dir)?;
-    let node = p2p_forward::load_or_create_node(&dir)?;
-    let store = TrustStore::load(&dir, &node)?;
-    p2p_node::trust::share_requires_pairing(&store)?;
-    let _watcher = store.spawn_watcher(p2p_node::trust::WATCH_INTERVAL);
-    let trust = NodeTrust::new(store.clone(), node.clone());
-    let name = name.unwrap_or_else(p2p_forward::status::default_name);
-    let handle = p2p_forward::start_share(
-        p2p_forward::transport_identity(&node),
-        p2p_forward::ShareConfig {
-            listen: listen.clone(),
-            upstream,
-            trust: trust.clone(),
-            node: node.clone(),
-            paired: paired_config(idle_timeout_ms),
-            admission: p2p_forward::admission::AdmissionLimits::default(),
-            limits: p2p_forward::ShareLimits::default(),
-            name: name.clone(),
-            model: None,
-            verbose,
-        },
-    )
-    .await?;
-    // `Unpair` from a paired Mac, and pairing while `pair --show-code` opened a window
-    // through the control socket.
-    let _pair = attach_pair_protocol(handle.control(), PairCtx::new(trust.clone(), local_info(Some(name), true)))?;
-    let dial = handle.dial_addr();
-    let fp = p2p_node::lan::fingerprint(&handle.peer_id);
-    let _control = match p2p_node::control::start_control_server(&dir, trust.clone(), dial.clone(), fp.clone()).await {
-        Ok(c) => Some(c),
-        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return Err(e.into()),
-        Err(e) => {
-            eprintln!("control socket unavailable ({e}); `pair --show-code` cannot reach this share");
-            None
-        }
-    };
-    let _announcer = match p2p_node::lan::udp_port(&handle.listen_addr) {
-        Some(port) if announce && p2p_node::lan::should_announce(&listen) => {
-            match p2p_node::lan::start_share_announcer(handle.peer_id, port, trust.clone()) {
-                Ok(a) => Some(a),
-                Err(e) => {
-                    eprintln!("not announced on the local network: {e}");
-                    None
-                }
-            }
-        }
-        _ => None,
-    };
+    // Same session code as the app (p2p_node::session), headless: no model control.
+    let node = p2p_node::session::Node::open(&dir)?;
+    p2p_node::trust::share_requires_pairing(&node.store)?;
+    let mut opts = p2p_node::session::ShareOpts::new(upstream);
+    opts.listen = Some(listen.to_string());
+    opts.name = name;
+    // claimed at pairing via `pair --show-code` into this share: "may start/stop" (the
+    // headless share refuses StartModel/StopModel anyway)
+    opts.may_start_model = true;
+    opts.announce = announce;
+    opts.paired = paired_config(idle_timeout_ms);
+    opts.verbose = verbose;
+    let session = p2p_node::session::ShareSession::start(node.clone(), opts).await?;
+    let dial = session.handle.dial_addr();
     println!(
-        "sharing mode={} peer_id={} dial={dial} paired_macs={} fp={fp} announced={}",
+        "sharing mode={} peer_id={} dial={dial} paired_macs={} fp={} announced={}",
         policy.mode,
-        handle.peer_id,
-        store.list().len(),
-        _announcer.is_some()
+        session.handle.peer_id,
+        node.store.list().len(),
+        p2p_node::lan::fingerprint(&session.handle.peer_id),
+        session.announced
     );
     println!("on a paired Mac: slipstream-node use");
     if let Some(path) = addr_file {
@@ -959,84 +933,101 @@ async fn cmd_use(
     token_file: Option<PathBuf>,
     spare_stream: bool,
     discovery: bool,
+    keep_trying: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use p2p_node::session::UseState;
     let policy = NodePolicy::for_mode(NodeMode::Paired);
     policy.validate()?;
     let dir = resolve_data_dir(data_dir)?;
-    let node = p2p_forward::load_or_create_node(&dir)?;
-    let store = TrustStore::load(&dir, &node)?;
+    // Same session code as the app (p2p_node::session): editor port bound at once, 503 while
+    // the other Mac is away, Wake-on-LAN + re-dial, version check, "removed" detection.
+    let node = p2p_node::session::Node::open(&dir)?;
     // Pinned dialing only: the target comes from the trust store; LAN discovery (M3) adds
     // the addresses announced under its fingerprint, always dialed as that PeerId.
-    let (peer_id, peer) = if discovery {
-        let (id, addr) = p2p_node::trust::resolve_use_peer(&store, peer.as_deref())?;
-        let addr = addr.unwrap_or_else(|| Multiaddr::empty().with(libp2p::multiaddr::Protocol::P2p(id)));
-        (id, addr)
+    let (peer_id, addr) = if discovery {
+        p2p_node::trust::resolve_use_peer(&node.store, peer.as_deref())?
     } else {
-        p2p_node::trust::resolve_use_target(&store, peer.as_deref())?
+        let (id, a) = p2p_node::trust::resolve_use_target(&node.store, peer.as_deref())?;
+        (id, Some(a))
     };
-    let (lan_inputs, _lan) = if discovery {
-        match p2p_node::lan::start_use_discovery(store.clone(), peer_id, verbose) {
-            Ok((d, l)) => (Some(d), Some(l)),
-            Err(e) => {
-                eprintln!("local network discovery unavailable ({e}); using the stored address only");
-                (None, None)
-            }
-        }
-    } else {
-        (None, None)
-    };
-    if lan_inputs.is_none() && peer.iter().count() <= 1 {
-        let name = store.get(&peer_id).map(|p| p.name).unwrap_or_default();
-        return Err(format!("no known address for \"{name}\"; pass --peer <multiaddr>").into());
-    }
-    let _watcher = store.spawn_watcher(p2p_node::trust::WATCH_INTERVAL);
-    let trust = NodeTrust::new(store.clone(), node.clone());
     let token = match &token_file {
         Some(path) => Some(p2p_forward::load_or_create_token(path)?),
         None => None,
     };
-    let handle = p2p_forward::start_use(
-        p2p_forward::transport_identity(&node),
-        p2p_forward::UseConfig {
-            peer,
-            trust: trust.clone(),
-            node: node.clone(),
-            bind: http,
-            paired: paired_config(idle_timeout_ms),
-            spare_stream,
-            token: token.clone(),
-            local: p2p_forward::LocalLimits::default(),
-            discovery: lan_inputs,
-            app_origin: None,
-            verbose,
-        },
-    )
-    .await?;
-    let _pair = attach_pair_protocol(handle.control(), PairCtx::new(trust, local_info(None, false)))?;
-    match handle.status().await {
-        Ok(p2p_forward::status::StatusReply::Status(s)) => println!(
-            "using \"{}\" (Slipstream {}) model={} running={} n_ctx={} busy={} on_battery={}",
-            p2p_forward::allowlist::display_safe(&s.name),
-            p2p_forward::allowlist::display_safe(&s.app_version),
-            p2p_forward::allowlist::display_safe(s.model_id.as_deref().unwrap_or("-")),
-            s.model_running,
-            s.n_ctx.map(|n| n.to_string()).unwrap_or_else(|| "-".into()),
-            s.busy,
-            s.on_battery
-        ),
-        Ok(other) => println!(
-            "status: {}",
-            p2p_forward::allowlist::display_safe(&format!("{other:?}"))
-        ),
-        Err(e) => eprintln!("status unavailable: {e}"),
+    let mut opts = p2p_node::session::UseOpts::new(peer_id.to_string(), http);
+    opts.addr = addr;
+    opts.token = token;
+    opts.discovery = discovery;
+    opts.paired = paired_config(idle_timeout_ms);
+    opts.spare_stream = spare_stream;
+    opts.verbose = verbose;
+    let session = p2p_node::session::UseSession::start(node.clone(), opts)?;
+    // The first connection must come within the dial budget (unless --keep-trying); later
+    // the session rides out sleeps and network changes by itself.
+    let first_deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+    let mut announced = false;
+    let mut last_state = String::new();
+    let ctrl_c = wait_for_ctrl_c();
+    tokio::pin!(ctrl_c);
+    loop {
+        let st = session.state();
+        let line = format!("{st:?}");
+        if line != last_state {
+            if announced || verbose {
+                eprintln!("use event=state state={}", p2p_forward::allowlist::display_safe(&line));
+            }
+            last_state = line;
+        }
+        match &st {
+            UseState::Connected if !announced => {
+                announced = true;
+                match session.last_status() {
+                    Some(s) => println!(
+                        "using \"{}\" (Slipstream {}) model={} running={} n_ctx={} busy={} on_battery={}",
+                        p2p_forward::allowlist::display_safe(&s.name),
+                        p2p_forward::allowlist::display_safe(&s.app_version),
+                        p2p_forward::allowlist::display_safe(s.model_id.as_deref().unwrap_or("-")),
+                        s.model_running,
+                        s.n_ctx.map(|n| n.to_string()).unwrap_or_else(|| "-".into()),
+                        s.busy,
+                        s.on_battery
+                    ),
+                    None => eprintln!("status unavailable"),
+                }
+                if let Some(h) = session.handle() {
+                    println!("editors: http://{}/v1 (also http://{}/v1)", h.bind, h.bind_companion);
+                }
+                if let Some(path) = &token_file {
+                    println!("editors must send the API key from {} (Authorization: Bearer)", path.display());
+                }
+            }
+            UseState::Removed => {
+                return Err(format!("\"{}\" removed this Mac from its paired Macs; pair again to use it", session.name).into())
+            }
+            UseState::VersionMismatch { side, version } => {
+                let msg = p2p_node::session::version_answer(&session.name, side, version).message;
+                return Err(msg.into());
+            }
+            UseState::PortBusy { error } => return Err(error.clone().into()),
+            _ if !announced && !keep_trying && std::time::Instant::now() > first_deadline => {
+                let why = session
+                    .handle()
+                    .and_then(|h| h.last_error())
+                    .or(match &st {
+                        UseState::Unreachable { error } | UseState::Asleep { error } => Some(error.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "dial timed out (is the other Mac awake and sharing?)".into());
+                return Err(format!("could not reach the paired Mac: {why}").into());
+            }
+            _ => {}
+        }
+        tokio::select! {
+            _ = &mut ctrl_c => return Ok(()),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+        }
     }
-    println!("editors: http://{}/v1 (also http://{}/v1)", handle.bind, handle.bind_companion);
-    if let Some(path) = &token_file {
-        println!("editors must send the API key from {} (Authorization: Bearer)", path.display());
-    }
-    wait_for_ctrl_c().await;
-    Ok(())
 }
 
 async fn cmd_pair(
@@ -1064,7 +1055,7 @@ async fn cmd_pair(
         let trust = NodeTrust::new(store.clone(), node.clone());
         let window = PairingWindow::open(Arc::new(SystemClock), store.epoch());
         let listener =
-            start_pair_listener(trust, listen.clone(), &paired, local_info(name, may_start_model), window.clone()).await?;
+            start_pair_listener(trust, listen.clone(), &paired, p2p_node::pairing::share_info(name, may_start_model), window.clone()).await?;
         let code = window.code().as_str().to_string();
         let fp = p2p_node::lan::fingerprint(&listener.peer_id);
         // Announce with pair=1 so the other Mac finds it without an address.

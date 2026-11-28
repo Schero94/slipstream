@@ -46,6 +46,40 @@ pub const BODY_CHUNK: usize = 16 * 1024;
 /// Request body cap, enforced on **both** ends (plan §3: 32 MiB, streamed).
 pub const MAX_BODY: u64 = 32 * 1024 * 1024;
 
+/// Version of this wire protocol (v0.6 M5). Carried in every [`ReqHead`] and status
+/// request (use → share) and in every [`crate::Status`] (share → use). A peer whose
+/// version is below the other side's [`Versions::min_peer`] is refused with a clear
+/// "update to [`PROTO_FIRST_APP`] or newer" message instead of failing obscurely. A peer
+/// that does not send a version speaks version 1 (the first one; nothing older shipped).
+pub const PROTO_VERSION: u32 = 1;
+/// Oldest peer protocol this build talks to.
+pub const MIN_PEER_PROTO: u32 = 1;
+/// First Slipstream app version that speaks [`MIN_PEER_PROTO`] (shown in the message).
+pub const PROTO_FIRST_APP: &str = "0.6";
+
+/// What one side speaks and accepts (tests use other values to provoke a mismatch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Versions {
+    /// Advertised protocol version.
+    pub proto: u32,
+    /// Peers below this are refused.
+    pub min_peer: u32,
+}
+
+impl Default for Versions {
+    fn default() -> Self {
+        Self {
+            proto: PROTO_VERSION,
+            min_peer: MIN_PEER_PROTO,
+        }
+    }
+}
+
+/// Version a peer speaks when it did not say (the first protocol).
+pub fn peer_proto(sent: Option<u32>) -> u32 {
+    sent.unwrap_or(1)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FrameType {
@@ -153,6 +187,9 @@ pub struct ReqHead {
     pub target: String,
     pub headers: Vec<(String, String)>,
     pub body: BodyKind,
+    /// The use side's [`PROTO_VERSION`] (M5); absent = 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proto: Option<u32>,
 }
 
 /// Failure before any response head (the use side turns it into an HTTP response).
@@ -443,8 +480,13 @@ mod tests {
             target: "/v1/chat/completions".into(),
             headers: vec![("content-type".into(), "application/json".into())],
             body: BodyKind::Length(12),
+            proto: Some(PROTO_VERSION),
         };
         let json = serde_json::to_vec(&head).unwrap();
         assert_eq!(serde_json::from_slice::<ReqHead>(&json).unwrap(), head);
+        // a pre-M5 head (no "proto") still parses and counts as version 1
+        let old = br#"{"method":"GET","target":"/health","headers":[],"body":"none"}"#;
+        let h: ReqHead = serde_json::from_slice(old).unwrap();
+        assert_eq!(peer_proto(h.proto), 1);
     }
 }

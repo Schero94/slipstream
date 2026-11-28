@@ -41,7 +41,7 @@ use crate::allowlist;
 use crate::http::{self, RequestHead};
 use crate::proto::{
     channel_context, open_channel, BodyKind, ChannelReader, ChannelWriter, FrameType, ReqHead,
-    WireError, BODY_CHUNK, OPENAI_PROTOCOL_V1, STATUS_PROTOCOL_V1,
+    Versions, WireError, BODY_CHUNK, OPENAI_PROTOCOL_V1, STATUS_PROTOCOL_V1,
 };
 use crate::status::{StatusReply, StatusRequest};
 use crate::trust::{PeerTrust, NOTIFY_REVOKED_BUDGET};
@@ -79,7 +79,49 @@ pub struct UseConfig {
     /// token, so `token` must be set), CORS preflights from it are answered locally, and its
     /// responses carry `Access-Control-Allow-Origin` for it. No web page can send this origin.
     pub app_origin: Option<String>,
+    /// M5: bind the editor port and return at once, even if the paired Mac cannot be
+    /// reached yet; keep dialing in the background. While it is unreachable, editors get
+    /// a clear 503 JSON error ([`UseHandle::set_offline`]) instead of "connection refused".
+    /// `false` = the first dial must succeed (the pre-M5 behaviour).
+    pub persistent: bool,
+    /// How long a request waits for the connection to come back before the 503.
+    pub connect_wait: Duration,
+    /// Protocol version spoken / oldest accepted (M5).
+    pub versions: Versions,
+    /// Called with the swarm's stream control before the first dial, so extra acceptors
+    /// (the pair protocol, which carries `Unpair`) exist before any connection can carry a
+    /// stream for them (libp2p-stream drops inbound streams without an acceptor).
+    pub before_dial: Option<BeforeDial>,
     pub verbose: bool,
+}
+
+/// See [`UseConfig::before_dial`].
+pub type BeforeDial = Arc<dyn Fn(Control) + Send + Sync>;
+
+/// Default [`UseConfig::connect_wait`].
+pub const CONNECT_WAIT: Duration = Duration::from_secs(2);
+
+/// What editors get while the paired Mac cannot be reached (persistent mode).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalAnswer {
+    pub status: u16,
+    /// `error.slipstream_code` in the JSON body.
+    pub code: String,
+    pub message: String,
+}
+
+impl LocalAnswer {
+    pub fn new(status: u16, code: &str, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
+    fn bytes(&self) -> Vec<u8> {
+        http::error_response(self.status, &self.code, &self.message)
+    }
 }
 
 /// Candidate addresses of the pinned peer (M3). Every address is dialed only with the
@@ -206,6 +248,8 @@ pub struct UseStats {
     pub spare_misses: u64,
     pub requests: u64,
     pub refused_locally: u64,
+    /// Answered locally with the offline / blocked answer (M5).
+    pub answered_offline: u64,
     pub unauthorized: u64,
     pub connections_over_cap: u64,
     pub cancels_sent: u64,
@@ -252,6 +296,28 @@ impl UseHandle {
     pub fn control(&self) -> Control {
         self.shared.control.lock().unwrap().clone()
     }
+
+    /// The answer for editors while the paired Mac is unreachable (waking / asleep).
+    pub fn set_offline(&self, answer: LocalAnswer) {
+        *self.shared.offline.lock().unwrap() = answer;
+    }
+
+    /// Answer every editor request locally with this (e.g. a protocol version mismatch),
+    /// even while connected; `None` = forward again.
+    pub fn set_blocked(&self, answer: Option<LocalAnswer>) {
+        *self.shared.blocked.lock().unwrap() = answer;
+    }
+
+    /// The last dial error (unreachable, or an impostor at a discovered address).
+    pub fn last_error(&self) -> Option<String> {
+        self.shared.last_error.lock().unwrap().clone()
+    }
+
+    /// Wait until the paired connection is up (or `timeout`).
+    pub async fn wait_connected(&self, timeout: Duration) -> bool {
+        let mut rx = self.shared.connection.clone();
+        tokio::time::timeout(timeout, rx.wait_for(|g| g.is_some())).await.is_ok_and(|r| r.is_ok())
+    }
 }
 
 type Channel = (ChannelReader, ChannelWriter);
@@ -276,6 +342,11 @@ struct Shared {
     token: Option<String>,
     app_origin: Option<String>,
     local_limits: LocalLimits,
+    offline: Mutex<LocalAnswer>,
+    blocked: Mutex<Option<LocalAnswer>>,
+    last_error: Arc<Mutex<Option<String>>>,
+    connect_wait: Duration,
+    versions: Versions,
     verbose: bool,
 }
 
@@ -297,7 +368,14 @@ impl Shared {
         let stream = tokio::time::timeout(STREAM_OPEN_TIMEOUT, control.open_stream(self.peer, protocol.clone()))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "stream open timed out"))?
-            .map_err(other)?;
+            .map_err(|e| match e {
+                // M5: the other Mac does not speak this protocol (another version).
+                p2p_libp2p::paired::OpenStreamError::UnsupportedProtocol(p) => io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!("the other Mac does not support {p} (different Slipstream version)"),
+                ),
+                other_err => other(other_err),
+            })?;
         let context = channel_context(&self.local, &self.peer, &protocol);
         let channel = tokio::time::timeout(
             STREAM_OPEN_TIMEOUT,
@@ -333,7 +411,9 @@ impl Shared {
 
     async fn rpc(&self, req: StatusRequest) -> io::Result<StatusReply> {
         let (mut reader, mut writer) = self.open(STATUS_PROTOCOL_V1).await?;
-        writer.send_json(FrameType::StatusReq, &req).await?;
+        writer
+            .send(FrameType::StatusReq, &crate::status::encode_request(req, self.versions))
+            .await?;
         let frame = tokio::time::timeout(Duration::from_secs(10), reader.next())
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "status timed out"))??
@@ -449,12 +529,20 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
     if first.is_empty() && book_rx.is_none() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "no address to dial for the paired Mac"));
     }
+    if let Some(hook) = &cfg.before_dial {
+        hook(swarm.behaviour().stream.new_control());
+    }
     dial_candidates(&mut swarm, peer, first.clone(), false, cfg.verbose);
     let started = Instant::now();
     let wait = if book_rx.is_some() { DIAL_TIMEOUT + DISCOVERY_WAIT } else { DIAL_TIMEOUT };
     let mut last_error: Option<String> = None;
     let mut dialed: Vec<Multiaddr> = first.clone();
-    let first_conn = tokio::time::timeout(wait, async {
+    let shared_error: Arc<Mutex<Option<String>>> = Arc::default();
+    let first_conn = if cfg.persistent {
+        // M5: serve at once; the swarm task below keeps dialing.
+        None
+    } else {
+        Some(tokio::time::timeout(wait, async {
         loop {
             tokio::select! {
                 event = swarm.select_next_some() => match event {
@@ -484,11 +572,13 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
             }
         }
     })
-    .await;
-    let (first_id, first_addr) = match first_conn {
-        Ok(Ok(c)) => c,
-        Ok(Err(e)) => return Err(e),
-        Err(_) => {
+    .await)
+    };
+    let first = match first_conn {
+        None => None,
+        Some(Ok(Ok(c))) => Some(c),
+        Some(Ok(Err(e))) => return Err(e),
+        Some(Err(_)) => {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 match last_error {
@@ -498,15 +588,19 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
             ))
         }
     };
-    eprintln!(
-        "use event=connected peer={peer} addr={first_addr} dial_ms={:.2} unix_ms={}",
-        started.elapsed().as_secs_f64() * 1e3,
-        unix_ms()
-    );
-    emit(UseEvent::Connected { addr: first_addr.clone() });
     let stats = SharedUseStats::default();
-    stats.lock().unwrap().connections_established += 1;
-    let (conn_tx, conn_rx) = watch::channel(Some(1u64));
+    if let Some((_, first_addr)) = &first {
+        eprintln!(
+            "use event=connected peer={peer} addr={first_addr} dial_ms={:.2} unix_ms={}",
+            started.elapsed().as_secs_f64() * 1e3,
+            unix_ms()
+        );
+        emit(UseEvent::Connected { addr: first_addr.clone() });
+        stats.lock().unwrap().connections_established += 1;
+    } else {
+        eprintln!("use event=waiting_for_peer peer={peer} unix_ms={}", unix_ms());
+    }
+    let (conn_tx, conn_rx) = watch::channel(first.as_ref().map(|_| 1u64));
     let control = swarm.behaviour().stream.new_control();
     let shared = Arc::new(Shared {
         local,
@@ -522,6 +616,15 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
         token: cfg.token.clone(),
         app_origin: cfg.app_origin.clone(),
         local_limits: cfg.local,
+        offline: Mutex::new(LocalAnswer::new(
+            503,
+            "peer_unreachable",
+            "The other Mac is not reachable right now. Slipstream keeps trying; try again in a few seconds.",
+        )),
+        blocked: Mutex::new(None),
+        last_error: shared_error.clone(),
+        connect_wait: cfg.connect_wait,
+        versions: cfg.versions,
         verbose: cfg.verbose,
     });
 
@@ -529,14 +632,15 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
     let verbose = cfg.verbose;
     let trust = cfg.trust.clone();
     let notify_control = shared.control.lock().unwrap().clone();
+    let swarm_error = shared_error.clone();
     let swarm_task = tokio::spawn(async move {
-        let mut generation = 1u64;
+        let mut generation: u64 = if first.is_some() { 1 } else { 0 };
         // An address-change dial is in flight: its connection replaces the old ones.
         // Any other extra connection (late duplicates of the start-up race) is closed.
         let mut switch_pending = false;
         // live connections to the pinned peer → remote address (without /p2p)
         let mut conns: std::collections::HashMap<libp2p::swarm::ConnectionId, Multiaddr> =
-            std::collections::HashMap::from([(first_id, first_addr)]);
+            first.into_iter().collect();
         let mut redial = tokio::time::interval(Duration::from_secs(2));
         redial.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut epoch = trust.subscribe();
@@ -628,6 +732,7 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
                             swarm.close_connection(*old);
                         }
                         generation += 1;
+                        *swarm_error.lock().unwrap() = None;
                         swarm_stats.lock().unwrap().connections_established += 1;
                         let _ = conn_tx.send(Some(generation));
                         eprintln!(
@@ -650,6 +755,7 @@ pub async fn start_use(identity: libp2p::identity::Keypair, cfg: UseConfig) -> i
                         if verbose {
                             eprintln!("use event=dial_failed error={error}");
                         }
+                        *swarm_error.lock().unwrap() = Some(error.to_string());
                         emit(UseEvent::DialFailed { error: error.to_string() });
                     }
                     _ => {}
@@ -870,6 +976,27 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
         w.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
         w.flush().await?;
     }
+    // M5: a version mismatch (or another reason to stop forwarding) is answered here.
+    let blocked = shared.blocked.lock().unwrap().clone();
+    if let Some(answer) = blocked {
+        shared.stats.lock().unwrap().answered_offline += 1;
+        let _ = drain_body(&mut r, &early_body, kind, shared.local_limits.body_idle_timeout).await;
+        return refuse(shared, &mut w, &with_cors(answer.bytes(), cors.as_deref())).await;
+    }
+    // M5: the paired Mac is away (asleep / waking / off the network): wait briefly for the
+    // connection, then answer with a clear 503 JSON error instead of a dead port.
+    if shared.connection.borrow().is_none() {
+        let mut rx = shared.connection.clone();
+        let back = tokio::time::timeout(shared.connect_wait, rx.wait_for(|g| g.is_some()))
+            .await
+            .is_ok_and(|r| r.is_ok());
+        if !back {
+            let answer = shared.offline.lock().unwrap().clone();
+            shared.stats.lock().unwrap().answered_offline += 1;
+            let _ = drain_body(&mut r, &early_body, kind, shared.local_limits.body_idle_timeout).await;
+            return refuse(shared, &mut w, &with_cors(answer.bytes(), cors.as_deref())).await;
+        }
+    }
     shared.stats.lock().unwrap().requests += 1;
 
     let (mut reader, mut writer) = match shared.take_channel().await {
@@ -890,6 +1017,7 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
         target: canon.target(),
         headers: allowlist::filter_request_headers(&head.headers),
         body: kind,
+        proto: Some(shared.versions.proto),
     };
     if let Err(e) = writer.send_json(FrameType::ReqHead, &req).await {
         return reply(
@@ -935,18 +1063,11 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
             let _ = writer.send(FrameType::Cancel, &[]).await;
             if state.head_sent {
                 shared.stats.lock().unwrap().peer_lost_mid_request += 1;
-                if state.chunked && state.event_stream {
-                    let event = format!(
-                        "data: {}\n\n",
-                        String::from_utf8_lossy(&http::error_body(
-                            502,
-                            "server_error",
-                            "peer_lost",
-                            "The other Mac stopped answering.",
-                        ))
-                    );
-                    let chunk = format!("{:x}\r\n{event}\r\n", event.len());
-                    let _ = w.write_all(chunk.as_bytes()).await;
+                if state.chunked && state.event_stream && state.framer.as_ref().is_some_and(|f| f.ok) {
+                    // Only whole chunks (= whole SSE events) reached the editor, so the
+                    // documented error event lands on an event boundary; then the stream
+                    // ends cleanly (terminating chunk). See [`PEER_LOST_EVENT`].
+                    let _ = w.write_all(&peer_lost_tail()).await;
                     let _ = w.flush().await;
                 }
             } else {
@@ -984,13 +1105,133 @@ async fn serve_connection(shared: &Shared, tcp: TcpStream, port: u16) -> io::Res
     Ok(())
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 struct RespState {
     head_sent: bool,
     chunked: bool,
     event_stream: bool,
     /// The app window's origin when the request came from it (CORS headers added).
     cors: Option<String>,
+    /// Chunked responses: holds back a partial chunk so the editor only ever sees whole
+    /// chunks (M5 — a peer lost mid-stream then ends on an event boundary).
+    framer: Option<ChunkFramer>,
+}
+
+/// The SSE event a stream ends with when the other Mac stops answering mid-stream
+/// (`error.slipstream_code = "peer_lost"`), followed by the terminating chunk.
+pub const PEER_LOST_EVENT: &str = "peer_lost";
+
+/// `data: {"error":{…"slipstream_code":"peer_lost"…}}\n\n` as one chunk + `0\r\n\r\n`.
+pub fn peer_lost_tail() -> Vec<u8> {
+    let event = format!(
+        "data: {}\n\n",
+        String::from_utf8_lossy(&http::error_body(
+            502,
+            "server_error",
+            PEER_LOST_EVENT,
+            "The other Mac stopped answering.",
+        ))
+    );
+    format!("{:x}\r\n{event}\r\n0\r\n\r\n", event.len()).into_bytes()
+}
+
+/// Splits a raw chunked byte stream at chunk boundaries: [`push`](Self::push) returns the
+/// bytes up to the last complete chunk and keeps the rest. Byte-identical overall (only
+/// delayed by at most one partial chunk). On malformed framing it gives up (`ok = false`)
+/// and passes everything through.
+#[derive(Debug)]
+pub struct ChunkFramer {
+    state: ChunkState,
+    line: Vec<u8>,
+    pending: Vec<u8>,
+    pub ok: bool,
+}
+
+impl Default for ChunkFramer {
+    fn default() -> Self {
+        Self {
+            state: ChunkState::Size,
+            line: Vec::new(),
+            pending: Vec::new(),
+            ok: true,
+        }
+    }
+}
+
+impl ChunkFramer {
+    pub fn push(&mut self, bytes: &[u8]) -> Vec<u8> {
+        if !self.ok {
+            return bytes.to_vec();
+        }
+        let base = self.pending.len();
+        self.pending.extend_from_slice(bytes);
+        let mut boundary: Option<usize> = None;
+        let mut i = base;
+        while i < self.pending.len() {
+            let b = self.pending[i];
+            match self.state {
+                ChunkState::Done => break,
+                ChunkState::Size | ChunkState::Trailer => {
+                    self.line.push(b);
+                    if self.line.len() > 1024 {
+                        return self.give_up();
+                    }
+                    if self.line.ends_with(b"\r\n") {
+                        let line = String::from_utf8_lossy(&self.line[..self.line.len() - 2]).into_owned();
+                        self.line.clear();
+                        if self.state == ChunkState::Trailer {
+                            if line.is_empty() {
+                                self.state = ChunkState::Done;
+                                boundary = Some(i + 1);
+                            }
+                        } else {
+                            match u64::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16) {
+                                Ok(0) => self.state = ChunkState::Trailer,
+                                Ok(n) => self.state = ChunkState::Data(n),
+                                Err(_) => return self.give_up(),
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+                ChunkState::Data(left) => {
+                    let n = (left as usize).min(self.pending.len() - i);
+                    i += n;
+                    let left = left - n as u64;
+                    self.state = if left == 0 { ChunkState::DataCrlf(0) } else { ChunkState::Data(left) };
+                }
+                ChunkState::DataCrlf(seen) => {
+                    let expect = if seen == 0 { b'\r' } else { b'\n' };
+                    if b != expect {
+                        return self.give_up();
+                    }
+                    i += 1;
+                    if seen == 0 {
+                        self.state = ChunkState::DataCrlf(1);
+                    } else {
+                        self.state = ChunkState::Size;
+                        boundary = Some(i);
+                    }
+                }
+            }
+        }
+        if self.state == ChunkState::Done {
+            // anything after the last chunk is passed through as is
+            return std::mem::take(&mut self.pending);
+        }
+        match boundary {
+            Some(k) => {
+                let rest = self.pending.split_off(k);
+                std::mem::replace(&mut self.pending, rest)
+            }
+            None => Vec::new(),
+        }
+    }
+
+    fn give_up(&mut self) -> Vec<u8> {
+        self.ok = false;
+        std::mem::take(&mut self.pending)
+    }
 }
 
 /// `Some(origin)` when the request carries exactly one `Origin` header equal to the
@@ -1122,6 +1363,40 @@ async fn upload_then_watch(
     }
 }
 
+/// Read (and discard) the rest of a request body before a local answer, so closing the
+/// socket does not reset the connection under the editor (bounded: 32 MiB, idle timeout).
+async fn drain_body(r: &mut OwnedReadHalf, early: &[u8], kind: BodyKind, idle: Duration) -> Result<(), Upload> {
+    let mut buf = vec![0u8; BODY_CHUNK];
+    match kind {
+        BodyKind::None => Ok(()),
+        BodyKind::Length(n) => {
+            let mut left = n.saturating_sub(early.len() as u64);
+            while left > 0 {
+                let want = (left as usize).min(buf.len());
+                let k = read_body(r, &mut buf[..want], idle).await?;
+                left -= k as u64;
+            }
+            Ok(())
+        }
+        BodyKind::Chunked => {
+            let mut dec = ChunkedDecoder::default();
+            let mut sink = Vec::new();
+            let mut pending = early.to_vec();
+            loop {
+                sink.clear();
+                match dec.feed(&pending, &mut sink) {
+                    Err(()) => return Err(Upload::Malformed),
+                    Ok(true) => return Ok(()),
+                    Ok(false) if dec.total > MAX_BODY => return Err(Upload::TooLarge),
+                    Ok(false) => {}
+                }
+                let k = read_body(r, &mut buf, idle).await?;
+                pending = buf[..k].to_vec();
+            }
+        }
+    }
+}
+
 /// A broken stream write is reported by the response side; keep this branch quiet.
 async fn pending_forever() -> Upload {
     std::future::pending().await
@@ -1143,6 +1418,9 @@ async fn relay_response(
                 if let Ok(h) = http::parse_response_head(&frame.payload) {
                     state.chunked = h.is_chunked();
                     state.event_stream = h.is_event_stream();
+                    if state.chunked {
+                        state.framer = Some(ChunkFramer::default());
+                    }
                 }
                 let head = with_cors(frame.payload, state.cors.as_deref());
                 w.write_all(&head).await?;
@@ -1151,10 +1429,24 @@ async fn relay_response(
             }
             FrameType::RespBody if state.head_sent => {
                 if frame.payload.is_empty() {
+                    if let Some(f) = state.framer.as_mut() {
+                        // clean end: whatever is held back goes out unchanged
+                        let rest = std::mem::take(&mut f.pending);
+                        if !rest.is_empty() {
+                            w.write_all(&rest).await?;
+                            w.flush().await?;
+                        }
+                    }
                     return Ok(());
                 }
-                w.write_all(&frame.payload).await?;
-                w.flush().await?;
+                let out = match state.framer.as_mut() {
+                    Some(f) => f.push(&frame.payload),
+                    None => frame.payload,
+                };
+                if !out.is_empty() {
+                    w.write_all(&out).await?;
+                    w.flush().await?;
+                }
             }
             FrameType::Error if !state.head_sent => {
                 let err: WireError = serde_json::from_slice(&frame.payload)
@@ -1183,7 +1475,7 @@ struct ChunkedDecoder {
     total: u64,
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum ChunkState {
     #[default]
     Size,
@@ -1281,6 +1573,32 @@ mod tests {
             t
         ));
         assert!(ct_eq(b"abc", b"abc") && !ct_eq(b"abc", b"abd") && !ct_eq(b"abc", b"ab"));
+    }
+
+    #[test]
+    fn chunk_framer_emits_whole_chunks_only_and_is_byte_identical() {
+        let stream = b"5\r\nhello\r\nf\r\ndata: {\"x\":1}\n\n\r\n0\r\n\r\n".to_vec();
+        for split in 0..=stream.len() {
+            for split2 in split..=stream.len() {
+                let mut f = ChunkFramer::default();
+                let mut out = Vec::new();
+                for part in [&stream[..split], &stream[split..split2], &stream[split2..]] {
+                    let got = f.push(part);
+                    out.extend_from_slice(&got);
+                    // every emitted prefix ends on a chunk boundary
+                    let pos = out.len();
+                    assert!([0, 10, 30, stream.len()].contains(&pos), "split {split}/{split2}: {pos}");
+                }
+                assert!(f.ok);
+                assert_eq!(out, stream);
+            }
+        }
+        let mut f = ChunkFramer::default();
+        assert_eq!(f.push(b"zz\r\nabc"), b"zz\r\nabc".to_vec());
+        assert!(!f.ok);
+        assert_eq!(f.push(b"more"), b"more".to_vec());
+        let tail = String::from_utf8(peer_lost_tail()).unwrap();
+        assert!(tail.contains("\"slipstream_code\":\"peer_lost\"") && tail.ends_with("\r\n0\r\n\r\n"), "{tail}");
     }
 
     #[test]
